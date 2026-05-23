@@ -1,0 +1,769 @@
+
+# SudokuPad DarkReader Fix — Handoff Summary
+# Last updated: 2026-05-23  (version 2.62.0)
+
+───────────────────────────────────────────────────────────────────────────────
+## RECENT SESSION CHANGES  (v2.61.3 → v2.62.0)
+───────────────────────────────────────────────────────────────────────────────
+
+This session reworked the multi-color split-border feature. No changes to the
+pencilmark action buttons or other DarkReader fixes.
+
+### Changes
+
+- **Removed center-line option entirely** — `regionColorCenterEnabled` and
+  `regionColorCenterWidth` removed from DEFAULTS, the settings UI, the reset
+  key list, and all code that referenced them. In multi-color mode the cage-box
+  stroke is unconditionally suppressed (`stroke:none`); there is no option to
+  overlay a center line.
+
+- **Rewrote split-border drawing: lines → filled rects** — replaced the old
+  `<line>` + `<clipPath>` approach with non-overlapping filled `<rect>` elements.
+
+  Old approach problems:
+  - Two overlapping line caps at every internal joint along a straight edge →
+    visible darkening at every joint when opacity < 100%.
+  - Perpendicular corners: both the horiz and vert lines' square caps overlapped
+    at the corner pixel → another darker spot.
+  - Required one `<clipPath>` per region in a `<defs>` block.
+
+  New approach:
+  - **Vertical (left/right) rects**: full cell height, own the corner pixels.
+  - **Horizontal (top/bottom) rects**: trimmed by SW at each end wherever a
+    perpendicular boundary exists on the same cell. This eliminates all
+    double-painting at convex outer corners.
+  - **Concave corner fills**: when exactly 3 of the 4 cells around a grid
+    corner belong to a region, the two boundary rects leave an SW×SW gap in
+    the diagonally-opposite cell. An explicit SW×SW fill rect closes it.
+  - No `<clipPath>` or `<defs>` needed — every rect is placed entirely within
+    the owning region's cells.
+
+  Result: zero double-painted pixels at any opacity, no gaps at any zoom.
+
+- **Fixed `parseFloat` on stripe width** — `settings.regionColorStripeWidth`
+  is stored as a string ("3") by the HTML `<input>`. Without `parseFloat`,
+  `x + SW` became string concatenation, placing rects at x=6415 and similar
+  positions far off the board. SudokuPad's viewBox calculation then shrank the
+  board to a 9×9 pixel miniature. Fix: `parseFloat(settings.regionColorStripeWidth) || 3`.
+
+- **White edges eliminated** — multi-color mode sets `stroke:none` on all
+  cage-box paths unconditionally. Rect borders cover the cell-grid lines
+  completely (each rect starts exactly at the cell boundary).
+
+### Architecture note: `drawRegionSplitBorders`
+
+The function now:
+1. Removes any existing `[data-spdr-region-split]` group.
+2. Calls `inferRegionsFromSVG()` + `computeRegion4Colors(regions)`.
+3. Builds one `<g>` per region (colored by palette).
+4. Iterates cells: for each boundary side, draws a trimmed/full rect into the
+   owning region's group.
+5. Iterates corners: for each grid-corner touching the region, fills any
+   concave SW×SW gap.
+6. Inserts the main group after `path.cell-grid`, before cage-box paths.
+
+No `<defs>`, no `<clipPath>`, no `stroke-linecap`.
+
+───────────────────────────────────────────────────────────────────────────────
+## PREVIOUS SESSION CHANGES  (v2.53.0 → v2.61.3)
+───────────────────────────────────────────────────────────────────────────────
+
+This session was a major overhaul of the pencilmark action buttons (Fill, Clear,
+Clear All) plus broader puzzle support. The DarkReader visual fixes were not
+touched. Headline changes:
+
+### New features
+- **URL-based digit-set re-prompting (v2.60.0)** — `lastConfirmedUrl` setting
+  tracks the last URL where the user confirmed a digit set. The check fires
+  on any page load where the current `location.href` differs (or
+  `digitSetConfirmed` is false). Behavior: same URL reload → skip; new puzzle
+  → check; returning to a previously-confirmed URL after visiting a different
+  one → check again. The "only remember the most recent URL" design is
+  intentional — the user noted that bouncing between puzzles is rare and
+  re-prompting on return is acceptable (the user needs to be reminded of the
+  digit set anyway).
+
+- **Letters fully excluded from digit set (v2.60.0)** — `sanitizeDigitSet`
+  regex tightened from `[0-9A-Za-z]` to `[0-9]`. `detectDigitSet` no longer
+  treats letter pencilmarks as an anomaly reason (only grid size != 9×9 or
+  presence of `0` trigger the popup). `loadSettings` strips letters from any
+  digit set saved by an older version (one-time migration). Both digit-set
+  input fields have `maxLength = 10`. The script never operated on letters
+  for fill/remove, so this just enforces what was already true in the UI.
+
+- **Digit-set order is preserved (v2.60.1)** — `sanitizeDigitSet` was changed
+  from sort-and-dedupe to insertion-order-preserve-and-dedupe. If the user
+  types `"1234567890"` (0 at the end), it stays `"1234567890"` instead of
+  being re-sorted to `"0123456789"`. Default best-guess for 10-digit puzzles
+  is now also `"1234567890"` (natural sudoku order with 0 as the appended
+  "10th" digit). Users can rearrange to any order they want and the order
+  persists across saves.
+
+- **Wider digit-set input maxLength (v2.60.2)** — bumped from 10 to 30 on
+  both the popup and settings panel inputs. The previous limit of 10 (one
+  per digit) silently truncated typos before sanitize could dedupe. Example:
+  with a stuck key, `"123444456789"` got truncated to `"1234444444"` and
+  sanitized down to `"1234"` — losing 5,6,7,8,9 entirely. With maxLength=30
+  the full string is accepted, then dedupe produces `"123456789"` correctly.
+  30 still soft-caps pathological paste sizes without affecting realistic
+  typing.
+
+- **crackingthecryptic.com support** (puzzle pages only; detected by ?id= in
+  query string). Subframe scripts now also activate on app.crackingthecryptic.com
+  and crackingthecryptic.com.
+- **Configurable digit set** — DEFAULTS.digitSet (string like "123456789").
+  Drives both fill candidates and remove eligibility. Replaces hardcoded 1-9.
+- **Digit set anomaly detection** — detectDigitSet() scans the live DOM for
+  non-standard digits (grid != 9×9, "0" found anywhere, or letters). If
+  anomalous, an orange-bordered popup above the ⚙ button asks the user to
+  confirm the digit set. settings.digitSetConfirmed prevents repeated popups.
+- **Re-scan button** in settings — clears digitSetConfirmed, triggers detection
+  again. Used for testing the popup and re-detecting after manual edits.
+- **Single "Show action buttons" checkbox** — replaces the old three separate
+  settings (showFillBtn, showClearBtn, showClearAllBtn) per user request: "if
+  the user wants one button, they want them all."
+- **Input sanitization** for the digit set field — strips non-alphanumeric
+  chars, deduplicates, sorts in natural order (0-9, A-Z, a-z).
+- **Debug test bench** in the settings panel — picks a digit + mode, then runs
+  attempts A-H to test different multi-selection mechanisms. Outputs to a
+  selectable box with a Copy button. Used for diagnosing SudokuPad behaviour.
+- **Selection capture-and-restore** — every action button captures the user's
+  pre-operation selection and restores it on completion (success or abort).
+- **Multi-pass invalid-removal sweep** — handles overflow-rendering of wide
+  digit sets (see "Overflow rendering" below). The sweep re-runs until no
+  conflicts remain visible (capped at 6 passes).
+
+### Performance optimisations
+- **Batched (drag-based) cell selection** for Clear / Clear All / Fill. Instead
+  of selecting and clicking digit per-cell (~10s per dozen cells), drag-selects
+  a group of cells and clicks the digit ONCE. Bottlenecked by SudokuPad's drag
+  line-crossing limitation (see "Drag limitations").
+- **Per-row → per-run batching** in remove. For each digit's conflict cells,
+  group by row, then split each row into runs of contiguous columns. Each run
+  is guaranteed safe (no gaps → no extras → batch always succeeds).
+- **Digit-batched fill** — for each digit in digitSet, drag through all
+  fillable cells missing that digit, click the digit once. ~10× faster than
+  per-cell-per-digit on an empty 10×10 grid.
+- **Fast-path selection** (Strategy 0) — when already in the target mode,
+  Escape + click skips the normal-mode round-trip. Used after the first
+  per-cell removal (when state is clean), keeping per-cell at ~20ms.
+
+### Bug fixes
+- Cell key issue with overflow rendering (snapshot would show phantom
+  removed/added pairs because SudokuPad shifts text elements by fractions of
+  a pixel). Snapshot now uses cell-coord keys "col,row,digit", not raw SVG x,y.
+- Selection safety guard — never click a digit unless verified the selection
+  is EXACTLY the target cell. Prevents mass-modify damage when selection
+  gets stuck (returns abort reason `selection-stuck`).
+- Stale closure on collapsed button width (mouseleave used the build-time
+  btnW; now reads clipper.dataset.collapsedW which is live).
+- Fill aborting on cells with letter marks — relaxed diff to allow non-digitSet
+  incidental removals (foreign-mark cleanup is benign).
+- Pen-tool-disabled puzzles — buildActionButtons now uses a fallback anchor
+  (pen → normal → corner) so buttons appear even without the pen tool.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## PROJECT IDENTITY
+───────────────────────────────────────────────────────────────────────────────
+
+- File:    C:\Users\VitaKaninen\Desktop\Projects\GitHub\Monkey Scripts\
+           Sudokupad\sudokupad-darkreader-fix.user.js
+- Version: 2.62.0
+- Type:    ViolentMonkey userscript (@run-at document-start)
+- Targets: sudokupad.app/*, beta.sudokupad.app/*,
+           app.crackingthecryptic.com/*, crackingthecryptic.com/*
+- Test images: ...\Sudokupad\test-images\
+
+
+───────────────────────────────────────────────────────────────────────────────
+## TESTING ENVIRONMENT
+───────────────────────────────────────────────────────────────────────────────
+
+- User runs Brave browser + DarkReader extension + ViolentMonkey.
+- File edits trigger ViolentMonkey live-reload on save (just refresh the page).
+- If ViolentMonkey stops auto-updating, go to the ViolentMonkey dashboard and
+  manually reload the script.
+- Live testing via the "Claude in Chrome" MCP extension. Standing permission to
+  connect — do NOT ask first, just connect when it would help.
+
+Puzzles to verify when making changes (user-specified):
+  - https://sudokupad.app/u3wks9egf5  — watch for textbg Kropki false-positives
+    (see item 7 under "Possible future work")
+
+
+───────────────────────────────────────────────────────────────────────────────
+## TWO DISTINCT FEATURE AREAS
+───────────────────────────────────────────────────────────────────────────────
+
+### A. DarkReader visual fixes  (UNCHANGED FROM PREVIOUS SESSION)
+
+A floating ⚙ button (bottom-right) opens a settings panel. Each section is
+independently toggleable; defaults match the on-screen baseline so enabling a
+section produces no visible change.
+
+Section              Controls                               What it affects
+─────────────────── ────────────────────────────────────── ─────────────────────────────────────────────
+Region borders       Color (#9600ff), Opacity, Width (5),   #cell-grids .cage-box strokes + shape rects
+                     Shape lightness
+Given digit &        Color (#e8e6e3), Opacity                #cell-givens text, #overlay text,
+overlay text                                                 text.cell-given
+Label background     Color (#000000), Opacity                rect.cage-label, rect.textbg,
+                                                             white-fill rects NOT inside #underlay
+Cell shading/        Brightness (30%), Opacity (30%)         #underlay rect, #cages path[fill]
+underlay
+Center pencilmarks   Valid color, Invalid color (each        #cell-candidates tspan
+                     with opacity), Hide invalid,            (inside text.cell-candidate)
+                     Move invalid right
+Corner pencilmarks   Valid color, Invalid color, Hide        #cell-pencilmarks text
+                     invalid, Move invalid to end
+
+### B. Pencilmark action buttons  (HEAVILY REWORKED THIS SESSION)
+
+Three buttons stacked in the toolbar above the ⚙ gear:
+
+  Fill        — adds missing centre digits (from digitSet) to selected cells,
+                then calls remove-invalid on those same cells
+  Clear       — removes every conflict-marked pencilmark in selected cells
+  Clear All   — removes every conflict-marked pencilmark in the whole puzzle
+
+All three are toggled together via a single checkbox in settings (showActionButtons).
+The Fill button is gated by digitSetConfirmed (so users see the anomaly popup
+on first use if the puzzle is non-standard).
+
+
+───────────────────────────────────────────────────────────────────────────────
+## CRITICAL: WHAT WE LEARNED ABOUT SUDOKUPAD'S BEHAVIOUR
+───────────────────────────────────────────────────────────────────────────────
+
+This is the most valuable knowledge from this session. Future work should
+start here.
+
+### Multi-selection mechanisms — what works and what doesn't
+
+We tested every plausible mechanism. Synthetic events can only multi-select
+via DRAG. Click-based mechanisms don't work the way one would expect.
+
+  Mechanism                Result                              Verdict
+  ──────────────────────── ─────────────────────────────────── ─────────────
+  Single click             Replaces selection                  ✓ for single
+  Drag (pointerdown,       Selects cells along the path,       ✓ contiguous,
+   pointermoves,            including non-target line crossings  with caveat
+   pointerup)
+  Sequential clicks in     Each click REPLACES — only last     ✗
+   centre/corner mode       cell selected
+  Ctrl+click (single key,  Triggers SudokuPad's "show where    ✗ wrong behavior
+   ctrlKey:true on event)   this digit can go" feature, NOT
+                            additive selection
+  Ctrl+click with          Same as above                       ✗
+   keydown(Control)
+   wrapper
+  Shift+click              Same — triggers feature highlight   ✗
+  Ctrl+drag                TOGGLE behavior (cells in path flip ✗ for our use
+                            on/off), combined with line          (toggles, not
+                            crossings — unreliable               adds)
+  Shift+drag               Same toggle behavior                ✗
+
+**Implication:** TRUE non-contiguous multi-select (e.g. select only cells A,
+F, J that aren't on the same row/column) is NOT achievable via synthetic
+events. We work around this with row/run batching (see below).
+
+### Drag line-crossings — the fundamental constraint
+
+A drag from (col1, row) to (col5, row) traverses cells (col2, row), (col3,
+row), (col4, row). All cells the pointer's straight line crosses are added to
+the selection. For non-adjacent targets this picks up "unsafe extras."
+
+Safety classification:
+  - **Safe extra**:   cell has a value/given. Click-on-digit is a no-op
+                      (givens are immutable in centre/corner mode).
+  - **Unsafe extra**: cell has pencilmarks or is empty. Click-on-digit would
+                      add/remove a mark there — modifying the puzzle outside
+                      the user's intent.
+
+`selectViaDrag` checks every selected non-target cell:
+  - Required: every target cell IS in the actual selection.
+  - Allowed: extras with `cellHasValueOrGiven(col, row) === true`.
+  - Rejected: any other extras — falls back to per-cell.
+
+### Cell-coord snapshot keys (not raw SVG x,y)
+
+SudokuPad's centre-marks text element gets re-rendered with slightly different
+x,y attributes when its content changes (centring adjustment for the new digit
+count). If we use raw x,y as snapshot keys, EVERY surviving digit looks like
+"removed at old position" + "added at new position", wrecking the diff check.
+
+Fix: snapshot uses `cellKeyFromMarkXY(x,y)` to derive "col,row" (stable
+integer), key format "col,row,digit". Implemented in v2.58.4.
+
+  function markKey(target) {
+    return cellKeyFromMarkXY(target.cellX, target.cellY) + ',' + target.digit;
+  }
+
+### Overflow rendering — the "hidden 9" problem
+
+In 10-digit puzzles (digit set 0-9), only 9 centre digits fit visually in a
+cell. SudokuPad's renderer hides the 10th — it's still in the cell's internal
+data, just no tspan in the DOM.
+
+Symptoms:
+  - Fill of an empty 10-digit cell appears to only add 9 candidates (data has 10).
+  - Removing a centre 0 makes a previously-hidden centre 9 appear in the DOM,
+    so the diff shows `removed: ["X,Y,0"]` plus `added: ["X,Y,9"]` — but the 9
+    was always there.
+  - Conflict scan misses hidden conflicts; sweep finds nothing for that digit
+    on the first pass.
+
+Fixes (all in v2.59.x):
+  1. Diff check allows centre additions IN THE TARGET CELLS during remove
+     (it's a rendering artifact, not a data change).
+  2. Multi-pass sweep (`_removeInvalidPencilmarksMultiPass`) re-runs the
+     scan+remove cycle until no visible conflicts remain. The second pass
+     catches conflicts that became visible after the first pass freed space.
+
+### Selection stickiness
+
+Escape clears small selections reliably but NOT consistently on large
+multi-selections from a drag. Same for normal-mode click after a drag —
+"click cell X" sometimes leaves the entire drag selection intact instead of
+reducing to {X}.
+
+`selectOneCellReliably` tries 5+ strategies in sequence:
+  - Strategy 0 (fast): if already in target mode, Escape + click.
+  - Strategy A: Escape×3 + ensureMode('normal') + dispatchClickAt.
+  - Strategy B: dispatchCellDrag([pt]) (single-point with buttons:1).
+  - Strategy C: real drag with 2-pixel pointermove (no click event).
+  - Strategy D: off-grid click (-200,-200) then click target.
+  - Strategy E: dispatch to #svgrenderer instead of .grid.
+
+If all fail, abort with reason `selection-stuck` rather than damage the
+puzzle. The user sees a clear message instead of mass-modified marks.
+
+### Diff verification relaxations
+
+The diff check during remove is strict on what's expected but allows:
+  1. **Non-digitSet removals** (any mode) — SudokuPad cleans up foreign marks
+     (letter pencilmarks, candidates outside the user's digitSet) when a cell
+     is re-rendered. Benign.
+  2. **Centre additions in target cells** (remove only) — overflow render
+     artifact described above. Non-target-cell additions are still rejected.
+
+Fill's diff check has only relaxation #1 — additions are EXPECTED, removals
+are tolerated if they're non-digitSet.
+
+### Digit "0" in 10-digit puzzles
+
+Initial diagnosis suggested "clicking 0 swaps 0↔9" — actually it doesn't. The
+diff just shows phantom "added 9" because of overflow rendering (see above).
+The "0" button and its handler are normal; the rendering of the cell's
+remaining digits after a removal is what changes. No special handling needed
+beyond the overflow relaxations.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## ACTION BUTTON ARCHITECTURE (v2.59.x)
+───────────────────────────────────────────────────────────────────────────────
+
+### Removal pipeline
+
+  removeInvalidPencilmarks()        (Clear All)
+       │                            (Clear in selection)
+  clearMarksInSelected()
+       │
+       ▼
+  _removeInvalidPencilmarksMultiPass({cellFilter?})
+       │  loops up to 6 passes; bail when no conflicts remain or pass removed 0
+       ▼
+  _removeInvalidPencilmarksInternal({cellFilter?})
+       │
+       ├── Scan: collect targets from #cell-pencilmarks text.conflict and
+       │   #cell-candidates tspan.conflict, filtered by digitSet
+       │
+       ├── try/finally for selection capture-and-restore (originalSelectedCells,
+       │   originalMode)
+       │
+       ├── For each mode in ['corner', 'centre']:
+       │     ensureMode(mode)  (ONE switch per mode phase)
+       │     For each digit:
+       │         stillPresent = targets filtered to those still in DOM snapshot
+       │         rowGroups = groupTargetsByRow(stillPresent)
+       │         For each row group:
+       │             runs = splitRowIntoContiguousRuns(rowGroup)
+       │             For each run:
+       │                 if run.length === 1: → perCellTargets
+       │                 else: try batch (selectViaDrag → click digit →
+       │                                  verify diff)
+       │                     - success: removedCount += run.length
+       │                     - drag rejects extras: → perCellTargets
+       │                     - bad diff: rollback → perCellTargets
+       │                                 OR critical abort if rollback fails
+       │         Per-cell for any cells in perCellTargets:
+       │             selectOneCellReliably(target, mode)
+       │             - false return: abort with 'selection-stuck'
+       │             - true: click digit, verify single-cell diff
+       │
+       └── finally: restoreSelection(originalSelectedCells, originalMode)
+
+### Fill pipeline
+
+  fillSelectedCellsWithCandidates()
+       │
+       ▼
+  _fillSelectedInternal(cells)
+       │  Wraps body in try/finally for selection restore
+       │
+       ├── ensureMode('centre')   (ONE switch for the whole fill)
+       │
+       ├── Pre-filter: skip cells with given/value → fillable[]
+       │
+       ├── For each digit in digitSet:
+       │     digitBtn = getDigitButton(d)   (skip if not present)
+       │     targetsForD = fillable cells without d (read from snapshot)
+       │     if targetsForD.length > 1: try one big drag for all targetsForD
+       │                                + click d once
+       │                                (passes verify when extras are
+       │                                value/given cells like givens)
+       │     fallback: per-cell with normal+click+mode for each target
+       │
+       └── return — caller runs the multi-pass invalid-remove sweep next
+  (fillSelectedCellsWithCandidates then calls _removeInvalidPencilmarksMultiPass)
+
+### Selection helpers
+
+  restoreSelection(originalCells, originalMode)
+      - 0 cells: normal mode + Escape, switch back to originalMode
+      - 1 cell: normal-mode click on that cell (replaces selection)
+      - N cells: drag-restore in centre/corner mode (best-effort; may pick up
+                  line-crossing extras for non-contiguous originals)
+
+  selectOneCellReliably(target, restoreMode)
+      - Strategy 0 (fast) + Strategies A-E fallbacks
+      - Returns false (and the caller aborts with 'selection-stuck') if all
+        strategies fail to isolate exactly {target}
+
+  selectViaDrag(targetList)
+      - Drag through all targets in one pointer gesture
+      - Verify: every target selected, no editable (non-value/given) extras
+      - Return true only if both conditions hold
+
+### Multi-pass logic
+
+  _removeInvalidPencilmarksMultiPass(opts)
+      const MAX_PASSES = 6
+      loop:
+          r = await _removeInvalidPencilmarksInternal(opts)
+          totals += r.{removed, totalTargets, skippedExcluded, elapsedMs}
+          if r.aborted: propagate immediately
+          if countVisibleConflicts(opts.cellFilter) === 0: break (done)
+          if r.removed === 0: break (no progress — avoid infinite loop)
+      return combined result
+
+  countVisibleConflicts(cellFilter)
+      DOM count of #cell-pencilmarks text.conflict + #cell-candidates tspan.conflict,
+      optionally filtered to cellFilter cells.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## SAFETY MODEL — STILL CRITICAL
+───────────────────────────────────────────────────────────────────────────────
+
+The original hard requirement remains: NEVER silently delete a valid pencilmark.
+
+Layered safety:
+  1. **Drag verification** — every drag's selection must be (targets ∪ safe
+     extras). Unsafe extras → fall back to per-cell.
+  2. **Single-cell verification** — before clicking a digit in per-cell mode,
+     `selectOneCellReliably` must return true (selection is exactly {target}).
+     If false, abort with `selection-stuck` (no damage).
+  3. **Diff verification** — every batch and per-cell click is followed by a
+     snapshot-diff check. Wrong diff → undo + abort.
+  4. **Rollback verification** — after undo, snapshot diff against before-click
+     must be empty. If not, CRITICAL toast advising manual Ctrl+Z.
+  5. **Multi-pass cap** — sweep stops after 6 passes OR if a pass removed 0
+     (no progress).
+  6. **try/finally on selection** — even an unexpected throw restores the
+     user's original selection state.
+
+### Abort reasons used by toasts
+
+  mode-drift          — tool mode changed mid-operation
+  unexpected-diff     — click did something the diff check rejected
+  no-effect           — click had no observable effect (legacy; current code
+                         tolerates this in many places now)
+  selection-stuck     — couldn't isolate single-cell selection in per-cell
+  mode-switch-failed  — couldn't switch to required mode at start
+
+
+───────────────────────────────────────────────────────────────────────────────
+## TOAST SYSTEM (unchanged)
+───────────────────────────────────────────────────────────────────────────────
+
+showRemoveInvalidToast(message, kind) — used by all three action buttons.
+Three colours: success (green), warning (amber), error (red).
+All toasts stay visible until the user clicks the × — no auto-dismiss.
+Critical errors stay visible like all others.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## DIAGNOSTIC LOGGING
+───────────────────────────────────────────────────────────────────────────────
+
+Logs are prefixed `[spDR-fix]` — filter the DevTools console to that string to
+see only this script's messages.
+
+  console.warn  — soft failures (drag verify failed → falling back, etc.)
+  console.error — hard failures (unexpected diff, critical rollback fail).
+                  Includes the full diff object as a structured field for
+                  expansion in DevTools.
+
+Debug section in settings panel runs `runMultiSelectTest(digit, mode)` with:
+  Step 1   DOM scan for conflict cells of that digit
+  Step 2   ensureMode check
+  Step 3   initial selection snapshot
+  Step 4   Escape clear check
+  Step 5   Attempt A — single drag, with extras safety analysis
+  Step 6   Attempt B — sequential plain clicks
+  Step 7   Attempt C — Ctrl+click (event-property only)
+  Step 7b  Attempt E — Ctrl+click + keydown(Control) wrapper
+  Step 7c  Attempt F — Shift+click + keydown(Shift) wrapper
+  Step 8   Attempt D — drag + actual digit click + auto-undo (diff observation)
+  Step 9   Attempt G — drag first half + Ctrl+drag second half (additive test)
+  Step 10  Attempt H — drag + Shift+drag second half
+
+Output is selectable + has a Copy button for easy paste-back.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## KNOWN LIMITATIONS (post-session)
+───────────────────────────────────────────────────────────────────────────────
+
+1. **No non-contiguous multi-select.** Synthetic events can only multi-select
+   via drag, drag is line-based, so non-adjacent targets always involve line
+   crossings. We work around with row+run sub-grouping.
+
+2. **Letter pencilmarks** — explicitly NOT handled. The digit set is restricted
+   to [0-9] (sanitization strips letters; popup doesn't list letters as an
+   anomaly; both input fields reject letter input). Letter marks present in
+   the puzzle are tolerated during remove via the non-digitSet removal
+   relaxation (SudokuPad's foreign-mark cleanup is allowed in the diff), but
+   the script never actively fills or removes letter marks.
+
+3. **Action lock prevents concurrent operations** — clicking Fill while Clear
+   is running shows "Another operation is still running." Toast.
+
+4. **Multi-pass limit** — capped at 6. Should never be reached in practice but
+   acts as a safety against any infinite-loop scenario.
+
+5. **Best-effort selection restore** for multi-cell originals — uses the drag
+   mechanism, so a non-contiguous original selection may get restored with
+   extra cells on line crossings. Single-cell and empty restores are exact.
+
+6. **URL re-prompt only remembers most recent confirmation** — visiting
+   puzzle A (confirm), then B (confirm), then back to A will re-prompt for A
+   because lastConfirmedUrl now points to B. The user explicitly accepted
+   this — bouncing between half-finished puzzles is unusual, and the re-prompt
+   helpfully reminds them what digit set the puzzle uses. A per-URL map would
+   eliminate this but adds storage complexity for no real-world benefit.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## FILE STRUCTURE (v2.62.0)
+───────────────────────────────────────────────────────────────────────────────
+
+Lines 1-13         UserScript header (@version 2.62.0, 4 @match URLs)
+Settings           DEFAULTS (now includes digitSet, digitSetConfirmed,
+                    showActionButtons), loadSettings, saveSettings
+Color helpers      hexToRgba, parseColor, rgbToHsl, hslToRgb, shadingTransform
+CSS generator      buildCSS(s) — emits style tag content from settings
+JS fixers          fixLabelRect, fixUnderlayRect, fixCagePath, fixGivenText,
+                    fixCornerText, fixCenterTspan, fixCageBox, applyShapeStroke
+Observers          startLabelRectPatch, startCageBoxPatch, startCornerReflowPatch,
+                    startCandidateSortPatch
+Shared helpers     sleep, diffEmpty
+Dispatch           dispatchClickAt, dispatchClickEl, dispatchCellDrag
+                    (the last one: pointerdown → pointermoves → pointerup;
+                    1 point degenerates to a tap with click event)
+Coord/mode         svgToClient, getCurrentMode, isLetterModeActive, ensureMode,
+                    ensureNumberMode, getDigitButton, getModeButton
+Snapshot/diff      snapshotPencilmarks (now uses cell-coord keys),
+                    diffSnapshots, diffEmpty, cellKeyFromMarkXY,
+                    cellKeyFromHighlight, getSelectedCells, restoreSelection,
+                    cellHasValueOrGiven, detectGridSize, markKey
+Grouping helpers   groupTargetsByRow, splitRowIntoContiguousRuns
+Debug              runMultiSelectTest (the settings-panel test bench)
+Action workers     _removeInvalidPencilmarksInternal (row+run batching with
+                                                       per-cell fallback),
+                    _fillSelectedInternal (digit-batched fill)
+Multi-pass wrapper _removeInvalidPencilmarksMultiPass, countVisibleConflicts
+Public actions     removeInvalidPencilmarks, clearMarksInSelected,
+                    fillSelectedCellsWithCandidates
+Result display     showWorkerResult (handles 'selection-stuck' too),
+                    formatDuration
+Toast              getToastBottom, showRemoveInvalidToast
+Action buttons     buildActionButton, syncClipperOffsets, buildActionButtons
+                    (with digit-set-popup integration), runDigitSetCheck,
+                    needsDigitSetCheck (URL + confirmed-flag combined gate),
+                    detectDigitSet, showDigitSetPrompt, sanitizeDigitSet
+Settings UI        buildSettingsUI (digit-set input row, Re-scan button,
+                                    debug section with multi-select test),
+                    buildSection, makeColorRow, makeRangeRow, makeOpacityRow,
+                    makeWidthRow, makeSubCheckbox, makeActionCheckbox
+Bootstrap          buildAllUI — called on DOMContentLoaded or immediately
+
+
+───────────────────────────────────────────────────────────────────────────────
+## SETTINGS PERSISTENCE
+───────────────────────────────────────────────────────────────────────────────
+
+Stored in localStorage["sp-darkreader-fix"] as JSON.
+loadSettings() merges over DEFAULTS so new defaults don't break existing users.
+saveSettings() writes after every control change.
+
+New settings in this session:
+  digitSet             — "123456789" by default; user-editable string, [0-9] only
+  digitSetConfirmed    — boolean; true once the user has confirmed a digit set
+  lastConfirmedUrl     — location.href at last confirmation; differing URL on
+                          page load re-runs the check
+  showActionButtons    — replaces showFillBtn/showClearBtn/showClearAllBtn
+
+
+───────────────────────────────────────────────────────────────────────────────
+## LESSONS / THINGS TO AVOID
+───────────────────────────────────────────────────────────────────────────────
+
+(Original guidance still applies, plus these new ones from this session.)
+
+- **Don't trust raw SVG x,y attributes in snapshots** — SudokuPad re-renders
+  with fractional position shifts. Use cell-coord keys.
+- **Don't assume Ctrl+click adds to selection** — in SudokuPad it triggers
+  the "show where this digit can go" feature. Same for Shift+click.
+- **Don't assume Ctrl+drag = additive** — it's toggle (XOR). Combined with
+  line crossings it's not usable for clean multi-select.
+- **Don't click a digit unless selection is verified single-cell** — a stale
+  multi-selection will mass-modify the puzzle. Always check
+  getSelectedCells().size and contents.
+- **Don't assume the DOM has every candidate** — overflow rendering hides
+  the 10th digit in 10-digit puzzles. The data has it; the DOM doesn't. Use
+  multi-pass sweeps to catch hidden conflicts revealed by earlier removals.
+- **Don't dispatch on the SVG root by default** — events must go to DIV.grid
+  (the SVG root has children with pointer-events:none).
+- **Don't fire `click` events for multi-point drags** — real drag never fires
+  click in the browser, and the click event might trigger different SudokuPad
+  behavior than the drag handler.
+- **Don't try to use the digit "0" button to magically toggle digit 9** —
+  the apparent swap is actually overflow re-rendering. Handle via diff
+  relaxation, not by avoiding the digit.
+- **Don't single-shot the invalid-mark sweep on wide-digit-set puzzles** —
+  the second pass is what catches conflicts revealed when overflow tspans
+  become visible.
+- **Don't allow letters in the digit set** — the script doesn't fill or
+  remove letter marks. If letters appear in the digit set string, fill will
+  silently skip them (no button for letters in number mode) and remove will
+  collect letter conflicts as targets but then skip the click. Both produce
+  silent no-ops which look like the script "not working" on letters. Better
+  to strip letters at sanitize/save time so the digit set always reflects
+  what the script will actually operate on.
+- **Don't store the "confirmed" flag without the URL** — `digitSetConfirmed`
+  alone makes the popup a one-time-ever event across all puzzles, which is
+  wrong: each new puzzle may have a different digit set. Pair the flag with
+  `lastConfirmedUrl` and re-check when the URL changes.
+
+
+───────────────────────────────────────────────────────────────────────────────
+## FOR THE NEXT SESSION
+───────────────────────────────────────────────────────────────────────────────
+
+The script is in a working, stable state at v2.62.0. All major use cases
+(Fill, Clear, Clear All on 9×9, 10×10, variant puzzles) work without damage.
+The digit-set anomaly popup correctly re-prompts when the URL changes.
+Multi-color split borders now render with zero overlap at any opacity and no
+gaps at any zoom level.
+
+Pencilmark action buttons (v2.59.x–v2.61.x): unchanged this session.
+Kropki dot fix (v2.61.x): unchanged this session.
+
+Multi-color split borders (v2.62.0): Rewrote from `<line>+<clipPath>` to
+non-overlapping filled `<rect>` elements. Center-line option removed entirely.
+Rects are positioned exactly (no double-painting at convex corners, no gaps at
+concave corners). parseFloat fix prevents string-concatenation SVG offset bug.
+
+### Pending / possible next steps:
+
+- **Settings UI rework** — user said "I want to change the way the options
+  work later on." Specifics TBD.
+- **Test on non-9×9 grid** — https://sudokupad.app/3zowllw8l1 (irregular
+  regions, classless paths) and other variant grids.
+- **Regression test** — https://sudokupad.app/u3wks9egf5 (textbg Kropki
+  false-positive risk; see item 7 under "Possible future work").
+
+### Possible future work (not requested, noted for reference):
+
+1. **Per-column run grouping** in addition to per-row. For digits whose
+   conflicts are mostly column-clustered (e.g., one column of a given), each
+   row currently has only 1 cell → all per-cell. Adding a column-grouping
+   pass after the row-grouping pass would batch those cases too. Worth doing
+   if speed becomes a complaint on column-heavy puzzles.
+
+2. **Box-grouping batches** — sudoku conflicts cluster naturally by row AND
+   column AND box. For 3×3 box conflicts, both row and column grouping miss
+   most batching opportunities. A box-aware grouping (drag through each
+   box's conflict cells in a zigzag) could capture these, though box paths
+   cross more cells than row paths so safety verification might reject more.
+
+3. **Letter pencilmarks** — currently tolerated (foreign-mark cleanup) during
+   remove, not added during fill. Adding letter support would require
+   switching to letter mode (toggleletter button), separate digitSet handling,
+   and re-snapshotting letter marks correctly.
+
+4. **Direct access to SudokuPad's internal data** — if a global like
+   `window.app.puzzle.cells[col][row]` is available, we could read the true
+   candidate state instead of inferring from DOM tspans. Would eliminate the
+   overflow-rendering problem entirely (no more multi-pass needed for hidden
+   marks). Requires reverse-engineering SudokuPad's global structure.
+
+5. **Hookable selection API** — if SudokuPad exposes a `setSelection(cells)`
+   function on a global, we could call it directly to set arbitrary
+   non-contiguous selections, solving the line-crossing problem entirely.
+   Same as above — needs source investigation.
+
+6. **Strip out the debug test bench** before declaring the script feature-
+   complete. It's useful for diagnosis but adds ~200 lines and a UI section.
+   Consider gating it behind a "developer mode" setting or removing entirely
+   once we're confident in the current behavior across puzzles.
+
+7. **`textbg` Kropki detection safety** — `isKropkiRect()` identifies Kropki
+   dots by shape (circular `textbg` rect, rx ≈ width/2) rather than by a
+   dedicated class. This works because SudokuPad sometimes uses `textbg` for
+   Kropki circles instead of `feature-kropki`. However, `textbg` is a generic
+   class also used for exterior clue labels (sandwich sums, etc.). Current
+   safety: `fixKropkiDot` only acts on fill=#FFFFFF or #000000, so transparent
+   (`fill="none"`) exterior clue circles are ignored.
+   The higher risk is `rebuildKropkiLabels` adding ":" colon overlays to any
+   black-fill (#000000) circular `textbg` element — if a future puzzle uses a
+   black-fill `textbg` circle for something other than a Kropki dot, it would
+   get an unwanted colon label. If this is reported, check whether the affected
+   element has a `feature-kropki` class (safe to target) vs `textbg` (needs
+   a finer discriminator, e.g. checking whether it sits at a cell boundary or
+   has a text sibling with content).
+   Test puzzle for regression: https://sudokupad.app/u3wks9egf5
+   ("My Original Reality Show Entertainment" by Chip Sounder) — uses `textbg`
+   circles for both Kropki dots (20.5px, fill=#FFFFFF/#000000) and exterior
+   sandwich sum clues (64px, fill=none). The large exterior circles should NOT
+   receive Kropki fix or colon labels.
+
+### How to start the next session:
+
+The script is loaded at every page load (ViolentMonkey @run-at document-start).
+If a regression is reported:
+  1. Filter the DevTools console to `[spDR-fix]` to see all internal logs.
+  2. Use the Debug section in settings to run the multi-select test on the
+     offending digit + mode. Copy the output to start the diagnosis.
+  3. The diff-verification logs (BATCH FAILED / PER-CELL REMOVE FAILED /
+     RUN BATCH FAILED) include the full diff object — read it for the
+     unexpected change.
+  4. The `selection-stuck` abort reason is your friend — it means we caught
+     a bad state before damaging the puzzle. The trace logged by
+     selectOneCellReliably shows which strategy got closest.
+
+Don't bypass the safety checks. The whole architecture is layered to ensure
+no valid pencilmark is ever silently lost. Faster ≠ safer.
