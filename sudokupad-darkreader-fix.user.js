@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.94.0
+// @version      2.95.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.94.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 14, 34, 39); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.95.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 14, 41, 54); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -1196,21 +1196,24 @@
       cgp.setAttribute('d', '');
     })();
 
-    // Insert mainGroup as the very first child of #svgrenderer (lowest z-order)
-    // so all puzzle features (circles, arcs, thermometers, underlay, etc.) remain
-    // on top of our fills/borders.
-    // Z-order result: our borders/fills → puzzle features → #cell-grids (cage
-    // outlines, cell-grid now empty) → highlights → digits.
+    // Insert mainGroup immediately after #cell-colors so our borders render above
+    // puzzle-defined colored cell fills but below arrows, cages, overlay (Kropki
+    // dots, constraint labels), and digits.
+    // Z-order: background → underlay → cell-colors → [mainGroup] → arrows →
+    //          cages → cell-grids → overlay → digits.
     var svgEl = document.getElementById('svgrenderer');
     if (svgEl) {
-      svgEl.insertBefore(mainGroup, svgEl.firstChild);
+      (function insertMainGroup() {
+        var anchor = document.getElementById('cell-colors');
+        if (anchor && anchor.parentElement === svgEl) {
+          svgEl.insertBefore(mainGroup, anchor.nextSibling);
+        } else {
+          svgEl.insertBefore(mainGroup, svgEl.firstChild); // fallback
+        }
+      })();
 
-      // SudokuPad's renderer sometimes prepends feature elements (circles, pills,
-      // inequality signs, etc.) to svgrenderer AFTER our group has already been
-      // inserted at firstChild. Those prepended nodes end up before our group in
-      // DOM order, giving them lower z than our fills/borders — causing them to
-      // appear behind our colored regions. Watch for direct-child insertions and
-      // immediately re-insert our group at firstChild when that happens.
+      // If SudokuPad re-renders and displaces our group, restore its position
+      // immediately after #cell-colors.
       if (!svgEl.dataset.spdrPositionObs) {
         svgEl.dataset.spdrPositionObs = '1';
         new MutationObserver(function (mutations) {
@@ -1220,19 +1223,24 @@
             for (var ni = 0; ni < m.addedNodes.length; ni++) {
               var node = m.addedNodes[ni];
               if (node.nodeType !== 1) continue;
-              // Skip our own group being (re-)inserted.
               if (node.getAttribute && node.getAttribute('data-spdr-region-split')) continue;
-              // A foreign element was added. If our group is no longer firstChild,
-              // move it back to the front.
-              var fc = svgEl.firstElementChild;
-              if (fc && !fc.getAttribute('data-spdr-region-split')) {
-                var grp = svgEl.querySelector('[data-spdr-region-split]');
-                if (grp) svgEl.insertBefore(grp, svgEl.firstChild);
+              // A foreign element was added. Check if our group is still correctly
+              // positioned immediately after #cell-colors.
+              var grp = svgEl.querySelector('[data-spdr-region-split]');
+              if (!grp) break;
+              var cc = document.getElementById('cell-colors');
+              var expectedPrev = (cc && cc.parentElement === svgEl) ? cc : null;
+              if (grp.previousElementSibling !== expectedPrev) {
+                if (expectedPrev) {
+                  svgEl.insertBefore(grp, expectedPrev.nextSibling);
+                } else {
+                  svgEl.insertBefore(grp, svgEl.firstChild);
+                }
               }
-              break; // One re-position per mutation batch is sufficient.
+              break;
             }
           }
-        }).observe(svgEl, { childList: true }); // Direct children only — not subtree.
+        }).observe(svgEl, { childList: true });
       }
     }
   }
