@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.91.0
+// @version      2.92.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.91.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 11, 30, 0); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.92.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 11, 45, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -4970,21 +4970,22 @@
   }
 
   // Auto-dismiss the "Start Puzzle" rules dialog on page load.
-  // SudokuPad adds 'overlay-visible' to <body> when the dialog appears.
-  // We watch for that class, then click the dialog's only button.
+  // SudokuPad adds 'overlay-visible' to <body> when the dialog appears; the
+  // button requires a full pointer-event sequence (plain .click() is ignored).
+  // Poll for up to 3 s so we catch both the case where the dialog is already
+  // present when buildAllUI runs and the case where it appears slightly later.
   function suppressRulesDialog() {
-    function tryDismiss() {
-      if (!document.body.classList.contains('overlay-visible')) return false;
+    var attempts = 0;
+    var timer = setInterval(function () {
+      attempts++;
       var btn = document.querySelector('.dialog-options button');
-      if (!btn) return false;
-      btn.click();
-      return true;
-    }
-    if (tryDismiss()) return;
-    var obs = new MutationObserver(function () {
-      if (tryDismiss()) obs.disconnect();
-    });
-    obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      if (btn && document.body.classList.contains('overlay-visible')) {
+        dispatchClickEl(btn);
+        clearInterval(timer);
+      } else if (attempts > 60) {   // give up after 3 s
+        clearInterval(timer);
+      }
+    }, 50);
   }
 
   function buildAllUI() {
