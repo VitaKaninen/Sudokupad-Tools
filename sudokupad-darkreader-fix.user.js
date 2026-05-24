@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.98.0
+// @version      2.99.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.98.0';
+  var SCRIPT_VERSION = '2.99.0';
   var SCRIPT_UPDATE_TIME = Date.UTC(2026, 5, 24, 0, 0, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
@@ -3081,6 +3081,34 @@
               addedCount += targetsForD.length;
               batchOk = true;
             } else {
+              // Expose diff for external diagnosis via window.__spdrDiag
+              window.__spdrDiag = {
+                phase: 'batch', digit: d,
+                targetsCount: targetsForD.length,
+                expectedAddKeys: Array.from(expectedAddKeys),
+                diff: {
+                  added_centre:   diffBatch.added.centre,
+                  added_corner:   diffBatch.added.corner,
+                  added_values:   diffBatch.added.values,
+                  added_colors:   diffBatch.added.colors,
+                  removed_centre: diffBatch.removed.centre,
+                  removed_corner: diffBatch.removed.corner,
+                  removed_values: diffBatch.removed.values,
+                  removed_colors: diffBatch.removed.colors,
+                },
+                checks: {
+                  removed_corner_zero:     diffBatch.removed.corner.length === 0,
+                  removed_values_zero:     diffBatch.removed.values.length === 0,
+                  removed_colors_zero:     diffBatch.removed.colors.length === 0,
+                  added_corner_zero:       diffBatch.added.corner.length === 0,
+                  added_values_zero:       diffBatch.added.values.length === 0,
+                  added_colors_zero:       diffBatch.added.colors.length === 0,
+                  unexpRemovedCentre_zero: unexpectedRemovedCentre.length === 0,
+                  centre_count_match:      diffBatch.added.centre.length === targetsForD.length,
+                  all_expected:            diffBatch.added.centre.every(function(k){ return expectedAddKeys.has(k); }),
+                  unexpected_added:        diffBatch.added.centre.filter(function(k){ return !expectedAddKeys.has(k); }),
+                },
+              };
               // Unexpected diff — undo (single undo step covers all N additions)
               // and fall through to per-cell.
               console.warn('[spDR-fix] FILL batch unexpected diff for digit', d, {
@@ -3177,6 +3205,33 @@
           if (ok) {
             addedCount++;
           } else {
+            // Per-cell unexpected diff — expose for diagnosis then rollback + abort.
+            window.__spdrDiag = {
+              phase: 'per-cell', digit: d, targetKey: target.key,
+              diff: {
+                added_centre:   diff.added.centre,
+                added_corner:   diff.added.corner,
+                added_values:   diff.added.values,
+                added_colors:   diff.added.colors,
+                removed_centre: diff.removed.centre,
+                removed_corner: diff.removed.corner,
+                removed_values: diff.removed.values,
+                removed_colors: diff.removed.colors,
+              },
+              checks: {
+                removed_corner_zero:  diff.removed.corner.length === 0,
+                removed_values_zero:  diff.removed.values.length === 0,
+                removed_colors_zero:  diff.removed.colors.length === 0,
+                added_corner_zero:    diff.added.corner.length === 0,
+                added_values_zero:    diff.added.values.length === 0,
+                added_colors_zero:    diff.added.colors.length === 0,
+                unexpRemovedCentre_zero: unexpectedRemovedCentre2.length === 0,
+                centre_count_is_1:    diff.added.centre.length === 1,
+                correct_key:          diff.added.centre[0] === target.key + ',' + d,
+                actual_centre_0:      diff.added.centre[0],
+                expected_key:         target.key + ',' + d,
+              },
+            };
             // Per-cell unexpected diff — log details then rollback + abort.
             console.error('[spDR-fix] FILL per-cell unexpected diff adding', d, 'to', target.key, {
               target: target,
