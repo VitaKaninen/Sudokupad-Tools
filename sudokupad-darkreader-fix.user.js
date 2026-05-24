@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.104.0
+// @version      2.105.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.104.0';
+  var SCRIPT_VERSION = '2.105.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3764,41 +3764,29 @@
     document.body.appendChild(label);
   }
 
-  // Auto-dismiss the rules dialog on page load. SudokuPad shows this as either
-  // "Start Puzzle" (fresh) or "Resume Puzzle" (saved state) — same dialog, same
-  // selector. Body gets 'overlay-visible' while the dialog is up.
+  // Auto-dismiss the rules dialog on page load (shown as "Start Puzzle" on
+  // fresh load or "Resume Puzzle" when saved state exists; same dialog, same
+  // selector). Body gets 'overlay-visible' while the dialog is up.
   //
-  // The button's handler listens for TOUCH events, not mouse — dispatchClickEl
-  // (pointer/mouse/click) is silently ignored. We fire touchstart + touchend
-  // directly here, with a mouse-event fallback in case TouchEvent is unavailable.
+  // Simulated clicks on the button don't work — SudokuPad's handler reads
+  // Framework.dialogOpts.onButton via a destructure that fails when fired
+  // synthetically, and pointer/mouse events are ignored entirely. Just call
+  // the API: Framework.closeDialog() cleanly closes the dialog and clears
+  // the overlay class without any side effects on puzzle state.
+  //
   // Poll for up to 3 s so we catch both the case where the dialog is already
   // present when buildAllUI runs and the case where it appears slightly later.
   function suppressRulesDialog() {
     var attempts = 0;
     var timer = setInterval(function () {
       attempts++;
-      var btn = document.querySelector('.dialog-options button');
-      if (btn && document.body.classList.contains('overlay-visible')) {
-        var r = btn.getBoundingClientRect();
-        var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+      if (document.body.classList.contains('overlay-visible')
+          && document.querySelector('.dialog-overlay')) {
         try {
-          var t = new Touch({
-            identifier: 1, target: btn,
-            clientX: cx, clientY: cy, pageX: cx, pageY: cy,
-          });
-          btn.dispatchEvent(new TouchEvent('touchstart', {
-            bubbles: true, cancelable: true,
-            touches: [t], targetTouches: [t], changedTouches: [t],
-          }));
-          btn.dispatchEvent(new TouchEvent('touchend', {
-            bubbles: true, cancelable: true,
-            touches: [], targetTouches: [], changedTouches: [t],
-          }));
-        } catch (e) {
-          // TouchEvent / Touch constructors aren't universally available
-          // (older browsers, some non-touch builds). Fall back to mouse.
-          dispatchClickEl(btn);
-        }
+          if (typeof Framework !== 'undefined' && typeof Framework.closeDialog === 'function') {
+            Framework.closeDialog();
+          }
+        } catch (e) { /* leave the dialog up if the API misbehaves */ }
         clearInterval(timer);
       } else if (attempts > 60) {   // give up after 3 s
         clearInterval(timer);
