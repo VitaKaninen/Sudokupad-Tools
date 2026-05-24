@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.101.0
+// @version      2.102.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -19,7 +19,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // Settings
   //
   // Defaults match the actual on-screen colours after DarkReader's conversion,
@@ -29,9 +29,9 @@
   // Default values were sampled from a live SudokuPad page with DarkReader on.
   // If your environment differs, just pick the colours you want once and they
   // persist via localStorage.
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.101.0';
+  var SCRIPT_VERSION = '2.102.0';
   var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 22, 0, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
@@ -195,9 +195,9 @@
     return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // CSS
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   function buildCSS(s) {
     var css = '';
@@ -1386,9 +1386,9 @@
   }
   waitForCellPencilmarks();
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // Part 6: Settings UI
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   var controlSyncers = {};
 
@@ -1765,7 +1765,7 @@
     return section;
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
   // "Remove invalid pencilmarks" action
   //
   // Simulates user input to actually delete each conflict pencilmark from
@@ -1779,67 +1779,9 @@
   //
   // 10ms delays between steps are necessary — SudokuPad processes user input
   // asynchronously and a tighter sequence drops events.
-  // ═══════════════════════════════════════════════════════════════════════════
+  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-
-  function dispatchClickAt(x, y) {
-    // SudokuPad's cell-selection handler requires PointerEvent (not MouseEvent)
-    // and listens on DIV.grid. Dispatching MouseEvent to elementFromPoint can
-    // fail when the topmost element is the SVG root and the handler checks
-    // event instanceof PointerEvent. Dispatch to DIV.grid with correct
-    // clientX/Y so the handler can compute which cell was clicked.
-    var grid = document.querySelector('.grid');
-    var el = grid || document.elementFromPoint(x, y);
-    if (!el) return;
-    var pInit = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0, isPrimary: true };
-    var mInit = { bubbles: true, cancelable: true, view: window, clientX: x, clientY: y, button: 0 };
-    el.dispatchEvent(new PointerEvent('pointerdown', pInit));
-    el.dispatchEvent(new MouseEvent('mousedown',    mInit));
-    el.dispatchEvent(new PointerEvent('pointerup',  pInit));
-    el.dispatchEvent(new MouseEvent('mouseup',      mInit));
-    el.dispatchEvent(new MouseEvent('click',        mInit));
-  }
-  // Multi-cell selection via a synthetic click-and-drag gesture.
-  // SudokuPad's pointer handler adds each cell the pointer passes over to the
-  // selection between pointerdown and pointerup. Individual click events
-  // (pointerdown + pointerup with no intermediate movement) are treated as taps
-  // that replace the selection — which is why repeated dispatchClickAt calls
-  // do NOT accumulate a multi-selection. A true drag does.
-  //
-  // points: array of {x, y} client coordinates (cell centres in client space).
-  //         length 1 → degenerates to a single tap.
-  //         length N → drag from points[0] through every subsequent point, ending at points[N-1].
-  function dispatchCellDrag(points) {
-    if (!points || points.length === 0) return;
-    var grid = document.querySelector('.grid');
-    if (!grid) return;
-    function init(p, buttons) {
-      return {
-        bubbles: true, cancelable: true, view: window,
-        clientX: p.x, clientY: p.y,
-        button: 0, buttons: buttons,
-        isPrimary: true, pointerType: 'mouse',
-      };
-    }
-    // Drag start (button down).
-    grid.dispatchEvent(new PointerEvent('pointerdown', init(points[0], 1)));
-    grid.dispatchEvent(new MouseEvent('mousedown',     init(points[0], 1)));
-    // Drag through each subsequent point. Button stays down (buttons: 1).
-    for (var i = 1; i < points.length; i++) {
-      grid.dispatchEvent(new PointerEvent('pointermove', init(points[i], 1)));
-      grid.dispatchEvent(new MouseEvent('mousemove',     init(points[i], 1)));
-    }
-    // Drag end (button up).
-    var last = points[points.length - 1];
-    grid.dispatchEvent(new PointerEvent('pointerup', init(last, 0)));
-    grid.dispatchEvent(new MouseEvent('mouseup',     init(last, 0)));
-    // Fire a click event only for the degenerate single-tap case — a real drag
-    // doesn't produce a click in the browser.
-    if (points.length === 1) {
-      grid.dispatchEvent(new MouseEvent('click', init(last, 0)));
-    }
-  }
 
   function dispatchClickEl(el) {
     if (!el) return;
@@ -1849,13 +1791,6 @@
     ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click'].forEach(function (t) {
       el.dispatchEvent(new MouseEvent(t, init));
     });
-  }
-  function svgToClient(svg, sx, sy) {
-    var rect = svg.getBoundingClientRect();
-    var vb = (svg.getAttribute('viewBox') || '-16 -16 608 608').split(/\s+/).map(Number);
-    var scaleX = rect.width  / vb[2];
-    var scaleY = rect.height / vb[3];
-    return { x: rect.x + (sx - vb[0]) * scaleX, y: rect.y + (sy - vb[1]) * scaleY };
   }
   function getDigitButton(d) {
     return document.querySelector('[data-control="value"][data-value="' + String(d) + '"]');
@@ -2069,58 +2004,6 @@
     var row = Math.round((parseFloat(y) - 32) / 64);
     return col + ',' + row;
   }
-  // Build a snapshot-matching key for a mark on a target. Targets carry raw
-  // SVG x,y from the conflict-mark DOM scan; the snapshot uses cell-coord keys.
-  function markKey(target) {
-    return cellKeyFromMarkXY(target.cellX, target.cellY) + ',' + target.digit;
-  }
-  // Group targets by row (sorted by column within each row). Used to split a
-  // digit's scattered conflict cells into per-row sub-groups so each group's
-  // drag stays on a single horizontal line — the only cells the drag picks up
-  // as "extras" are non-target cells on that same row, which are usually
-  // either targets themselves, givens (safe), or get caught by the safety
-  // check (fall back to per-cell for that row only).
-  function groupTargetsByRow(targets) {
-    var byRow = new Map();
-    targets.forEach(function (t) {
-      var parts = cellKeyFromMarkXY(t.cellX, t.cellY).split(',');
-      var row = parseInt(parts[1], 10);
-      if (!byRow.has(row)) byRow.set(row, []);
-      byRow.get(row).push(t);
-    });
-    byRow.forEach(function (group) {
-      group.sort(function (a, b) {
-        var aCol = parseInt(cellKeyFromMarkXY(a.cellX, a.cellY).split(',')[0], 10);
-        var bCol = parseInt(cellKeyFromMarkXY(b.cellX, b.cellY).split(',')[0], 10);
-        return aCol - bCol;
-      });
-    });
-    return Array.from(byRow.values());
-  }
-  // Within a row group (cells sharing one row, sorted by column ascending),
-  // find maximal runs of cells whose columns are consecutive integers. Each
-  // returned run is a contiguous horizontal stretch of targets that a single
-  // drag can sweep through WITHOUT crossing any non-target cell (because by
-  // definition every cell in the run's column range IS a target). This makes
-  // every run's batch safe to attempt — no unsafe-extras fallback needed.
-  function splitRowIntoContiguousRuns(rowGroup) {
-    if (!rowGroup || rowGroup.length === 0) return [];
-    var runs = [];
-    var current = [rowGroup[0]];
-    var prevCol = parseInt(cellKeyFromMarkXY(rowGroup[0].cellX, rowGroup[0].cellY).split(',')[0], 10);
-    for (var i = 1; i < rowGroup.length; i++) {
-      var col = parseInt(cellKeyFromMarkXY(rowGroup[i].cellX, rowGroup[i].cellY).split(',')[0], 10);
-      if (col === prevCol + 1) {
-        current.push(rowGroup[i]);
-      } else {
-        runs.push(current);
-        current = [rowGroup[i]];
-      }
-      prevCol = col;
-    }
-    runs.push(current);
-    return runs;
-  }
   // Cell-highlight rect uses top-left coords (col*64, row*64). Convert similarly.
   function cellKeyFromHighlight(rect) {
     var col = Math.round(parseFloat(rect.getAttribute('x')) / 64);
@@ -2133,55 +2016,6 @@
       cells.add(cellKeyFromHighlight(r));
     });
     return cells;
-  }
-
-  // Restore a previously-captured selection (and mode). Best-effort: relies on
-  // the drag mechanism for multi-cell restoration, which may pick up cells along
-  // the path between non-adjacent originals — same limitation as drag-select.
-  //   originalCells   — Set<"col,row"> captured before the operation
-  //   originalMode    — string ('normal'|'corner'|'centre'|...) from getCurrentMode()
-  async function restoreSelection(originalCells, originalMode) {
-    var svg = document.getElementById('svgrenderer');
-    if (!svg) return;
-
-    // First clean state: normal mode + Escape clears any current selection.
-    await ensureMode('normal');
-    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-    document.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-    await sleep(15);
-
-    var size = originalCells ? originalCells.size : 0;
-
-    if (size === 0) {
-      // Wanted: no selection. Just switch back to original mode.
-      if (originalMode && originalMode !== 'normal') await ensureMode(originalMode);
-      return;
-    }
-
-    if (size === 1) {
-      // Wanted: one cell. Normal-mode click reliably replaces selection with
-      // exactly that cell, regardless of prior state.
-      var key0 = Array.from(originalCells)[0];
-      var p0 = key0.split(',').map(Number);
-      var pt0 = svgToClient(svg, p0[0] * 64 + 32, p0[1] * 64 + 32);
-      dispatchClickAt(pt0.x, pt0.y);
-      await sleep(15);
-      if (originalMode && originalMode !== 'normal') await ensureMode(originalMode);
-      return;
-    }
-
-    // Multi-cell: drag-restore. The drag must run in centre/corner mode to
-    // build a multi-selection; if the original mode was normal we use centre
-    // temporarily and switch back afterwards.
-    var dragMode = (originalMode === 'corner' || originalMode === 'centre') ? originalMode : 'centre';
-    await ensureMode(dragMode);
-    var points = Array.from(originalCells).map(function (key) {
-      var parts = key.split(',').map(Number);
-      return svgToClient(svg, parts[0] * 64 + 32, parts[1] * 64 + 32);
-    });
-    dispatchCellDrag(points);
-    await sleep(25);
-    if (originalMode && originalMode !== dragMode) await ensureMode(originalMode);
   }
 
   // Returns true if the cell at (col, row) has a given digit or a placed
@@ -2244,547 +2078,162 @@
   // does NOT touch the lock — only public entry points do.
   var actionInProgress = false;
 
-  // Remove every invalid (conflict-marked) pencilmark by simulating user input.
-  // Handles any digit or letter in settings.digitSet. Marks whose data-val is
-  // not in the digit set are skipped and reported in the toast.
-  // CORRECTNESS is the priority over speed: we verify mode, verify cell selection,
-  // and verify each digit click produced exactly the expected diff. If anything
-  // unexpected happens (mode drifts, wrong cell got modified, extra removal), we
-  // abort immediately so we don't damage the player's valid pencilmarks.
-
   // Worker for invalid-pencilmark removal. Pure: returns a result object,
   // never shows toasts (callers handle messaging). Doesn't touch the action
   // lock so other workers (like fill) can compose it.
   //   opts.cellFilter   — optional Set<"col,row"> to restrict to certain cells
   // Returns: { totalTargets, removed, aborted, abortReason, abortTarget,
   //            rollbackOk, elapsedMs, failures }
+  //
+  // Uses Framework.getApp() → app.select() to select exactly the conflict cells
+  // for each (mode, digit) group, then clicks the digit button once to remove
+  // them all — no drag events, no per-cell fallback needed.
   async function _removeInvalidPencilmarksInternal(opts) {
-    var svg = document.getElementById('svgrenderer');
-    if (!svg) return { totalTargets: 0, removed: 0, aborted: false, elapsedMs: 0, failures: [] };
     opts = opts || {};
     var cellFilter = opts.cellFilter;
+    var startTime = performance.now();
 
+    // Collect conflict targets from DOM. SudokuPad marks them with class="conflict".
     var targets = [];
     var skippedExcluded = 0;
-    document.querySelectorAll('#cell-pencilmarks text.conflict').forEach(function (t) {
+    document.querySelectorAll('#cell-pencilmarks text.conflict').forEach(function(t) {
       var x = t.getAttribute('x'), y = t.getAttribute('y');
       var ck = cellKeyFromMarkXY(x, y);
       if (cellFilter && !cellFilter.has(ck)) return;
       var d = t.getAttribute('data-val');
       if (!settings.digitSet.includes(d)) { skippedExcluded++; return; }
-      targets.push({ type: 'corner', cellX: x, cellY: y, digit: d });
+      targets.push({ type: 'corner', cellKey: ck, digit: d });
     });
-    document.querySelectorAll('#cell-candidates tspan.conflict').forEach(function (t) {
+    document.querySelectorAll('#cell-candidates tspan.conflict').forEach(function(t) {
       var p = t.parentNode;
       var x = p.getAttribute('x'), y = p.getAttribute('y');
       var ck = cellKeyFromMarkXY(x, y);
       if (cellFilter && !cellFilter.has(ck)) return;
       var d = t.getAttribute('data-val');
       if (!settings.digitSet.includes(d)) { skippedExcluded++; return; }
-      targets.push({ type: 'centre', cellX: x, cellY: y, digit: d });
+      targets.push({ type: 'centre', cellKey: ck, digit: d });
     });
 
-    var startTime = performance.now();
     if (targets.length === 0) {
-      return { totalTargets: 0, removed: 0, aborted: false, elapsedMs: performance.now() - startTime, failures: [], skippedExcluded: skippedExcluded };
+      return { totalTargets: 0, removed: 0, aborted: false,
+               elapsedMs: performance.now() - startTime, failures: [], skippedExcluded: skippedExcluded };
     }
 
+    // Get the SudokuPad app API and build a col,row → cell object lookup.
+    var app = await Framework.getApp();
+    var cellByKey = {};
+    app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
+
     var originalMode = getCurrentMode();
-    var originalSelectedCells = getSelectedCells();  // captured for restoration
+    var originalSelection = Array.from(app.puzzle.selectedCells || []);
     var wasLetterMode = isLetterModeActive();
     if (wasLetterMode) await ensureNumberMode();
     var totalTargets = targets.length;
+    var failures = [];
+    var removedCount = 0;
 
     try {
-    return await (async function () {
-      var failures = [];
-      var removedCount = 0;
 
-      // Group targets by (mode, digit). Each (mode, digit) group is processed as
-      // a single batch: drag-select all cells with that conflict, then click the
-      // digit button ONCE. With verification + per-cell fallback if the drag
-      // didn't accumulate the expected selection.
+      // Group by (type, digit). Each group gets ONE api-select + ONE button click.
       var byModeDigit = { corner: new Map(), centre: new Map() };
-      targets.forEach(function (t) {
+      targets.forEach(function(t) {
         var map = byModeDigit[t.type];
         if (!map.has(t.digit)) map.set(t.digit, []);
         map.get(t.digit).push(t);
       });
-
-      // Helper: Escape clears selection without changing mode.
-      function dispatchEscape() {
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-        document.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-      }
-
-      // Helper: build a multi-selection via drag and verify it.
-      //
-      // Drag-to-select sweeps across cells along the pointer path, so cells on
-      // straight lines between non-adjacent targets get picked up too. We
-      // accept these "extras" only if they're value/given cells — clicking a
-      // digit in corner/centre mode on a value-cell is a no-op (givens are
-      // immutable), so a safe extra in the selection has no effect on the diff.
-      // Editable extras (with pencilmarks or empty) would be modified by the
-      // click, so we reject those and fall back to per-cell.
-      //
-      // Returns true iff every target is selected and every extra is safe.
-      async function selectViaDrag(targetList) {
-        var points = targetList.map(function (t) {
-          var cx = parseFloat(t.cellX), cy = parseFloat(t.cellY);
-          return svgToClient(svg, cx, cy);
-        });
-        dispatchEscape();
-        await sleep(5);
-        dispatchCellDrag(points);
-        await sleep(20);  // Give SudokuPad time to render highlight rects.
-        var actualSel = getSelectedCells();
-
-        // Required: every target must be selected.
-        var targetKeys = new Set(targetList.map(function (t) {
-          return cellKeyFromMarkXY(t.cellX, t.cellY);
-        }));
-        var missingTargets = [];
-        targetKeys.forEach(function (k) { if (!actualSel.has(k)) missingTargets.push(k); });
-        if (missingTargets.length > 0) {
-          console.warn('[spDR-fix] Drag missing target cells', missingTargets, '— falling back to per-cell.');
-          return false;
-        }
-
-        // Examine extras (selected cells that aren't targets) for safety.
-        var extras = [];
-        actualSel.forEach(function (k) { if (!targetKeys.has(k)) extras.push(k); });
-        if (extras.length > 0) {
-          var unsafeExtras = [];
-          for (var i = 0; i < extras.length; i++) {
-            var parts = extras[i].split(',').map(Number);
-            if (!cellHasValueOrGiven(parts[0], parts[1])) unsafeExtras.push(extras[i]);
-          }
-          if (unsafeExtras.length > 0) {
-            console.warn('[spDR-fix] Drag picked up editable extras', unsafeExtras, '— falling back to per-cell.');
-            return false;
-          }
-          console.log('[spDR-fix] Drag picked up', extras.length, 'safe extra(s) (value/given cells, clicks are no-ops):', extras);
-        }
-        return true;
-      }
-
-      // Reliably select a single cell, regardless of prior selection state.
-      // Tries several techniques in sequence; verifies selection.size===1 after
-      // each, returns true on the first success. Logs each attempt's outcome so
-      // we can diagnose which mechanism actually works in the user's puzzle.
-      async function selectOneCellReliably(target, restoreMode) {
-        var cx = parseFloat(target.cellX), cy = parseFloat(target.cellY);
-        var pt = svgToClient(svg, cx, cy);
-        var targetCellKey = cellKeyFromMarkXY(target.cellX, target.cellY);
-        var initialSelSize = getSelectedCells().size;
-        var attempts = [];
-
-        function check() {
-          var s = getSelectedCells();
-          return (s.size === 1 && s.has(targetCellKey));
-        }
-        function snapState(label) {
-          var s = getSelectedCells();
-          attempts.push(label + ': sel.size=' + s.size + (s.size <= 5 ? ' [' + Array.from(s).join(' ') + ']' : ''));
-        }
-
-        snapState('initial');
-
-        // ── Strategy 0 (FAST): if we're already in the target mode AND prior
-        //    state is clean-ish, Escape + click in that mode will work without
-        //    any mode round-trip. This is the path 99% of per-cell iterations
-        //    should hit after the first one — keeps the loop fast.
-        if (getCurrentMode() === restoreMode) {
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-          document.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-          await sleep(8);
-          dispatchClickAt(pt.x, pt.y);
-          await sleep(12);
-          snapState('after fast-path (Esc+click in target mode)');
-          if (check()) return true;
-        }
-
-        // ── Strategy A: Escape ×3 + ensureMode normal + dispatchClickAt ──
-        for (var ea = 0; ea < 3; ea++) {
-          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-          document.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-          await sleep(8);
-        }
-        snapState('after Esc×3');
-        var nmA = await ensureMode('normal');
-        if (nmA) {
-          snapState('after ensureMode(normal)');
-          dispatchClickAt(pt.x, pt.y);
-          await sleep(20);
-          snapState('after dispatchClickAt');
-          if (check()) {
-            var rmA = await ensureMode(restoreMode);
-            if (rmA && check()) return true;
-            snapState('after ensureMode(' + restoreMode + ') A');
-          }
-        }
-
-        // ── Strategy B: dispatchCellDrag([pt]) (single-point drag-tap) ──
-        dispatchCellDrag([pt]);
-        await sleep(20);
-        snapState('after dispatchCellDrag single-point');
-        if (check()) {
-          var rmB = await ensureMode(restoreMode);
-          if (rmB && check()) return true;
-          snapState('after ensureMode(' + restoreMode + ') B');
-        }
-
-        // ── Strategy C: real drag with movement (pointerdown → move → up, no click) ──
-        var gridEl = document.querySelector('.grid');
-        if (gridEl) {
-          function dragInit(off, buttons) {
-            return {
-              bubbles: true, cancelable: true, view: window,
-              clientX: pt.x + off, clientY: pt.y + off,
-              button: 0, buttons: buttons, isPrimary: true, pointerType: 'mouse',
-            };
-          }
-          gridEl.dispatchEvent(new PointerEvent('pointerdown', dragInit(0, 1)));
-          gridEl.dispatchEvent(new MouseEvent('mousedown',     dragInit(0, 1)));
-          gridEl.dispatchEvent(new PointerEvent('pointermove', dragInit(2, 1)));
-          gridEl.dispatchEvent(new MouseEvent('mousemove',     dragInit(2, 1)));
-          gridEl.dispatchEvent(new PointerEvent('pointerup',   dragInit(2, 0)));
-          gridEl.dispatchEvent(new MouseEvent('mouseup',       dragInit(2, 0)));
-          await sleep(20);
-          snapState('after real-drag-with-move');
-          if (check()) {
-            var rmC = await ensureMode(restoreMode);
-            if (rmC && check()) return true;
-            snapState('after ensureMode(' + restoreMode + ') C');
-          }
-        }
-
-        // ── Strategy D: click far off-grid first (to deselect everything), then click target ──
-        if (gridEl) {
-          function offInit(buttons) {
-            return {
-              bubbles: true, cancelable: true, view: window,
-              clientX: -200, clientY: -200,
-              button: 0, buttons: buttons, isPrimary: true, pointerType: 'mouse',
-            };
-          }
-          gridEl.dispatchEvent(new PointerEvent('pointerdown', offInit(1)));
-          gridEl.dispatchEvent(new MouseEvent('mousedown',     offInit(1)));
-          gridEl.dispatchEvent(new PointerEvent('pointerup',   offInit(0)));
-          gridEl.dispatchEvent(new MouseEvent('mouseup',       offInit(0)));
-          gridEl.dispatchEvent(new MouseEvent('click',         offInit(0)));
-          await sleep(15);
-          snapState('after off-grid click');
-          dispatchClickAt(pt.x, pt.y);
-          await sleep(20);
-          snapState('after click target post-off-grid');
-          if (check()) {
-            var rmD = await ensureMode(restoreMode);
-            if (rmD && check()) return true;
-            snapState('after ensureMode(' + restoreMode + ') D');
-          }
-        }
-
-        // ── Strategy E: dispatch on the SVG root instead of .grid ──
-        var svgRoot = document.getElementById('svgrenderer');
-        if (svgRoot) {
-          var init0 = { bubbles: true, cancelable: true, view: window, clientX: pt.x, clientY: pt.y, button: 0, buttons: 1, isPrimary: true, pointerType: 'mouse' };
-          var initUp0 = Object.assign({}, init0, { buttons: 0 });
-          svgRoot.dispatchEvent(new PointerEvent('pointerdown', init0));
-          svgRoot.dispatchEvent(new MouseEvent('mousedown',     init0));
-          svgRoot.dispatchEvent(new PointerEvent('pointerup',   initUp0));
-          svgRoot.dispatchEvent(new MouseEvent('mouseup',       initUp0));
-          svgRoot.dispatchEvent(new MouseEvent('click',         initUp0));
-          await sleep(20);
-          snapState('after click on svg root');
-          if (check()) {
-            var rmE = await ensureMode(restoreMode);
-            if (rmE && check()) return true;
-            snapState('after ensureMode(' + restoreMode + ') E');
-          }
-        }
-
-        console.warn('[spDR-fix] selectOneCellReliably: ALL strategies failed for', targetCellKey, '(initial selection had ' + initialSelSize + ' cells). Trace:', attempts);
-        return false;
-      }
 
       for (var mi = 0; mi < 2; mi++) {
         var mode = mi === 0 ? 'corner' : 'centre';
         var digitMap = byModeDigit[mode];
         if (digitMap.size === 0) continue;
 
-        // ONE mode switch per phase, not per cell.
         var modeOk = await ensureMode(mode);
         if (!modeOk) { failures.push('mode-switch-failed:' + mode); continue; }
-
-        var otherMode = mode === 'corner' ? 'centre' : 'corner';
 
         var iter = digitMap.entries();
         var step;
         while (!(step = iter.next()).done) {
-          var digit      = step.value[0];
-          var allTargets = step.value[1];
+          var digit = step.value[0];
+          var targetsForDigit = step.value[1];
 
-          // No toolbar button for this digit — skip all cells for it gracefully.
           var digitBtn = getDigitButton(digit);
-          if (!digitBtn) { skippedExcluded += allTargets.length; continue; }
+          if (!digitBtn) { skippedExcluded += targetsForDigit.length; continue; }
 
-          // Re-filter to cells whose conflict mark is still present.
+          // Re-filter to targets still present in DOM.
           var preSnap = snapshotPencilmarks();
-          var stillPresent = allTargets.filter(function (t) {
-            return preSnap[mode].has(markKey(t));
+          var stillPresent = targetsForDigit.filter(function(t) {
+            return preSnap[mode].has(t.cellKey + ',' + t.digit);
           });
           if (stillPresent.length === 0) continue;
 
-          if (getCurrentMode() !== mode) {
-            failures.push('mode-drifted:' + digit + ':' + getCurrentMode());
-            if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-            if (originalMode && originalMode !== mode) await ensureMode(originalMode);
-            console.warn('[spDR-fix] aborted:', failures);
+          // Build cell objects for these targets.
+          var cellObjs = stillPresent.map(function(t) { return cellByKey[t.cellKey]; }).filter(Boolean);
+          if (cellObjs.length === 0) continue;
+
+          // Select exactly these cells via the API (no drag, no extras).
+          app.deselect();
+          app.select(cellObjs);
+          await sleep(10);
+
+          // All selected cells have digit in this mode → clicking removes it from all.
+          var before = snapshotPencilmarks();
+          dispatchClickEl(digitBtn);
+          await sleep(50);
+          var after = snapshotPencilmarks();
+          var diff = diffSnapshots(before, after);
+
+          // Safety: additions or value/color changes are always wrong here → undo + abort.
+          var criticalUnexpected = diff.added.corner.length + diff.added.centre.length +
+                                   diff.added.values.length + diff.added.colors.length +
+                                   diff.removed.values.length + diff.removed.colors.length;
+          if (criticalUnexpected > 0) {
+            console.error('[spDR-fix] REMOVE unexpected change for', mode, digit, diff);
+            var undoBtn = getModeButton('undo');
+            var rollbackOk = false;
+            if (undoBtn) {
+              dispatchClickEl(undoBtn);
+              for (var att = 0; att < 8; att++) {
+                await sleep(25);
+                if (diffEmpty(diffSnapshots(before, snapshotPencilmarks()))) { rollbackOk = true; break; }
+              }
+            }
             return {
-              totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded, aborted: true,
-              abortReason: 'mode-drift',
-              abortTarget: { type: mode, digit: digit, cellX: stillPresent[0].cellX, cellY: stillPresent[0].cellY },
-              rollbackOk: null, elapsedMs: performance.now() - startTime, failures: failures,
+              totalTargets: totalTargets, removed: removedCount,
+              skippedExcluded: skippedExcluded, aborted: true,
+              abortReason: 'unexpected-diff',
+              abortTarget: { type: mode, digit: digit,
+                             cellX: String(cellObjs[0].col * 64 + 32),
+                             cellY: String(cellObjs[0].row * 64 + 32) },
+              rollbackOk: rollbackOk,
+              elapsedMs: performance.now() - startTime, failures: failures,
             };
           }
 
-          // ── Per-run batch attempts ────────────────────────────────────────────
-          // Split stillPresent into per-row sub-groups, then split each row
-          // into "runs" of cells with consecutive column numbers (no gaps).
-          // A drag through a contiguous run touches ZERO non-target cells, so
-          // every multi-cell run can safely batch. Rows with gaps simply
-          // produce multiple smaller runs, each safe in isolation; singletons
-          // get demoted to per-cell. Compared to "drag the whole row," this
-          // avoids the all-or-nothing failure mode where one unsafe extra
-          // forces the entire row to per-cell.
-          var perCellTargets = [];
-          var rowGroups = groupTargetsByRow(stillPresent);
-          for (var rgi = 0; rgi < rowGroups.length; rgi++) {
-            var runs = splitRowIntoContiguousRuns(rowGroups[rgi]);
-            for (var rri = 0; rri < runs.length; rri++) {
-              var run = runs[rri];
-              if (run.length < 2) {
-                perCellTargets.push(run[0]);
-                continue;
-              }
-
-              var dragSelectOk = await selectViaDrag(run);
-              if (!dragSelectOk) {
-                // A contiguous run shouldn't have unsafe extras, but if drag
-                // verification fails for any other reason (mode drift, etc.),
-                // fall back to per-cell for these cells.
-                Array.prototype.push.apply(perCellTargets, run);
-                continue;
-              }
-
-              var beforeBatch = snapshotPencilmarks();
-              dispatchClickEl(digitBtn);
-              await sleep(10);
-              var afterBatch = snapshotPencilmarks();
-              var diffBatch  = diffSnapshots(beforeBatch, afterBatch);
-              if (diffEmpty(diffBatch)) continue; // already cleared
-
-              var expectedKeys = new Set(run.map(markKey));
-              var affectedCellKeys = new Set(run.map(function (t) {
-                return cellKeyFromMarkXY(t.cellX, t.cellY);
-              }));
-              var digitSetRemovedInMode = diffBatch.removed[mode].filter(function (entry) {
-                return settings.digitSet.includes(entry.split(',')[2]);
-              });
-              var digitSetRemovedOther = diffBatch.removed[otherMode].filter(function (entry) {
-                return settings.digitSet.includes(entry.split(',')[2]);
-              });
-              var addedCentreOutsideTargets = diffBatch.added.centre.filter(function (entry) {
-                var parts = entry.split(',');
-                return !affectedCellKeys.has(parts[0] + ',' + parts[1]);
-              });
-              var batchValid = (
-                diffBatch.added.corner.length      === 0 &&
-                addedCentreOutsideTargets.length   === 0 &&
-                diffBatch.added.values.length      === 0 &&
-                diffBatch.added.colors.length      === 0 &&
-                digitSetRemovedOther.length        === 0 &&
-                diffBatch.removed.values.length    === 0 &&
-                diffBatch.removed.colors.length    === 0 &&
-                digitSetRemovedInMode.length       === run.length &&
-                digitSetRemovedInMode.every(function (k) { return expectedKeys.has(k); })
-              );
-              if (batchValid) {
-                removedCount += run.length;
-                continue;
-              }
-
-              // Unexpected diff — undo and demote this run to per-cell.
-              failures.push('unexpected-run-batch-diff:digit=' + digit + ':mode=' + mode + ':run=' + rgi + '-' + rri + ':diff=' + JSON.stringify(diffBatch));
-              console.error('[spDR-fix] RUN BATCH FAILED — diff was not what we expected:', {
-                digit: digit, mode: mode, otherMode: otherMode,
-                runSize: run.length,
-                expectedKeys: Array.from(expectedKeys),
-                fullDiff: diffBatch,
-              });
-              var undoBtn = getModeButton('undo');
-              var rollbackOk = false;
-              if (undoBtn) {
-                dispatchClickEl(undoBtn);
-                for (var attempt = 0; attempt < 8; attempt++) {
-                  await sleep(25);
-                  if (diffEmpty(diffSnapshots(beforeBatch, snapshotPencilmarks()))) { rollbackOk = true; break; }
-                }
-              }
-              if (!rollbackOk) {
-                console.error('[spDR-fix] CRITICAL: run batch failed AND rollback failed.', failures, diffBatch);
-                if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-                if (originalMode && originalMode !== mode) await ensureMode(originalMode);
-                return {
-                  totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded, aborted: true,
-                  abortReason: 'unexpected-diff',
-                  abortTarget: { type: mode, digit: digit, cellX: run[0].cellX, cellY: run[0].cellY },
-                  rollbackOk: false,
-                  elapsedMs: performance.now() - startTime, failures: failures,
-                };
-              }
-              Array.prototype.push.apply(perCellTargets, run);
-            }
-          }
-
-          // ── Per-cell path (handles single-cell rows + row-batch fall-throughs) ─
-          // Uses normal-mode click to set single-cell selection regardless of
-          // any stale multi-selection left over from a failed batch attempt.
-          if (perCellTargets.length > 0) {
-            for (var ti = 0; ti < perCellTargets.length; ti++) {
-              var target = perCellTargets[ti];
-
-              // Restore the correct mode (a previous iteration may have left us in normal).
-              if (getCurrentMode() !== mode) {
-                var rok = await ensureMode(mode);
-                if (!rok) { failures.push('mode-restore-fail-pre:' + JSON.stringify(target)); continue; }
-              }
-
-              // Reliable single-cell selection. If we can't isolate exactly the
-              // target, ABORT rather than continue — clicking the digit with a
-              // stale multi-selection would mass-modify the puzzle.
-              var selOk = await selectOneCellReliably(target, mode);
-              if (!selOk) {
-                failures.push('select-fail:' + JSON.stringify(target));
-                console.error('[spDR-fix] Per-cell aborting: could not establish single-cell selection for', target);
-                if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-                if (originalMode && originalMode !== mode) await ensureMode(originalMode);
-                return {
-                  totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded, aborted: true,
-                  abortReason: 'selection-stuck', abortTarget: target, rollbackOk: null,
-                  elapsedMs: performance.now() - startTime, failures: failures,
-                };
-              }
-
-              var before = snapshotPencilmarks();
-              var expectedKey = markKey(target);
-              if (!before[mode].has(expectedKey)) continue;
-
-              dispatchClickEl(digitBtn);
-              await sleep(10);
-
-              var after = snapshotPencilmarks();
-              var diff  = diffSnapshots(before, after);
-              if (diffEmpty(diff)) continue;
-
-              // Same relaxations as the batch path:
-              //   - ignore non-digitSet removals (foreign-mark cleanup)
-              //   - allow centre-mark additions in the target cell only
-              //     (render artifact: removing a digit frees room so a
-              //     previously-hidden digit becomes visible)
-              var digitSetRemovedInModePc = diff.removed[mode].filter(function (entry) {
-                return settings.digitSet.includes(entry.split(',')[2]);
-              });
-              var digitSetRemovedOtherPc = diff.removed[otherMode].filter(function (entry) {
-                return settings.digitSet.includes(entry.split(',')[2]);
-              });
-              var targetCellKeyPc = cellKeyFromMarkXY(target.cellX, target.cellY);
-              var addedCentreOutsideTargetPc = diff.added.centre.filter(function (entry) {
-                var parts = entry.split(',');
-                return (parts[0] + ',' + parts[1]) !== targetCellKeyPc;
-              });
-              var ok = (
-                diff.added.corner.length      === 0 &&
-                addedCentreOutsideTargetPc.length === 0 &&
-                diff.added.values.length      === 0 &&
-                diff.added.colors.length      === 0 &&
-                digitSetRemovedOtherPc.length === 0 &&
-                diff.removed.values.length    === 0 &&
-                diff.removed.colors.length    === 0 &&
-                digitSetRemovedInModePc.length === 1 &&
-                digitSetRemovedInModePc[0]    === expectedKey
-              );
-              if (ok) {
-                removedCount++;
-              } else {
-                failures.push('unexpected-diff:target=' + JSON.stringify(target) + ':diff=' + JSON.stringify(diff));
-                console.error('[spDR-fix] PER-CELL REMOVE FAILED — diff was not what we expected:', {
-                  target: target,
-                  mode: mode,
-                  otherMode: otherMode,
-                  expectedKey: expectedKey,
-                  digitSet: settings.digitSet,
-                  diff_added_centre: diff.added.centre,
-                  diff_added_corner: diff.added.corner,
-                  diff_added_values: diff.added.values,
-                  diff_added_colors: diff.added.colors,
-                  diff_removed_centre: diff.removed.centre,
-                  diff_removed_corner: diff.removed.corner,
-                  diff_removed_values: diff.removed.values,
-                  diff_removed_colors: diff.removed.colors,
-                  digitSetRemovedInModePc: digitSetRemovedInModePc,
-                  digitSetRemovedOtherPc: digitSetRemovedOtherPc,
-                  fullDiff: diff,
-                });
-                var rollbackOk2 = null;
-                var undoBtn2 = getModeButton('undo');
-                if (undoBtn2) {
-                  dispatchClickEl(undoBtn2);
-                  rollbackOk2 = false;
-                  for (var attempt2 = 0; attempt2 < 8; attempt2++) {
-                    await sleep(25);
-                    if (diffEmpty(diffSnapshots(before, snapshotPencilmarks()))) { rollbackOk2 = true; break; }
-                  }
-                } else {
-                  rollbackOk2 = false;
-                }
-                if (rollbackOk2) {
-                  console.warn('[spDR-fix] Per-cell aborted; offending click rolled back.', failures);
-                } else {
-                  console.error('[spDR-fix] CRITICAL: per-cell aborted AND rollback failed.', failures, diff);
-                }
-                if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-                if (originalMode && originalMode !== mode) await ensureMode(originalMode);
-                return {
-                  totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded, aborted: true,
-                  abortReason: 'unexpected-diff', abortTarget: target,
-                  rollbackOk: rollbackOk2,
-                  elapsedMs: performance.now() - startTime, failures: failures,
-                };
-              }
-            }
+          // Count correct removals.
+          var expectedKeys = new Set(stillPresent.map(function(t) { return t.cellKey + ',' + t.digit; }));
+          var correctRemoved = diff.removed[mode].filter(function(k) { return expectedKeys.has(k); }).length;
+          removedCount += correctRemoved;
+          if (correctRemoved < stillPresent.length) {
+            failures.push('partial-removal:' + mode + ':' + digit +
+                          ':expected=' + stillPresent.length + ':got=' + correctRemoved);
           }
         }
       }
 
-      // Restore original mode and input mode.
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      if (originalMode && originalMode !== 'corner' && originalMode !== 'centre') {
-        await ensureMode(originalMode);
-      }
       return {
-        totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded, aborted: false,
-        elapsedMs: performance.now() - startTime, failures: failures,
+        totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded,
+        aborted: false, elapsedMs: performance.now() - startTime, failures: failures,
       };
-    })();
+
     } finally {
-      // Restore the user's pre-operation selection (and mode). Runs on every
-      // exit path including unexpected throws, so the puzzle never gets left
-      // with our internal mid-operation selection state visible to the user.
-      await restoreSelection(originalSelectedCells, originalMode);
+      // Restore original selection and mode on every exit path.
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
+      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
+      if (originalMode && originalMode !== getCurrentMode()) await ensureMode(originalMode);
     }
   }
+
 
   // ── Compose a toast from a worker result ────────────────────────────────
   // contextLabel: noun phrase like "invalid pencilmarks" used in the message
@@ -2932,357 +2381,139 @@
   }
 
   // Fill missing centre candidates (from settings.digitSet) into each selected
-  // cell, then inline-remove any conflicts introduced. Adds only digits not
-  // already present, so we never accidentally toggle an existing mark off.
-  //
-  // Per-cell sequence:
-  //   1. Escape to clear selection (stays in centre mode)
-  //   2. Click cell in centre mode
-  //   3. Skip if cell has a given/value
-  //   4. Fill each missing digit from digitSet — allow incidental removal of
-  //      non-digitSet marks (e.g. letter pencilmarks auto-removed by SudokuPad)
-  //   5. Inline-remove any conflict centre marks (still in centre mode)
-  //   6. If corner conflicts exist: Escape → corner mode → click → remove → back to centre
-  //
-  // Caller (fillSelectedCellsWithCandidates) runs a final _removeInvalidPencilmarksInternal
-  // sweep and restores modes at the very end.
+  // cell. Uses Framework.getApp() → app.select() to select exactly the cells
+  // missing each digit, then clicks the digit button once — N digits = N clicks,
+  // not N×M per-cell iterations. Caller runs a final _removeInvalidPencilmarksInternal
+  // sweep to strip any conflicts introduced.
   async function _fillSelectedInternal(cells) {
-    var svg = document.getElementById('svgrenderer');
-    if (!svg) return { addedCount: 0, removedCount: 0, skippedCount: 0, aborted: false, elapsedMs: 0, abortTarget: null };
     var startTime = performance.now();
+
+    // Get the SudokuPad app API and build a col,row → cell object lookup.
+    var app = await Framework.getApp();
+    var cellByKey = {};
+    app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
+
     var originalMode = getCurrentMode();
-    var originalSelectedCells = getSelectedCells();  // captured for restoration in finally
+    var originalSelection = Array.from(app.puzzle.selectedCells || []);
     var wasLetterMode = isLetterModeActive();
-    // Fill only works in number mode — switch if needed, restore afterwards.
     if (wasLetterMode) { var nmOk = await ensureNumberMode(); if (!nmOk) wasLetterMode = false; }
     var modeOk = await ensureMode('centre');
     if (!modeOk) {
+      // Restore state before returning — this path is outside the try/finally block.
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
       if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      await restoreSelection(originalSelectedCells, originalMode);
-      return { addedCount: 0, removedCount: 0, skippedCount: 0, aborted: true, abortReason: 'mode-switch-failed', elapsedMs: performance.now() - startTime };
+      return { addedCount: 0, removedCount: 0, skippedCount: 0, wasLetterMode: wasLetterMode,
+               aborted: true, abortReason: 'mode-switch-failed', elapsedMs: performance.now() - startTime };
     }
     try {
-    // Helper: dispatch Escape to clear selection without changing the active mode.
-    function dispatchEscape() {
-      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-      document.dispatchEvent(new KeyboardEvent('keyup',   { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
-    }
-
     // Pre-filter: skip cells with given/value (immutable), keep the rest.
     var fillable = [];
     var skippedCount = 0;
-    Array.from(cells).forEach(function (key) {
+    Array.from(cells).forEach(function(key) {
       var parts = key.split(',').map(Number);
       if (cellHasValueOrGiven(parts[0], parts[1])) {
         skippedCount++;
       } else {
-        fillable.push({ col: parts[0], row: parts[1], key: key });
+        var cell = cellByKey[key];
+        if (cell) fillable.push({ key: key, cell: cell });
       }
     });
 
     if (fillable.length === 0) {
-      return {
-        addedCount: 0, removedCount: 0, skippedCount: skippedCount,
-        wasLetterMode: wasLetterMode, aborted: false,
-        elapsedMs: performance.now() - startTime,
-      };
+      return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
+               wasLetterMode: wasLetterMode, aborted: false,
+               elapsedMs: performance.now() - startTime };
     }
 
     var digitList = settings.digitSet.split('');
-    var addedCount = 0;
 
-    // Outer loop: digits (one batch per digit reduces interactions from N×D
-    // clicks to ~D clicks). Inline conflict removal is dropped — the caller's
-    // final _removeInvalidPencilmarksInternal sweep handles all conflicts in
-    // a single grouped pass, which is significantly faster than per-cell.
+    // For each digit, select all fillable cells missing it and click once.
+    var addedCount = 0;
     for (var di = 0; di < digitList.length; di++) {
       var d = digitList[di];
       var digitBtn = getDigitButton(d);
-      if (!digitBtn) continue;  // digit not available (letter in number mode, etc.)
+      if (!digitBtn) continue;
 
-      // Make sure we're in centre mode — per-cell fallback below may have
-      // left us in normal mode after its last cell click.
       var cmOk = await ensureMode('centre');
       if (!cmOk) {
-        return {
-          addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-          wasLetterMode: wasLetterMode, aborted: true,
-          abortReason: 'mode-switch-failed',
-          elapsedMs: performance.now() - startTime,
-        };
+        return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
+                 wasLetterMode: wasLetterMode, aborted: true,
+                 abortReason: 'mode-switch-failed',
+                 elapsedMs: performance.now() - startTime };
       }
 
-      // Find fillable cells that don't already have this digit.
+      // Find fillable cells that don't already have this digit as a centre mark.
       var preSnap = snapshotPencilmarks();
-      var targetsForD = fillable.filter(function (c) {
+      var targetsForD = fillable.filter(function(c) {
         return !preSnap.centre.has(c.key + ',' + d);
       });
       if (targetsForD.length === 0) continue;
 
-      var expectedAddKeys = new Set(targetsForD.map(function (t) { return t.key + ',' + d; }));
+      // Select exactly these cells via the API and click the digit button once.
+      app.deselect();
+      app.select(targetsForD.map(function(c) { return c.cell; }));
+      await sleep(10);
 
-      // ── Try batch: drag-select all targets, click digit once ────────────
-      var batchOk = false;
-      if (targetsForD.length > 1) {
-        var points = targetsForD.map(function (t) {
-          return svgToClient(svg, t.col * 64 + 32, t.row * 64 + 32);
-        });
-        dispatchEscape();
-        await sleep(5);
-        dispatchCellDrag(points);
-        await sleep(20);
+      var expectedAddKeys = new Set(targetsForD.map(function(t) { return t.key + ',' + d; }));
+      var beforeBatch = snapshotPencilmarks();
+      dispatchClickEl(digitBtn);
+      await sleep(50);
+      var afterBatch = snapshotPencilmarks();
+      var diffBatch = diffSnapshots(beforeBatch, afterBatch);
 
-        // Verify the selection: every target must be selected, and any extras
-        // (cells the drag's path crossed) must be value/given cells so the
-        // digit click is a no-op on them.
-        var actualSel = getSelectedCells();
-        var targetKeys = new Set(targetsForD.map(function (t) { return t.key; }));
-        var dragSafe = true;
-        for (var dti = 0; dti < targetsForD.length; dti++) {
-          if (!actualSel.has(targetsForD[dti].key)) { dragSafe = false; break; }
-        }
-        if (dragSafe) {
-          actualSel.forEach(function (k) {
-            if (!targetKeys.has(k)) {
-              var p = k.split(',').map(Number);
-              if (!cellHasValueOrGiven(p[0], p[1])) dragSafe = false;
-            }
-          });
-        }
+      if (diffEmpty(diffBatch)) continue;  // All already had it — no-op.
 
-        if (dragSafe) {
-          var beforeBatch = snapshotPencilmarks();
-          dispatchClickEl(digitBtn);
-          await sleep(10);
-          var afterBatch = snapshotPencilmarks();
-          var diffBatch  = diffSnapshots(beforeBatch, afterBatch);
+      // Allow incidental non-digitSet centre removals (SudokuPad auto-clears letter marks).
+      var unexpectedRemovedCentre = diffBatch.removed.centre.filter(function(entry) {
+        return settings.digitSet.includes(entry.split(',')[2]);
+      });
+      var batchValid = (
+        diffBatch.removed.corner.length === 0 &&
+        diffBatch.removed.values.length === 0 &&
+        diffBatch.removed.colors.length === 0 &&
+        diffBatch.added.corner.length   === 0 &&
+        diffBatch.added.values.length   === 0 &&
+        diffBatch.added.colors.length   === 0 &&
+        unexpectedRemovedCentre.length  === 0 &&
+        diffBatch.added.centre.length   === targetsForD.length &&
+        diffBatch.added.centre.every(function(k) { return expectedAddKeys.has(k); })
+      );
 
-          if (diffEmpty(diffBatch)) {
-            batchOk = true;  // nothing changed (digit already present)
-          } else {
-            // Expected: |targetsForD| centre additions of d, nothing else.
-            // Relaxed: incidental non-digitSet centre removals (letter
-            // pencilmarks auto-cleared by SudokuPad) are acceptable.
-            var unexpectedRemovedCentre = diffBatch.removed.centre.filter(function (entry) {
-              return settings.digitSet.includes(entry.split(',')[2]);
-            });
-            var batchValid = (
-              diffBatch.removed.corner.length === 0 &&
-              diffBatch.removed.values.length === 0 &&
-              diffBatch.removed.colors.length === 0 &&
-              diffBatch.added.corner.length   === 0 &&
-              diffBatch.added.values.length   === 0 &&
-              diffBatch.added.colors.length   === 0 &&
-              unexpectedRemovedCentre.length  === 0 &&
-              diffBatch.added.centre.length   === targetsForD.length &&
-              diffBatch.added.centre.every(function (k) { return expectedAddKeys.has(k); })
-            );
-            if (batchValid) {
-              addedCount += targetsForD.length;
-              batchOk = true;
-            } else {
-              // Expose diff for external diagnosis via window.__spdrDiag
-              window.__spdrDiag = {
-                phase: 'batch', digit: d,
-                targetsCount: targetsForD.length,
-                expectedAddKeys: Array.from(expectedAddKeys),
-                diff: {
-                  added_centre:   diffBatch.added.centre,
-                  added_corner:   diffBatch.added.corner,
-                  added_values:   diffBatch.added.values,
-                  added_colors:   diffBatch.added.colors,
-                  removed_centre: diffBatch.removed.centre,
-                  removed_corner: diffBatch.removed.corner,
-                  removed_values: diffBatch.removed.values,
-                  removed_colors: diffBatch.removed.colors,
-                },
-                checks: {
-                  removed_corner_zero:     diffBatch.removed.corner.length === 0,
-                  removed_values_zero:     diffBatch.removed.values.length === 0,
-                  removed_colors_zero:     diffBatch.removed.colors.length === 0,
-                  added_corner_zero:       diffBatch.added.corner.length === 0,
-                  added_values_zero:       diffBatch.added.values.length === 0,
-                  added_colors_zero:       diffBatch.added.colors.length === 0,
-                  unexpRemovedCentre_zero: unexpectedRemovedCentre.length === 0,
-                  centre_count_match:      diffBatch.added.centre.length === targetsForD.length,
-                  all_expected:            diffBatch.added.centre.every(function(k){ return expectedAddKeys.has(k); }),
-                  unexpected_added:        diffBatch.added.centre.filter(function(k){ return !expectedAddKeys.has(k); }),
-                },
-              };
-              // Unexpected diff — undo (single undo step covers all N additions)
-              // and fall through to per-cell.
-              console.warn('[spDR-fix] FILL batch unexpected diff for digit', d, {
-                targetsCount: targetsForD.length,
-                diff_added_centre:   diffBatch.added.centre,
-                diff_added_corner:   diffBatch.added.corner,
-                diff_added_values:   diffBatch.added.values,
-                diff_added_colors:   diffBatch.added.colors,
-                diff_removed_centre: diffBatch.removed.centre,
-                diff_removed_corner: diffBatch.removed.corner,
-                diff_removed_values: diffBatch.removed.values,
-                diff_removed_colors: diffBatch.removed.colors,
-                unexpectedRemovedCentre: unexpectedRemovedCentre,
-                batchValid_checks: {
-                  removed_corner_zero:    diffBatch.removed.corner.length === 0,
-                  removed_values_zero:    diffBatch.removed.values.length === 0,
-                  removed_colors_zero:    diffBatch.removed.colors.length === 0,
-                  added_corner_zero:      diffBatch.added.corner.length === 0,
-                  added_values_zero:      diffBatch.added.values.length === 0,
-                  added_colors_zero:      diffBatch.added.colors.length === 0,
-                  unexpRemovedCentre_zero: unexpectedRemovedCentre.length === 0,
-                  added_centre_count_ok:  diffBatch.added.centre.length === targetsForD.length,
-                  added_centre_all_expected: diffBatch.added.centre.every(function(k){ return expectedAddKeys.has(k); }),
-                },
-              }, '— rolling back and falling back to per-cell.');
-              var undoBtn = getModeButton('undo');
-              var rollbackOk = false;
-              if (undoBtn) {
-                dispatchClickEl(undoBtn);
-                for (var attempt = 0; attempt < 8; attempt++) {
-                  await sleep(25);
-                  if (diffEmpty(diffSnapshots(beforeBatch, snapshotPencilmarks()))) { rollbackOk = true; break; }
-                }
-              }
-              if (!rollbackOk) {
-                // Critical: rollback failed.
-                console.error('[spDR-fix] CRITICAL: batch failed AND rollback failed.', diffBatch);
-                return {
-                  addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-                  wasLetterMode: wasLetterMode, aborted: true,
-                  abortReason: 'unexpected-diff',
-                  abortTarget: { type: 'centre', digit: String(d), cellX: String(targetsForD[0].col * 64 + 32), cellY: String(targetsForD[0].row * 64 + 32) },
-                  rollbackOk: false,
-                  elapsedMs: performance.now() - startTime,
-                };
-              }
-            }
+      if (batchValid) {
+        addedCount += targetsForD.length;
+      } else {
+        console.warn('[spDR-fix] FILL unexpected diff for digit', d, diffBatch);
+        var undoBtn = getModeButton('undo');
+        var rollbackOk = false;
+        if (undoBtn) {
+          dispatchClickEl(undoBtn);
+          for (var attempt = 0; attempt < 8; attempt++) {
+            await sleep(25);
+            if (diffEmpty(diffSnapshots(beforeBatch, snapshotPencilmarks()))) { rollbackOk = true; break; }
           }
         }
-      }
-
-      // ── Per-cell fallback (also handles single-cell groups) ─────────────
-      // Uses normal-mode click for guaranteed single-cell selection regardless
-      // of any stale multi-selection state.
-      if (!batchOk) {
-        for (var fti = 0; fti < targetsForD.length; fti++) {
-          var target = targetsForD[fti];
-
-          // Re-confirm this cell still needs the digit (an earlier fallback
-          // iteration in this same digit-group could have already done it).
-          var preCellSnap = snapshotPencilmarks();
-          if (preCellSnap.centre.has(target.key + ',' + d)) continue;
-
-          // Reliable single-cell selection: Escape first to clear any drag-selection
-          // (clicking an already-selected cell in normal mode keeps the multi-selection
-          // rather than replacing it), then normal-click to select just this cell.
-          var nm = await ensureMode('normal');
-          if (!nm) continue;
-          dispatchEscape();
-          await sleep(5);
-          var pt = svgToClient(svg, target.col * 64 + 32, target.row * 64 + 32);
-          dispatchClickAt(pt.x, pt.y);
-          await sleep(10);
-          var cm = await ensureMode('centre');
-          if (!cm) continue;
-
-          var before = snapshotPencilmarks();
-          dispatchClickEl(digitBtn);
-          await sleep(10);
-          var after = snapshotPencilmarks();
-          var diff  = diffSnapshots(before, after);
-          if (diffEmpty(diff)) continue;
-
-          var unexpectedRemovedCentre2 = diff.removed.centre.filter(function (entry) {
-            return settings.digitSet.includes(entry.split(',')[2]);
-          });
-          var ok = (
-            diff.removed.corner.length === 0 &&
-            diff.removed.values.length === 0 &&
-            diff.removed.colors.length === 0 &&
-            diff.added.corner.length   === 0 &&
-            diff.added.values.length   === 0 &&
-            diff.added.colors.length   === 0 &&
-            unexpectedRemovedCentre2.length === 0 &&
-            diff.added.centre.length   === 1 &&
-            diff.added.centre[0]       === target.key + ',' + d
-          );
-          if (ok) {
-            addedCount++;
-          } else {
-            // Per-cell unexpected diff — expose for diagnosis then rollback + abort.
-            window.__spdrDiag = {
-              phase: 'per-cell', digit: d, targetKey: target.key,
-              diff: {
-                added_centre:   diff.added.centre,
-                added_corner:   diff.added.corner,
-                added_values:   diff.added.values,
-                added_colors:   diff.added.colors,
-                removed_centre: diff.removed.centre,
-                removed_corner: diff.removed.corner,
-                removed_values: diff.removed.values,
-                removed_colors: diff.removed.colors,
-              },
-              checks: {
-                removed_corner_zero:  diff.removed.corner.length === 0,
-                removed_values_zero:  diff.removed.values.length === 0,
-                removed_colors_zero:  diff.removed.colors.length === 0,
-                added_corner_zero:    diff.added.corner.length === 0,
-                added_values_zero:    diff.added.values.length === 0,
-                added_colors_zero:    diff.added.colors.length === 0,
-                unexpRemovedCentre_zero: unexpectedRemovedCentre2.length === 0,
-                centre_count_is_1:    diff.added.centre.length === 1,
-                correct_key:          diff.added.centre[0] === target.key + ',' + d,
-                actual_centre_0:      diff.added.centre[0],
-                expected_key:         target.key + ',' + d,
-              },
-            };
-            // Per-cell unexpected diff — log details then rollback + abort.
-            console.error('[spDR-fix] FILL per-cell unexpected diff adding', d, 'to', target.key, {
-              target: target,
-              diff_added_centre:   diff.added.centre,
-              diff_added_corner:   diff.added.corner,
-              diff_added_values:   diff.added.values,
-              diff_added_colors:   diff.added.colors,
-              diff_removed_centre: diff.removed.centre,
-              diff_removed_corner: diff.removed.corner,
-              diff_removed_values: diff.removed.values,
-              diff_removed_colors: diff.removed.colors,
-              unexpectedRemovedCentre2: unexpectedRemovedCentre2,
-            });
-            var rollbackOk2 = null;
-            var undoBtn2 = getModeButton('undo');
-            if (undoBtn2) {
-              dispatchClickEl(undoBtn2);
-              rollbackOk2 = false;
-              for (var attempt2 = 0; attempt2 < 8; attempt2++) {
-                await sleep(25);
-                if (diffEmpty(diffSnapshots(before, snapshotPencilmarks()))) { rollbackOk2 = true; break; }
-              }
-            } else {
-              rollbackOk2 = false;
-            }
-            return {
-              addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-              wasLetterMode: wasLetterMode, aborted: true,
-              abortReason: 'unexpected-diff',
-              abortTarget: { type: 'centre', digit: String(d), cellX: String(target.col * 64 + 32), cellY: String(target.row * 64 + 32) },
-              rollbackOk: rollbackOk2,
-              elapsedMs: performance.now() - startTime,
-            };
-          }
-        }
+        return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
+                 wasLetterMode: wasLetterMode, aborted: true,
+                 abortReason: 'unexpected-diff',
+                 abortTarget: { type: 'centre', digit: String(d),
+                                cellX: String(targetsForD[0].cell.col * 64 + 32),
+                                cellY: String(targetsForD[0].cell.row * 64 + 32) },
+                 rollbackOk: rollbackOk,
+                 elapsedMs: performance.now() - startTime };
       }
     }
 
-    return {
-      addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-      wasLetterMode: wasLetterMode, aborted: false,
-      elapsedMs: performance.now() - startTime,
-    };
+    return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
+             wasLetterMode: wasLetterMode, aborted: false,
+             elapsedMs: performance.now() - startTime };
+
     } finally {
-      // Restore pre-operation selection on every exit path (including throws).
-      // Caller will run a final invalid-mark sweep that captures+restores its own.
-      await restoreSelection(originalSelectedCells, originalMode);
+      // Restore original selection and mode on every exit path.
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
+      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
+      if (originalMode && originalMode !== getCurrentMode()) await ensureMode(originalMode);
     }
   }
 
@@ -3387,10 +2618,10 @@
     var textColor = colorRefStyle ? colorRefStyle.color       : 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
-    var EXPANDED_W = 260;    // ← expanded button width in pixels — change to taste
-    var DELAY_MS   = 300;    // ← hover delay before expanding (ms)
-    var EXPAND_S   = '0.4s'; // ← expansion animation duration
-    var COLLAPSE_S = '0.15s'; // ← collapse animation duration
+    var EXPANDED_W = 260;    // â† expanded button width in pixels — change to taste
+    var DELAY_MS   = 300;    // â† hover delay before expanding (ms)
+    var EXPAND_S   = '0.4s'; // â† expansion animation duration
+    var COLLAPSE_S = '0.15s'; // â† collapse animation duration
 
     function applyColors(el, props) {
       Object.keys(props).forEach(function (p) { el.style.setProperty(p, props[p], 'important'); });
@@ -3465,9 +2696,9 @@
       textAlign:      'center',        // centers each line within the text block
       whiteSpace:     'pre',           // preserves \n in shortLabel
       boxSizing:      'border-box',
-      fontSize:       '15px',          // ← font size — change to taste
+      fontSize:       '15px',          // â† font size — change to taste
       fontFamily:     'Roboto, Arial, sans-serif',
-      fontWeight:     '800',           // ← weight — 700=bold, 800/900=heavier
+      fontWeight:     '800',           // â† weight — 700=bold, 800/900=heavier
       lineHeight:     '1.2',
       pointerEvents:  'none',
       zIndex:         '2',
