@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.95.0
+// @version      2.96.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.95.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 14, 41, 54); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.96.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 14, 47, 13); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -2211,7 +2211,10 @@
   function detectGridSize() {
     var cgPath = document.querySelector('#cell-grids path.cell-grid');
     if (cgPath) {
-      var nums = (cgPath.getAttribute('d') || '').match(/\d+(?:\.\d+)?/g);
+      // Our script clears the d attribute (cell-grid z-order fix) and saves the
+      // original in dataset.spdrOrigD. Use that if d is empty.
+      var dVal = cgPath.getAttribute('d') || cgPath.dataset.spdrOrigD || '';
+      var nums = dVal.match(/\d+(?:\.\d+)?/g);
       if (nums) {
         nums = nums.map(Number).filter(function (n) { return n > 0.5; });
         if (nums.length) {
