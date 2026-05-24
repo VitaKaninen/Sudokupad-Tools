@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.97.0
+// @version      2.98.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.97.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 15, 12, 16); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.98.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 5, 24, 0, 0, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -3083,7 +3083,29 @@
             } else {
               // Unexpected diff — undo (single undo step covers all N additions)
               // and fall through to per-cell.
-              console.warn('[spDR-fix] Batch click failed for digit', d, 'diff:', diffBatch, '— rolling back and falling back to per-cell.');
+              console.warn('[spDR-fix] FILL batch unexpected diff for digit', d, {
+                targetsCount: targetsForD.length,
+                diff_added_centre:   diffBatch.added.centre,
+                diff_added_corner:   diffBatch.added.corner,
+                diff_added_values:   diffBatch.added.values,
+                diff_added_colors:   diffBatch.added.colors,
+                diff_removed_centre: diffBatch.removed.centre,
+                diff_removed_corner: diffBatch.removed.corner,
+                diff_removed_values: diffBatch.removed.values,
+                diff_removed_colors: diffBatch.removed.colors,
+                unexpectedRemovedCentre: unexpectedRemovedCentre,
+                batchValid_checks: {
+                  removed_corner_zero:    diffBatch.removed.corner.length === 0,
+                  removed_values_zero:    diffBatch.removed.values.length === 0,
+                  removed_colors_zero:    diffBatch.removed.colors.length === 0,
+                  added_corner_zero:      diffBatch.added.corner.length === 0,
+                  added_values_zero:      diffBatch.added.values.length === 0,
+                  added_colors_zero:      diffBatch.added.colors.length === 0,
+                  unexpRemovedCentre_zero: unexpectedRemovedCentre.length === 0,
+                  added_centre_count_ok:  diffBatch.added.centre.length === targetsForD.length,
+                  added_centre_all_expected: diffBatch.added.centre.every(function(k){ return expectedAddKeys.has(k); }),
+                },
+              }, '— rolling back and falling back to per-cell.');
               var undoBtn = getModeButton('undo');
               var rollbackOk = false;
               if (undoBtn) {
@@ -3155,7 +3177,19 @@
           if (ok) {
             addedCount++;
           } else {
-            // Per-cell unexpected diff — rollback + abort.
+            // Per-cell unexpected diff — log details then rollback + abort.
+            console.error('[spDR-fix] FILL per-cell unexpected diff adding', d, 'to', target.key, {
+              target: target,
+              diff_added_centre:   diff.added.centre,
+              diff_added_corner:   diff.added.corner,
+              diff_added_values:   diff.added.values,
+              diff_added_colors:   diff.added.colors,
+              diff_removed_centre: diff.removed.centre,
+              diff_removed_corner: diff.removed.corner,
+              diff_removed_values: diff.removed.values,
+              diff_removed_colors: diff.removed.colors,
+              unexpectedRemovedCentre2: unexpectedRemovedCentre2,
+            });
             var rollbackOk2 = null;
             var undoBtn2 = getModeButton('undo');
             if (undoBtn2) {
