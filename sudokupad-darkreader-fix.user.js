@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.86.0
+// @version      2.87.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -30,6 +30,9 @@
   // If your environment differs, just pick the colours you want once and they
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
+
+  var SCRIPT_VERSION = '2.87.0';
+  var SCRIPT_LOAD_TIME = Date.now();
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -4930,7 +4933,35 @@
     return true;
   }
 
+  function buildVersionLabel() {
+    if (document.getElementById('sp-version-label')) return;
+    var label = document.createElement('div');
+    label.id = 'sp-version-label';
+    Object.assign(label.style, {
+      position:      'fixed',
+      bottom:        '52px',   // sits just above the 36px ⚙ button at bottom:12px
+      right:         '12px',
+      color:         '#6c7086',
+      fontSize:      '10px',
+      fontFamily:    'system-ui, -apple-system, sans-serif',
+      lineHeight:    '1.2',
+      textAlign:     'right',
+      pointerEvents: 'none',
+      zIndex:        '999999',
+      whiteSpace:    'nowrap',
+    });
+    function update() {
+      var s = Math.floor((Date.now() - SCRIPT_LOAD_TIME) / 1000);
+      var m = Math.floor(s / 60); s = s % 60;
+      label.textContent = 'v' + SCRIPT_VERSION + ' · ' + m + ':' + (s < 10 ? '0' : '') + s;
+    }
+    update();
+    setInterval(update, 1000);
+    document.body.appendChild(label);
+  }
+
   function buildAllUI() {
+    buildVersionLabel();
     buildSettingsUI();
     if (!buildActionButtons()) {
       var attempts = 0;
