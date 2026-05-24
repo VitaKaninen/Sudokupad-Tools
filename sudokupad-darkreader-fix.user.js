@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.80.0
+// @version      2.85.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -731,180 +731,6 @@
     }).observe(cellGrids, { childList: true, subtree: true, attributes: true, attributeFilter: ['style'] });
   }
 
-  // ── Cell-grid thinning for center border ─────────────────────────────────
-  // When center border is active, the center border path clones live in
-  // mainGroup at z=0. The path.cell-grid element (z=8) draws full-width lines
-  // at every cell boundary, including region boundaries — those light gray lines
-  // paint right over the dark center border clone. To prevent this, we remove
-  // the region-boundary segments from path.cell-grid so only interior grid lines
-  // remain there. The center border clone at z=0 then cleanly draws the boundary.
-  // fillBounds: { horizFillRanges: {y: [[x1,x2]...]}, vertFillRanges: {x: [[y1,y2]...]} }
-  // Passed from drawRegionSplitBorders when regionColorFillEnabled so that interior
-  // cell boundaries within filled regions are also stripped from the cell-grid path.
-  function fixCellGrid(fillBounds) {
-    var cellGrids = document.getElementById('cell-grids');
-    if (!cellGrids) return;
-    var cgPath = cellGrids.querySelector('path.cell-grid');
-    if (!cgPath) return;
-
-    var needCenterBorder = settings.regionBorderEnabled && settings.regionBorderCenterEnabled;
-
-    // Save original d before any modification.
-    if (!cgPath.dataset.spdrOrigD) {
-      cgPath.dataset.spdrOrigD = cgPath.getAttribute('d') || '';
-    }
-
-    // When fills or multi-color borders are active, clear the entire cell-grid.
-    // With fills: all cells are coloured, grid lines are visual noise.
-    // With multi-borders: puzzle-defined cell colours (z=4) sit above our strips (z=0)
-    //   and the cell-grid (z=8) paints over them as white lines on dark cells.
-    //   Partial/perpendicular clipping (introduced in v2.72) leaves partial segments
-    //   that look worse than either "all lines" or "no lines".
-    // In both cases the coloured strips + cage-box outlines communicate structure.
-    if (settings.regionColorFillEnabled ||
-        (settings.regionBorderEnabled && settings.regionBorderMultiEnabled)) {
-      cgPath.setAttribute('d', '');
-      return;
-    }
-
-    if (!needCenterBorder && !fillBounds) {
-      // Nothing to clip — restore original so all grid lines reappear.
-      cgPath.setAttribute('d', cgPath.dataset.spdrOrigD);
-      return;
-    }
-
-    // Build region-boundary segment lookup from cage-box paths.
-    // horizBounds[y] = [[x1,x2], ...] ranges that are region boundaries.
-    // vertBounds[x]  = [[y1,y2], ...] ranges that are region boundaries.
-    // Needed when center border is active (boundary removal + perpendicular clip)
-    // or when fill is active (boundary lines between fill areas must also vanish).
-    var horizBounds = {}, vertBounds = {};
-    if (needCenterBorder || fillBounds) {
-
-    function recordSeg(px1, py1, px2, py2) {
-      px1 = Math.round(px1); py1 = Math.round(py1);
-      px2 = Math.round(px2); py2 = Math.round(py2);
-      if (py1 === py2) {
-        var lo = Math.min(px1, px2), hi = Math.max(px1, px2);
-        if (!horizBounds[py1]) horizBounds[py1] = [];
-        horizBounds[py1].push([lo, hi]);
-      } else if (px1 === px2) {
-        var lo = Math.min(py1, py2), hi = Math.max(py1, py2);
-        if (!vertBounds[px1]) vertBounds[px1] = [];
-        vertBounds[px1].push([lo, hi]);
-      }
-    }
-
-    cellGrids.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
-      var d = p.getAttribute('d') || '';
-      var tokens = d.match(/[MLZmlz]|[-+]?\d+(?:\.\d+)?/g) || [];
-      var i = 0, cur = null, first = null;
-      while (i < tokens.length) {
-        var cmd = tokens[i];
-        if (/^[MLml]$/.test(cmd)) {
-          i++;
-          var x = parseFloat(tokens[i++]), y = parseFloat(tokens[i++]);
-          if (cmd === 'M' || cmd === 'm') {
-            cur = { x: x, y: y }; first = cur;
-          } else {
-            if (cur) recordSeg(cur.x, cur.y, x, y);
-            cur = { x: x, y: y };
-          }
-        } else if (/^[Zz]$/.test(cmd)) {
-          i++;
-          if (cur && first) recordSeg(cur.x, cur.y, first.x, first.y);
-        } else { i++; }
-      }
-    });
-    } // end if (needCenterBorder || fillBounds) — horizBounds/vertBounds population
-
-    // Merge overlapping intervals.
-    function mergeIntervals(list) {
-      if (!list || !list.length) return [];
-      list = list.slice().sort(function (a, b) { return a[0] - b[0]; });
-      var out = [list[0].slice()];
-      for (var i = 1; i < list.length; i++) {
-        var last = out[out.length - 1];
-        if (list[i][0] <= last[1]) last[1] = Math.max(last[1], list[i][1]);
-        else out.push(list[i].slice());
-      }
-      return out;
-    }
-
-    // Compute portions of [lo, hi] not covered by bounds.
-    function subtract(lo, hi, bounds) {
-      var result = [], cur = lo;
-      for (var i = 0; i < bounds.length; i++) {
-        if (bounds[i][0] > cur) result.push([cur, bounds[i][0]]);
-        cur = Math.max(cur, bounds[i][1]);
-        if (cur >= hi) break;
-      }
-      if (cur < hi) result.push([cur, hi]);
-      return result;
-    }
-
-    // When multi-color borders are active, cell-grid lines that cross a region
-    // boundary perpendicularly would paint over the colored strip. Clip those
-    // lines back by SW pixels on each side of the boundary so the strip is clean.
-    var clipSW = (settings.regionBorderEnabled && settings.regionBorderMultiEnabled)
-      ? (parseFloat(settings.regionColorStripeWidth) || 3) : 0;
-
-    // Rebuild cell-grid d, stripping region-boundary segments and (when
-    // multi-color borders are on) clipping perpendicular lines at strip zones.
-    var origD = cgPath.dataset.spdrOrigD;
-    var parts = [];
-    var segRe = /M\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+L\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)/g;
-    var m;
-    while ((m = segRe.exec(origD)) !== null) {
-      var x1 = Math.round(+m[1]), y1 = Math.round(+m[2]);
-      var x2 = Math.round(+m[3]), y2 = Math.round(+m[4]);
-      if (y1 === y2) {
-        // Horizontal segment: remove boundary overlaps + fill interior + perpendicular strip zones.
-        var lo = Math.min(x1, x2), hi = Math.max(x1, x2);
-        var removes = (horizBounds[y1] || []).slice();
-        if (fillBounds && fillBounds.horizFillRanges[y1]) {
-          removes = removes.concat(fillBounds.horizFillRanges[y1]);
-        }
-        if (clipSW > 0) {
-          Object.keys(vertBounds).forEach(function (xStr) {
-            var xv = +xStr, ivals = vertBounds[xStr];
-            for (var ii = 0; ii < ivals.length; ii++) {
-              if (ivals[ii][0] <= y1 && y1 <= ivals[ii][1]) {
-                removes.push([xv - clipSW - 1, xv + clipSW + 1]); break;
-              }
-            }
-          });
-        }
-        subtract(lo, hi, mergeIntervals(removes)).forEach(function (r) {
-          parts.push('M' + r[0] + ' ' + y1 + ' L' + r[1] + ' ' + y1);
-        });
-      } else if (x1 === x2) {
-        // Vertical segment: remove boundary overlaps + fill interior + perpendicular strip zones.
-        var lo = Math.min(y1, y2), hi = Math.max(y1, y2);
-        var removes = (vertBounds[x1] || []).slice();
-        if (fillBounds && fillBounds.vertFillRanges[x1]) {
-          removes = removes.concat(fillBounds.vertFillRanges[x1]);
-        }
-        if (clipSW > 0) {
-          Object.keys(horizBounds).forEach(function (yStr) {
-            var yh = +yStr, ivals = horizBounds[yStr];
-            for (var ii = 0; ii < ivals.length; ii++) {
-              if (ivals[ii][0] <= x1 && x1 <= ivals[ii][1]) {
-                removes.push([yh - clipSW - 1, yh + clipSW + 1]); break;
-              }
-            }
-          });
-        }
-        subtract(lo, hi, mergeIntervals(removes)).forEach(function (r) {
-          parts.push('M' + x1 + ' ' + r[0] + ' L' + x1 + ' ' + r[1]);
-        });
-      } else {
-        parts.push(m[0]); // Diagonal — keep as-is.
-      }
-    }
-    cgPath.setAttribute('d', parts.join(' '));
-  }
-
   // ── Region 4-color split borders ─────────────────────────────────────────
   // Derives regions purely from the SVG border paths in #cell-grids (no
   // dependency on Framework internals). Parses the path d-attributes into
@@ -954,13 +780,11 @@
     if (!totalW || !totalH) return null;
 
     // Determine cellSize: GCD of all coordinates in the .cell-grid path.
-    // Use spdrOrigD when available — fixCellGrid clips coords to non-cell-aligned
-    // values (e.g. x±SW) that would corrupt the GCD if we read the modified d.
     var cgPath = cellGrids.querySelector('path.cell-grid');
     function intGcd(a, b) { a = Math.round(a); b = Math.round(b); return b === 0 ? a : intGcd(b, a % b); }
     var cs = 0;
     if (cgPath) {
-      var cgNums = (cgPath.dataset.spdrOrigD || cgPath.getAttribute('d') || '').match(/\d+(?:\.\d+)?/g);
+      var cgNums = (cgPath.getAttribute('d') || '').match(/\d+(?:\.\d+)?/g);
       if (cgNums) {
         cs = cgNums.map(Number).filter(function (n) { return n > 0.5; })
                    .reduce(intGcd, 0);
@@ -972,10 +796,9 @@
 
     // Derive rows/cols from the actual max cell-grid path coordinates, NOT from
     // the viewBox (which includes margins that would inflate the count).
-    // Use spdrOrigD for the same reason as above (clipped coords skew max).
     var maxCX = 0, maxCY = 0;
     if (cgPath) {
-      var _d = cgPath.dataset.spdrOrigD || cgPath.getAttribute('d') || '';
+      var _d = cgPath.getAttribute('d') || '';
       var _toks = _d.match(/[MmLlHhVvZz]|-?\d+(?:\.\d+)?/g) || [];
       var _cx = 0, _cy = 0, _cmd = 'M', _isX = true;
       for (var _ti = 0; _ti < _toks.length; _ti++) {
@@ -1075,51 +898,47 @@
     if (!svg) return;
 
     svg.querySelectorAll('[data-spdr-region-split]').forEach(function (el) { el.remove(); });
+
+    // Restore cell-grid d if we cleared it in a previous call.
+    (function () {
+      var cge = document.getElementById('cell-grids');
+      var cgp = cge ? cge.querySelector('path.cell-grid') : null;
+      if (cgp && cgp.dataset.spdrOrigD !== undefined) {
+        cgp.setAttribute('d', cgp.dataset.spdrOrigD);
+        delete cgp.dataset.spdrOrigD;
+      }
+    })();
+
     var needFills        = settings.regionColorFillEnabled;
     var needMultiBorders = settings.regionBorderEnabled && settings.regionBorderMultiEnabled;
     var needCenterBorder = settings.regionBorderEnabled && settings.regionBorderCenterEnabled;
-    // Compute geometry first so fixCellGrid can use fill-interior bounds.
-    // inferRegionsFromSVG reads spdrOrigD which is safe before fixCellGrid runs
-    // (falls back to the live d attribute on first call).
     var geo = (needFills || needMultiBorders || needCenterBorder)
       ? inferRegionsFromSVG() : null;
 
-    // Build cell→region map and interior cell-boundary ranges.
-    // fillBounds records same-region adjacent-cell boundaries so fixCellGrid can
-    // remove those segments from the cell-grid path.  We need this whenever fills
-    // OR multi-borders are active: fills colour the full cell background (grid lines
-    // would paint over the fill), and multi-borders have puzzle-defined cell colours
-    // at z=4 that make the grid lines visible as white lines on dark cells.
-    var cellRegion = {}, fillBounds = null;
+    // Build cell→region map (used by inR() when drawing border strips).
+    var cellRegion = {};
     if (geo && geo.regions.length >= 2) {
       geo.regions.forEach(function (cells, ri) {
         cells.forEach(function (rc) { cellRegion[rc[0] + ',' + rc[1]] = ri; });
       });
-      if (needFills || needMultiBorders) {
-        var hFR = {}, vFR = {};
-        geo.regions.forEach(function (cells, ri) {
-          cells.forEach(function (rc) {
-            var r = rc[0], c = rc[1], cs = geo.cellSize;
-            // Shared boundary to the right (vertical line at x=(c+1)*cs)?
-            if (cellRegion[r + ',' + (c + 1)] === ri) {
-              var x = (c + 1) * cs;
-              if (!vFR[x]) vFR[x] = [];
-              vFR[x].push([r * cs, (r + 1) * cs]);
-            }
-            // Shared boundary below (horizontal line at y=(r+1)*cs)?
-            if (cellRegion[(r + 1) + ',' + c] === ri) {
-              var y = (r + 1) * cs;
-              if (!hFR[y]) hFR[y] = [];
-              hFR[y].push([c * cs, (c + 1) * cs]);
-            }
-          });
-        });
-        fillBounds = { horizFillRanges: hFR, vertFillRanges: vFR };
-      }
     }
 
-    // Apply cell-grid clipping (restores path when nothing is active).
-    fixCellGrid(fillBounds);
+    // Hide cage-box strokes when any border/fill feature is active.
+    // Cage-box paths (#cell-grids path:not(.cell-grid)) sit at z=8 with fully
+    // opaque black strokes and paint dark lines over puzzle-defined coloured cells
+    // (z=4) at every 3×3 box boundary.  Suppress them while our features are on;
+    // restore when all features are off.
+    var cellGridsEl = document.getElementById('cell-grids');
+    if (cellGridsEl) {
+      cellGridsEl.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
+        if (needFills || needMultiBorders || needCenterBorder) {
+          p.style.setProperty('stroke', 'none', 'important');
+        } else {
+          p.style.removeProperty('stroke');
+        }
+      });
+    }
+
     if (!needFills && !needMultiBorders && !needCenterBorder) return;
     if (!geo || geo.regions.length < 2) return;
 
@@ -1152,6 +971,11 @@
     var mainGroup = document.createElementNS(NS, 'g');
     mainGroup.setAttribute('data-spdr-region-split', '1');
     mainGroup.setAttribute('pointer-events', 'none');
+    // Snap rect edges to whole screen pixels so anti-aliasing doesn't create a
+    // dark fringe where the strip boundary falls at a fractional pixel position
+    // (the SVG is typically scaled ~1.33× so almost no coordinate lands on an
+    // integer screen pixel without this).
+    mainGroup.setAttribute('shape-rendering', 'crispEdges');
 
     // Each region gets a plain <g> (no clipPath needed — all rects are placed
     // entirely within that region's own cells).
@@ -1334,12 +1158,26 @@
       }
     }
 
-    // Insert mainGroup as the very first child of #svgrenderer (lowest z-order).
-    // SudokuPad renders thermometers, arrows, bars, and other background features
-    // before #cell-grids in the DOM — inserting at firstChild puts us below ALL
-    // of them so nothing is obscured by our fills/borders.
-    // Z-order result: our borders/fills (incl. center border clones) → puzzle
-    // features (#underlay circles/pills) → #cell-grids → highlights → digits.
+    // Clone path.cell-grid as the very first child of mainGroup so cell lines
+    // render below our strips within the group.  Clear the z=8 original so it
+    // no longer paints above our strips.  Clearing d (not display:none) avoids
+    // triggering the style-attribute mutation observer on #cell-grids.
+    (function () {
+      var cge = document.getElementById('cell-grids');
+      var cgp = cge ? cge.querySelector('path.cell-grid') : null;
+      if (!cgp) return;
+      cgp.dataset.spdrOrigD = cgp.getAttribute('d') || '';
+      var cgClone = cgp.cloneNode(false);
+      cgClone.removeAttribute('data-spdr-orig-d');
+      mainGroup.insertBefore(cgClone, mainGroup.firstChild);
+      cgp.setAttribute('d', '');
+    })();
+
+    // Insert mainGroup as the very first child of #svgrenderer (lowest z-order)
+    // so all puzzle features (circles, arcs, thermometers, underlay, etc.) remain
+    // on top of our fills/borders.
+    // Z-order result: our borders/fills → puzzle features → #cell-grids (cage
+    // outlines, cell-grid now empty) → highlights → digits.
     var svgEl = document.getElementById('svgrenderer');
     if (svgEl) {
       svgEl.insertBefore(mainGroup, svgEl.firstChild);
