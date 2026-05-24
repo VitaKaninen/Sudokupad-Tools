@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.93.0
+// @version      2.94.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.93.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 11, 59, 10); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.94.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 14, 34, 39); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -109,6 +109,9 @@
     regionColorOpacity:           1.0,        // opacity of border stripes
     regionColorFillEnabled:       false,      // fill entire cell backgrounds with region colors
     regionColorFillOpacity:       0.3,        // opacity of cell-fill backgrounds (independent of border opacity)
+
+    cellColorsOpacity:            0.5,        // 0..1; opacity of #cell-colors (puzzle-defined colored cells)
+    cellColorsOpacityEnabled:     false,      // override #cell-colors opacity when true
   };
 
   function loadSettings() {
@@ -293,8 +296,24 @@
   }
   rebuildStyleTag();
 
+  // Overrides the opacity of SudokuPad's #cell-colors group (puzzle-defined
+  // colored cell fills). Reduces them so our colored region borders, which sit
+  // below #cell-colors in z-order, show through the colored cells.
+  // SudokuPad applies its opacity via a CSS class rule; our inline !important
+  // wins over that without any MutationObserver fight.
+  function applyCellColorsOpacity() {
+    var el = document.getElementById('cell-colors');
+    if (!el) return;
+    if (settings.cellColorsOpacityEnabled) {
+      el.style.setProperty('opacity', String(settings.cellColorsOpacity), 'important');
+    } else {
+      el.style.removeProperty('opacity');
+    }
+  }
+
   function applySettings() {
     rebuildStyleTag();
+    applyCellColorsOpacity();
     var svg = document.getElementById('svgrenderer');
     if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
@@ -4228,6 +4247,17 @@
       subBuilder: function (wrap) {
         wrap.appendChild(makeRangeRow({ key: 'underlayLightness', enabledKey: 'underlayLightnessEnabled', label: 'Brightness', min: 0, max: 1, step: 0.05 }));
         wrap.appendChild(makeRangeRow({ key: 'underlayOpacity',   enabledKey: 'underlayOpacityEnabled',   label: 'Opacity',   min: 0, max: 1, step: 0.05 }));
+      },
+    }));
+
+    panel.appendChild(buildSection({
+      enabledKey: 'cellColorsOpacityEnabled',
+      label: 'Cell fill opacity',
+      desc: 'Reduce opacity of puzzle-defined colored cells so region borders show beneath them.',
+      hasColor: false,
+      resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
+      subBuilder: function (wrap) {
+        wrap.appendChild(makeRangeRow({ key: 'cellColorsOpacity', label: 'Opacity', min: 0, max: 1, step: 0.05 }));
       },
     }));
 
