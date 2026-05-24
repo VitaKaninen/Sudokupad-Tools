@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.102.0
+// @version      2.103.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,10 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.102.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 22, 0, 0); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.103.0';
+  // Expose on window so we (or a test harness) can verify the loaded version
+  // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
+  window.spdrVersion = SCRIPT_VERSION;
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -3758,22 +3760,7 @@
       zIndex:        '999999',
       whiteSpace:    'nowrap',
     });
-    function update() {
-      var total = Math.max(0, Math.floor((Date.now() - SCRIPT_UPDATE_TIME) / 1000));
-      var s = total % 60;
-      var m = Math.floor(total / 60) % 60;
-      var h = Math.floor(total / 3600) % 24;
-      var d = Math.floor(total / 86400);
-      var ss = (s < 10 ? '0' : '') + s;
-      var mm = (m < 10 ? '0' : '') + m;
-      var age;
-      if (d > 0)      age = d + 'd ' + h + 'h ' + mm + ':' + ss;
-      else if (h > 0) age = h + 'h ' + mm + ':' + ss;
-      else            age = m + ':' + ss;
-      label.textContent = 'v' + SCRIPT_VERSION + ' · ' + age;
-    }
-    update();
-    setInterval(update, 1000);
+    label.textContent = 'v' + SCRIPT_VERSION;
     document.body.appendChild(label);
   }
 
