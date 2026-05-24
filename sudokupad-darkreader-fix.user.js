@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.106.0
+// @version      2.107.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.106.0';
+  var SCRIPT_VERSION = '2.107.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1397,7 +1397,14 @@
   // Block SudokuPad's global handlers from intercepting events inside our UI:
   //   - mousemove preventDefault would break native slider drag
   //   - keydown for Backspace/Delete would prevent text-input editing
-  // Esc is allowed through so the panel-close handler still works.
+  //
+  // Always-allowed keys (pass through to SudokuPad even when our UI has focus):
+  //   - Escape       — needed so SudokuPad's panel-close handler still fires
+  //   - Shift/Ctrl/Alt/Meta — modifier keys; SudokuPad uses them to toggle
+  //                           corner/centre/colour modes while held. Blocking
+  //                           them while focus is parked on our buttons (which
+  //                           happens after any click on Fill/Clear/Settings)
+  //                           breaks mode-switching entirely.
   var BLOCKED_EVENTS = [
     'mousedown','mousemove','mouseup',
     'pointerdown','pointermove','pointerup',
@@ -1405,6 +1412,7 @@
     'dragstart','selectstart',
     'keydown','keyup','keypress',
   ];
+  var ALLOWED_KEYS = { Escape: 1, Shift: 1, Control: 1, Alt: 1, Meta: 1 };
   function isInOurUI(t) {
     return t && t.closest && (
       t.closest('#sp-fix-panel') || t.closest('#sp-fix-btn') ||
@@ -1416,7 +1424,7 @@
   BLOCKED_EVENTS.forEach(function (type) {
     document.addEventListener(type, function (e) {
       if (!isInOurUI(e.target)) return;
-      if (type.indexOf('key') === 0 && e.key === 'Escape') return;  // let Esc through
+      if (type.indexOf('key') === 0 && ALLOWED_KEYS[e.key]) return;
       e.stopImmediatePropagation();
     }, true);
   });
