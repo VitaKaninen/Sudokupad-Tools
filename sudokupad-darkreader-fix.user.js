@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.88.0
+// @version      2.89.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.88.0';
-  var SCRIPT_UPDATE_TIME = new Date('2026-05-24T00:00:00').getTime(); // update with each version bump
+  var SCRIPT_VERSION = '2.89.0';
+  var SCRIPT_UPDATE_TIME = new Date('2026-05-24T11:30:00').getTime(); // update with each version bump
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -4937,6 +4937,7 @@
     if (document.getElementById('sp-version-label')) return;
     var label = document.createElement('div');
     label.id = 'sp-version-label';
+    label.title = 'Click to reload page';
     Object.assign(label.style, {
       position:      'fixed',
       bottom:        '52px',   // sits just above the 36px ⚙ button at bottom:12px
@@ -4946,24 +4947,27 @@
       fontFamily:    'system-ui, -apple-system, sans-serif',
       lineHeight:    '1.2',
       textAlign:     'right',
-      pointerEvents: 'none',
+      cursor:        'pointer',
       zIndex:        '999999',
       whiteSpace:    'nowrap',
+      userSelect:    'none',
     });
+    label.addEventListener('click', function () { location.reload(); });
+    label.addEventListener('mouseenter', function () { label.style.color = '#cdd6f4'; });
+    label.addEventListener('mouseleave', function () { label.style.color = '#6c7086'; });
     function update() {
-      var s = Math.floor((Date.now() - SCRIPT_UPDATE_TIME) / 1000);
+      var total = Math.floor((Date.now() - SCRIPT_UPDATE_TIME) / 1000);
+      var s = total % 60;
+      var m = Math.floor(total / 60) % 60;
+      var h = Math.floor(total / 3600) % 24;
+      var d = Math.floor(total / 86400);
+      var ss = (s < 10 ? '0' : '') + s;
+      var mm = (m < 10 ? '0' : '') + m;
       var age;
-      if (s < 3600) {
-        var m = Math.floor(s / 60); s = s % 60;
-        age = m + ':' + (s < 10 ? '0' : '') + s;
-      } else if (s < 86400) {
-        var h = Math.floor(s / 3600), rm = Math.floor((s % 3600) / 60);
-        age = h + 'h ' + rm + 'm';
-      } else {
-        var d = Math.floor(s / 86400), rh = Math.floor((s % 86400) / 3600);
-        age = d + 'd ' + rh + 'h';
-      }
-      label.textContent = 'v' + SCRIPT_VERSION + ' · ' + age;
+      if (d > 0)      age = d + 'd ' + h + 'h ' + mm + ':' + ss;
+      else if (h > 0) age = h + 'h ' + mm + ':' + ss;
+      else            age = m + ':' + ss;
+      label.textContent = '↺ v' + SCRIPT_VERSION + ' · ' + age;
     }
     update();
     setInterval(update, 1000);
