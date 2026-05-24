@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.99.0
+// @version      2.100.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.99.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 5, 24, 0, 0, 0); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.100.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 22, 0, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -3172,9 +3172,13 @@
           var preCellSnap = snapshotPencilmarks();
           if (preCellSnap.centre.has(target.key + ',' + d)) continue;
 
-          // Reliable single-cell selection: normal-click replaces selection.
+          // Reliable single-cell selection: Escape first to clear any drag-selection
+          // (clicking an already-selected cell in normal mode keeps the multi-selection
+          // rather than replacing it), then normal-click to select just this cell.
           var nm = await ensureMode('normal');
           if (!nm) continue;
+          dispatchEscape();
+          await sleep(5);
           var pt = svgToClient(svg, target.col * 64 + 32, target.row * 64 + 32);
           dispatchClickAt(pt.x, pt.y);
           await sleep(10);
