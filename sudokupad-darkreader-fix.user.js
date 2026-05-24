@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.89.0
+// @version      2.90.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.89.0';
-  var SCRIPT_UPDATE_TIME = new Date('2026-05-24T11:30:00').getTime(); // update with each version bump
+  var SCRIPT_VERSION = '2.90.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 11, 30, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -4956,7 +4956,7 @@
     label.addEventListener('mouseenter', function () { label.style.color = '#cdd6f4'; });
     label.addEventListener('mouseleave', function () { label.style.color = '#6c7086'; });
     function update() {
-      var total = Math.floor((Date.now() - SCRIPT_UPDATE_TIME) / 1000);
+      var total = Math.max(0, Math.floor((Date.now() - SCRIPT_UPDATE_TIME) / 1000));
       var s = total % 60;
       var m = Math.floor(total / 60) % 60;
       var h = Math.floor(total / 3600) % 24;
