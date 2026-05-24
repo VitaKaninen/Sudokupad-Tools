@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.85.0
+// @version      2.86.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -2172,10 +2172,29 @@
     return false;
   }
 
-  // Infer the grid size N from the SVG viewBox. For an N×N grid the coordinate
-  // space is approximately N*64 wide with ~16px padding on each side, giving
-  // viewBox width ≈ N*64 + 32. Returns an integer clamped to 4–16.
+  // Derive the grid size N from path.cell-grid coordinates (GCD = cellSize,
+  // max coordinate = N*cellSize). Falls back to the viewBox formula for puzzles
+  // that load before #cell-grids is populated. Returns an integer clamped 4–16.
+  // Reads cell-grid path, not the viewBox, so puzzles with outer-ring hint cells
+  // (whose viewBox is wider than the playable area) are handled correctly.
   function detectGridSize() {
+    var cgPath = document.querySelector('#cell-grids path.cell-grid');
+    if (cgPath) {
+      var nums = (cgPath.getAttribute('d') || '').match(/\d+(?:\.\d+)?/g);
+      if (nums) {
+        nums = nums.map(Number).filter(function (n) { return n > 0.5; });
+        if (nums.length) {
+          function igcd(a, b) { a = Math.round(a); b = Math.round(b); return b === 0 ? a : igcd(b, a % b); }
+          var cs = nums.reduce(igcd, 0);
+          var mx = Math.max.apply(null, nums);
+          if (cs >= 4 && mx > 0) {
+            var N = Math.round(mx / cs);
+            if (N >= 4) return Math.min(N, 16);
+          }
+        }
+      }
+    }
+    // Fallback: viewBox-based estimate (works for standard puzzles without outer-ring offsets).
     var svg = document.getElementById('svgrenderer');
     if (!svg) return 9;
     var vb = svg.getAttribute('viewBox');
@@ -2183,8 +2202,7 @@
     var parts = vb.trim().split(/[\s,]+/).map(Number);
     var totalWidth = parts[2];
     if (!totalWidth || isNaN(totalWidth) || totalWidth <= 0) return 9;
-    var N = Math.round((totalWidth - 32) / 64);
-    return Math.max(4, Math.min(N, 16));
+    return Math.max(4, Math.min(Math.round((totalWidth - 32) / 64), 16));
   }
 
   // Lock to prevent concurrent action runs (clicking multiple action buttons
