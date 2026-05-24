@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.87.0
+// @version      2.88.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.87.0';
-  var SCRIPT_LOAD_TIME = Date.now();
+  var SCRIPT_VERSION = '2.88.0';
+  var SCRIPT_UPDATE_TIME = new Date('2026-05-24T00:00:00').getTime(); // update with each version bump
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -4951,9 +4951,19 @@
       whiteSpace:    'nowrap',
     });
     function update() {
-      var s = Math.floor((Date.now() - SCRIPT_LOAD_TIME) / 1000);
-      var m = Math.floor(s / 60); s = s % 60;
-      label.textContent = 'v' + SCRIPT_VERSION + ' · ' + m + ':' + (s < 10 ? '0' : '') + s;
+      var s = Math.floor((Date.now() - SCRIPT_UPDATE_TIME) / 1000);
+      var age;
+      if (s < 3600) {
+        var m = Math.floor(s / 60); s = s % 60;
+        age = m + ':' + (s < 10 ? '0' : '') + s;
+      } else if (s < 86400) {
+        var h = Math.floor(s / 3600), rm = Math.floor((s % 3600) / 60);
+        age = h + 'h ' + rm + 'm';
+      } else {
+        var d = Math.floor(s / 86400), rh = Math.floor((s % 86400) / 3600);
+        age = d + 'd ' + rh + 'h';
+      }
+      label.textContent = 'v' + SCRIPT_VERSION + ' · ' + age;
     }
     update();
     setInterval(update, 1000);
