@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.92.0
+// @version      2.93.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,8 +31,8 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.92.0';
-  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 11, 45, 0); // update with each version bump (month is 0-indexed)
+  var SCRIPT_VERSION = '2.93.0';
+  var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 11, 59, 10); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -714,6 +714,7 @@
     var cellGrids = document.getElementById('cell-grids');
     if (!cellGrids) return;
     fixAllCageBoxes(svg);
+    drawRegionSplitBorders(svg);
     new MutationObserver(function (mutations) {
       for (var i = 0; i < mutations.length; i++) {
         var m = mutations[i];
@@ -3839,6 +3840,7 @@
                    document.querySelector('[data-control="centre"]') || ref;
     var colorCs = getComputedStyle(colorRef);
     var bg = colorCs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? colorCs.backgroundColor : null;
+    var fg = colorCs.color || null;
     ['sp-fill-btn-wrap', 'sp-clear-btn-wrap', 'sp-clearall-btn-wrap'].forEach(function(id) {
       var wrap = document.getElementById(id);
       if (!wrap || !wrap.firstElementChild) return;
@@ -3848,9 +3850,11 @@
       if (bw) { clipper.style.width = bw + 'px'; clipper.dataset.collapsedW = bw; }
       if (bh) clipper.style.height = bh + 'px';
       if (bg) clipper.style.setProperty('background-color', bg, 'important');
-      // Keep label width in sync so collapsed-state centering stays correct.
+      // Keep label dimensions and color in sync so collapsed-state centering stays correct.
       var label = clipper.firstElementChild;
       if (label && bw) label.style.width = bw + 'px';
+      if (label && bh) label.style.height = bh + 'px';
+      if (label && fg) label.style.setProperty('color', fg, 'important');
     });
   }
 
@@ -3866,6 +3870,12 @@
                     document.querySelector('[data-control="corner"]');
     if (!anchorBtn) return false;
     if (document.getElementById('sp-fill-btn-wrap')) return true;
+    // Wait until SudokuPad's CSS has applied: button must have a non-zero size and
+    // a non-transparent background color. If either is missing, CSS hasn't settled yet.
+    var colorRef = document.querySelector('[data-control="pen"]') ||
+                   document.querySelector('[data-control="corner"]') ||
+                   document.querySelector('[data-control="centre"]') || anchorBtn;
+    if (!anchorBtn.offsetWidth || getComputedStyle(colorRef).backgroundColor === 'rgba(0, 0, 0, 0)') return false;
     var toolContainer = anchorBtn.parentElement;
 
     var fillWrap = buildActionButton({
