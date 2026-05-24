@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.100.0
+// @version      2.101.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.100.0';
+  var SCRIPT_VERSION = '2.101.0';
   var SCRIPT_UPDATE_TIME = Date.UTC(2026, 4, 24, 22, 0, 0); // update with each version bump (month is 0-indexed)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
@@ -4514,8 +4514,10 @@
     label.id = 'sp-version-label';
     Object.assign(label.style, {
       position:      'fixed',
-      bottom:        '52px',   // sits just above the 36px ⚙ button at bottom:12px
-      right:         '12px',
+      // Sits to the left of the 36px ⚙ button (right:12px) with an 8px gap.
+      // bottom:24px vertically centres the label in the button's 36px height.
+      bottom:        '24px',
+      right:         '56px',   // 12px margin + 36px button + 8px gap
       color:         '#6c7086',
       fontSize:      '10px',
       fontFamily:    'system-ui, -apple-system, sans-serif',
