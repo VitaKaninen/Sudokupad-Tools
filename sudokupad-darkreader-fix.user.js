@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.107.0
+// @version      2.109.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.107.0';
+  var SCRIPT_VERSION = '2.109.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -96,7 +96,8 @@
 
     selectionColorEnabled:        false,
     selectionColor:               '#3399ff',
-    selectionOpacity:             0.3,
+    selectionOpacity:             0.7,
+    selectionWidth:               '8',
 
     showToasts:                   true,   // show action result notifications (toasts)
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
@@ -243,9 +244,28 @@
     }
 
     if (s.selectionColorEnabled) {
+      // The visible "selection border" is the SudokuPad path.cage-selectioncage
+      // — the stroke around the perimeter of the selected group. The per-cell
+      // rect.cell-highlight fill behind it is dominated visually by this border,
+      // so users see the border colour as "the selection colour."
       var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
+      var sw = parseFloat(s.selectionWidth);
+      if (!isFinite(sw) || sw < 0) sw = 8;
       css += `
-      #cell-highlights rect.cell-highlight { fill: ${sc} !important; }`;
+      #cell-highlights path.cage-selectioncage {
+        stroke: ${sc} !important;
+        stroke-width: ${sw}px !important;
+      }`;
+    }
+
+    // Cell shading — gates the opacity of #cell-colors (puzzle-defined coloured
+    // cells). Was previously applied imperatively via element.style.setProperty,
+    // but that required #cell-colors to already exist at the moment of call,
+    // which it doesn't on initial page load (SudokuPad builds the SVG later).
+    // CSS rule with !important applies the moment #cell-colors appears.
+    if (s.cellColorsOpacityEnabled) {
+      css += `
+      #cell-colors { opacity: ${s.cellColorsOpacity} !important; }`;
     }
 
     // Always-on: colour-swatch palette restoration (DR overrides --cell-color-N).
@@ -297,24 +317,8 @@
   }
   rebuildStyleTag();
 
-  // Overrides the opacity of SudokuPad's #cell-colors group (puzzle-defined
-  // colored cell fills). Reduces them so our colored region borders, which sit
-  // below #cell-colors in z-order, show through the colored cells.
-  // SudokuPad applies its opacity via a CSS class rule; our inline !important
-  // wins over that without any MutationObserver fight.
-  function applyCellColorsOpacity() {
-    var el = document.getElementById('cell-colors');
-    if (!el) return;
-    if (settings.cellColorsOpacityEnabled) {
-      el.style.setProperty('opacity', String(settings.cellColorsOpacity), 'important');
-    } else {
-      el.style.removeProperty('opacity');
-    }
-  }
-
   function applySettings() {
     rebuildStyleTag();
-    applyCellColorsOpacity();
     var svg = document.getElementById('svgrenderer');
     if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
@@ -399,10 +403,12 @@
     el.style.removeProperty('--darkreader-inline-fill');
   }
 
-  // Stroke (shape outline) — gated by Region borders section + slider enable.
-  // Opacity locked at 1.0; only lightness is configurable.
+  // Stroke (shape outline) — gated by the Object shading section's enable +
+  // this slider's own sub-enable. Opacity locked at 1.0; only lightness is
+  // configurable. (Previously this lived under Region borders and required
+  // regionBorderEnabled + regionBorderCenterEnabled; moved here in v2.109.)
   function applyShapeStroke(el) {
-    if (!settings.regionBorderEnabled || !settings.regionBorderCenterEnabled || !settings.underlayStrokeLightnessEnabled) {
+    if (!settings.underlayEnabled || !settings.underlayStrokeLightnessEnabled) {
       el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-opacity');
       return;
@@ -3006,15 +3012,20 @@
   function buildSettingsUI() {
     var panel = document.createElement('div');
     panel.id = 'sp-fix-panel';
+    // Panel = flex column with non-scrolling header on top and a scrollable
+    // content div below. Scrollbar lives on the content div so it only spans
+    // the content area, never overlapping the title.
     Object.assign(panel.style, {
       display: 'none', position: 'fixed', bottom: '56px', right: '12px',
-      width: '340px', maxHeight: '80vh', overflowY: 'auto',
+      width: '340px', maxHeight: '80vh',
+      flexDirection: 'column',
       background: '#1e1e2e', color: '#cdd6f4',
       border: '1px solid #45475a', borderRadius: '10px',
       fontFamily: 'system-ui, -apple-system, sans-serif',
       fontSize: '13px', lineHeight: '1.4',
       boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
       zIndex: '999999',
+      overflow: 'hidden',   // clip rounded corners
     });
 
     var header = document.createElement('div');
@@ -3022,7 +3033,7 @@
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '7px 14px', background: '#313244',
       borderBottom: '1px solid #45475a',
-      position: 'sticky', top: '0', zIndex: '1',
+      flexShrink: '0',
     });
     var title = document.createElement('span');
     title.textContent = 'DarkReader Fix';
@@ -3041,16 +3052,25 @@
     header.appendChild(title); header.appendChild(closeBtn);
     panel.appendChild(header);
 
-    panel.appendChild(buildSection({
+    // Scrollable content container — every section below goes in here so the
+    // scrollbar starts under the header instead of running the panel's full height.
+    var content = document.createElement('div');
+    Object.assign(content.style, {
+      overflowY: 'auto',
+      flex: '1 1 auto',
+      minHeight: '0',   // required for flex children to actually scroll
+    });
+    panel.appendChild(content);
+
+    content.appendChild(buildSection({
       enabledKey: 'regionBorderEnabled',
       label: 'Region borders',
-      desc: 'Region borders and shape outlines.',
+      desc: 'Solid, center-only, or multi-color borders around the puzzle\'s regions (boxes / cages / shape groups).',
       hasColor: false,
       resetKeys: ['regionBorderEnabled',
                   'regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
-                  'regionColorStripeWidth', 'regionColorOpacity',
-                  'underlayStrokeLightness', 'underlayStrokeLightnessEnabled'],
+                  'regionColorStripeWidth', 'regionColorOpacity'],
       subBuilder: function (wrap) {
         // ── Checkbox: Center border ───────────────────────────────────────
         var cbCenterRow = document.createElement('label');
@@ -3131,13 +3151,10 @@
           saveSettings(settings); applySettings(); applyMultiDim();
         });
         controlSyncers['regionBorderMultiEnabled'] = applyMultiDim;
-
-        // ── Object border brightness (always visible at bottom) ───────────
-        wrap.appendChild(makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', label: 'Object border brightness', min: 0, max: 1, step: 0.05 }));
       },
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'givenEnabled',
       label: 'Given digit & overlay text',
       desc: 'Pre-filled clue digits and overlay labels',
@@ -3147,7 +3164,7 @@
       resetKeys: ['givenColor','givenOpacity'],
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'labelBgEnabled',
       label: 'Label background',
       desc: 'Background behind cage sums, little-killer clues, and similar text labels',
@@ -3157,25 +3174,27 @@
       resetKeys: ['labelBgColor','labelBgOpacity'],
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'underlayEnabled',
-      label: 'Cell shading / underlay',
-      desc: 'Coloured cells, shape backgrounds, and cage fills.',
+      label: 'Object shading / underlay',
+      desc: 'Tint and outline puzzle objects drawn as underlays — shape backgrounds, cage fills, and their borders.',
       hasColor: false,
       resetKeys: [
         'underlayLightness','underlayLightnessEnabled',
         'underlayOpacity','underlayOpacityEnabled',
+        'underlayStrokeLightness','underlayStrokeLightnessEnabled',
       ],
       subBuilder: function (wrap) {
         wrap.appendChild(makeRangeRow({ key: 'underlayLightness', enabledKey: 'underlayLightnessEnabled', label: 'Brightness', min: 0, max: 1, step: 0.05 }));
         wrap.appendChild(makeRangeRow({ key: 'underlayOpacity',   enabledKey: 'underlayOpacityEnabled',   label: 'Opacity',   min: 0, max: 1, step: 0.05 }));
+        wrap.appendChild(makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', label: 'Border brightness', min: 0, max: 1, step: 0.05 }));
       },
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'cellColorsOpacityEnabled',
-      label: 'Cell fill opacity',
-      desc: 'Reduce opacity of puzzle-defined colored cells so region borders show beneath them.',
+      label: 'Cell shading',
+      desc: 'Adjust the opacity of puzzle-defined colored cells (so borders, pencilmarks, and other elements remain visible beneath them).',
       hasColor: false,
       resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
       subBuilder: function (wrap) {
@@ -3183,7 +3202,7 @@
       },
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'centerEnabled',
       label: 'Center pencilmarks',
       desc: 'Digits entered as center pencilmarks',
@@ -3199,7 +3218,7 @@
       },
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'cornerEnabled',
       label: 'Corner pencilmarks',
       desc: 'Digits entered as corner pencilmarks',
@@ -3215,7 +3234,7 @@
       },
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'kropkiFixEnabled',
       label: 'Kropki dots',
       desc: 'Fix DarkReader inverting white/black Kropki dot colors.',
@@ -3280,14 +3299,15 @@
       },
     }));
 
-    panel.appendChild(buildSection({
+    content.appendChild(buildSection({
       enabledKey: 'selectionColorEnabled',
-      label: 'Cell selection color',
-      desc: 'Override the color of selected cells.',
+      label: 'Cell selection border',
+      desc: 'Override the color, opacity, and width of the selection-perimeter border.',
       hasColor: false,
-      resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity'],
+      resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth'],
       subBuilder: function (wrap) {
         wrap.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
+        wrap.appendChild(makeWidthRow('selectionWidth'));
       },
     }));
 
@@ -3460,7 +3480,7 @@
     digitSetRow.appendChild(digitSetInput);
     actionSection.appendChild(digitSetRow);
 
-    panel.appendChild(actionSection);
+    content.appendChild(actionSection);
 
     var footer = document.createElement('div');
     Object.assign(footer.style, { padding: '10px 14px', borderTop: '1px solid #45475a' });
@@ -3480,7 +3500,7 @@
       if (dsInput) dsInput.value = settings.digitSet;
     });
     footer.appendChild(resetBtn);
-    panel.appendChild(footer);
+    content.appendChild(footer);
 
     var triggerBtn = document.createElement('button');
     triggerBtn.type = 'button';
@@ -3519,7 +3539,7 @@
     triggerBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       if (panel.style.display === 'none') {
-        panel.style.display = 'block';
+        panel.style.display = 'flex';
         var toast = document.getElementById('sp-remove-invalid-toast');
         if (toast) toast.style.bottom = getToastBottom();
       } else {
@@ -3528,8 +3548,12 @@
     });
 
     document.addEventListener('click', function (e) {
+      // Don't close when the click is inside our own popover children either
+      // (notably the digit-set prompt opened from the Re-scan button — its
+      // Confirm/Cancel are siblings of the panel, not inside it).
       if (panel.style.display !== 'none' &&
-          !panel.contains(e.target) && e.target !== triggerBtn) {
+          !panel.contains(e.target) && e.target !== triggerBtn &&
+          !(e.target.closest && e.target.closest('#sp-digit-prompt'))) {
         closePanel();
       }
     });
