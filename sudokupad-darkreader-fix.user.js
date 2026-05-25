@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.114.0
+// @version      2.115.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.114.0';
+  var SCRIPT_VERSION = '2.115.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -40,11 +40,11 @@
 
   var DEFAULTS = {
     regionBorderEnabled:           false,
-    regionBorderColor:             '#9600ff',   // rgb(150, 0, 255) — vivid purple
+    regionBorderColor:             '#000000',   // black — center border default
     regionBorderOpacity:           1.0,
     regionBorderWidth:             '3',
-    regionBorderCenterEnabled:     false,   // center border: single-color CSS stroke on region outlines
-    regionBorderMultiEnabled:      false,   // multi-color border: colored rect borders per region
+    regionBorderCenterEnabled:     true,    // center border: single-color CSS stroke on region outlines
+    regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
 
     givenEnabled:                  false,
     givenColor:                    '#e8e6e3',
