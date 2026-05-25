@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.109.0
+// @version      2.114.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.109.0';
+  var SCRIPT_VERSION = '2.114.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -98,6 +98,8 @@
     selectionColor:               '#3399ff',
     selectionOpacity:             0.7,
     selectionWidth:               '8',
+    selectionBorderMode:          'inside',  // 'inside' | 'outside'
+    selectionBorderOffset:        '0',       // displayed value; baseline shift is mode-specific (see computeSelectionShift)
 
     showToasts:                   true,   // show action result notifications (toasts)
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
@@ -325,6 +327,308 @@
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
     if (cp) { reorderAllCornerCells(cp); fixAllCornerTexts(cp); }
+    applyAllSelectionBorderOffsets();
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // Selection-border path offsetting (inside/outside growth modes)
+  //
+  // SVG has no built-in stroke-alignment property. To make the selection border
+  // grow only inward or only outward, we modify the path's `d` attribute to
+  // shift each edge perpendicular to itself, then let the centered stroke
+  // render normally on the shifted path.
+  //
+  // The path created by SudokuPad (path.cage-selectioncage) is always
+  // rectilinear (axis-aligned line segments only), which lets us use a simple
+  // per-edge offset algorithm: each vertex shifts by the sum of its adjacent
+  // edges' outward normals × the offset amount. Works for any rectilinear
+  // closed polygon including L-shapes, U-shapes, and selections with holes.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  function fmtN(n) { return Math.round(n * 100) / 100; }
+
+  // Parse a path d attribute (only M, L, Z commands supported — that's all
+  // SudokuPad's selectioncage uses) into a list of subpaths, each an array of
+  // {x, y} vertices. Lowercase (relative) commands are converted to absolute.
+  function parsePathSubpaths(d) {
+    var subpaths = [];
+    var current = null;
+    var lastX = 0, lastY = 0;
+    var tokens = d.match(/[MmLlZz]|-?\d*\.?\d+/g) || [];
+    var i = 0;
+    while (i < tokens.length) {
+      var t = tokens[i++];
+      if (t === 'M' || t === 'm') {
+        if (current && current.length > 0) subpaths.push(current);
+        current = [];
+        var x = parseFloat(tokens[i++]);
+        var y = parseFloat(tokens[i++]);
+        if (t === 'm') { x += lastX; y += lastY; }
+        current.push({ x: x, y: y });
+        lastX = x; lastY = y;
+        // Subsequent coord pairs after M are implicitly L
+        while (i < tokens.length && /^-?\d/.test(tokens[i])) {
+          var nx = parseFloat(tokens[i++]);
+          var ny = parseFloat(tokens[i++]);
+          if (t === 'm') { nx += lastX; ny += lastY; }
+          current.push({ x: nx, y: ny });
+          lastX = nx; lastY = ny;
+        }
+      } else if (t === 'L' || t === 'l') {
+        while (i < tokens.length && /^-?\d/.test(tokens[i])) {
+          var nx = parseFloat(tokens[i++]);
+          var ny = parseFloat(tokens[i++]);
+          if (t === 'l') { nx += lastX; ny += lastY; }
+          if (current) current.push({ x: nx, y: ny });
+          lastX = nx; lastY = ny;
+        }
+      } else if (t === 'Z' || t === 'z') {
+        if (current && current.length > 0) subpaths.push(current);
+        current = null;
+      }
+    }
+    if (current && current.length > 0) subpaths.push(current);
+    return subpaths;
+  }
+
+  function vertsToSubpath(verts) {
+    if (verts.length === 0) return '';
+    var parts = ['M' + fmtN(verts[0].x) + ' ' + fmtN(verts[0].y)];
+    for (var i = 1; i < verts.length; i++) {
+      parts.push('L' + fmtN(verts[i].x) + ' ' + fmtN(verts[i].y));
+    }
+    parts.push('Z');
+    return parts.join(' ');
+  }
+
+  // Remove vertices that sit on a straight line between their neighbors. These
+  // are valid path vertices but they aren't corners — the polygon would be
+  // identical without them. SudokuPad's selection paths often include such
+  // collinear vertices (e.g., a long bottom edge broken into two segments at
+  // a cell boundary). For our offset algorithm, leaving them in causes a
+  // double-shift at that vertex (both adjacent edges have the same outward
+  // normal, so their sum is 2× the proper offset), producing a kink/spike.
+  function removeCollinear(verts) {
+    var n = verts.length;
+    if (n < 3) return verts.slice();
+    var result = [];
+    for (var i = 0; i < n; i++) {
+      var prev = verts[(i + n - 1) % n];
+      var curr = verts[i];
+      var next = verts[(i + 1) % n];
+      var dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
+      var dx2 = next.x - curr.x, dy2 = next.y - curr.y;
+      // Cross product == 0 → vectors are parallel. For our axis-aligned paths,
+      // this means same direction (since opposite-direction would mean a
+      // degenerate edge of zero length on one side).
+      if (dx1 * dy2 - dy1 * dx2 === 0) continue;
+      result.push(curr);
+    }
+    return result;
+  }
+
+  // Offset a closed rectilinear polygon by `amount` units (positive = outward,
+  // negative = inward). The polygon's orientation is auto-detected via signed
+  // area; correct outward normals are computed accordingly.
+  function offsetPolygon(verts, amount) {
+    verts = removeCollinear(verts);
+    var n = verts.length;
+    if (n < 3 || amount === 0) return verts.slice();
+
+    // Trapezoidal signed sum: sum_i (x_{i+1} - x_i)(y_{i+1} + y_i).
+    // This equals -2 * standard shoelace. In SVG (y-down), the standard
+    // shoelace is positive for visually-clockwise polygons, so this trap sum
+    // is NEGATIVE for visually-clockwise polygons in SVG.
+    var signedArea = 0;
+    for (var i = 0; i < n; i++) {
+      var p1 = verts[i], p2 = verts[(i + 1) % n];
+      signedArea += (p2.x - p1.x) * (p2.y + p1.y);
+    }
+    var isClockwise = signedArea < 0;
+
+    // For each edge i (vertex i to vertex i+1), the outward normal.
+    // CW polygon in SVG: outward = (dy, -dx) sign-normalized.
+    // CCW polygon: opposite sign.
+    var edges = [];
+    for (var i = 0; i < n; i++) {
+      var p1 = verts[i], p2 = verts[(i + 1) % n];
+      var dx = p2.x - p1.x, dy = p2.y - p1.y;
+      var dirX = dx === 0 ? 0 : (dx > 0 ? 1 : -1);
+      var dirY = dy === 0 ? 0 : (dy > 0 ? 1 : -1);
+      var outX, outY;
+      if (isClockwise) { outX = dirY;  outY = -dirX; }
+      else             { outX = -dirY; outY = dirX;  }
+      edges.push({ outX: outX, outY: outY });
+    }
+
+    // Each new vertex = original + (sum of adjacent outward normals) × amount.
+    // For rectilinear polygons, the two adjacent normals are perpendicular,
+    // so one contributes to x and the other to y; their sum is the corner shift.
+    var newVerts = [];
+    for (var i = 0; i < n; i++) {
+      var prevEdge = edges[(i + n - 1) % n];
+      var currEdge = edges[i];
+      var sx = (prevEdge.outX + currEdge.outX) * amount;
+      var sy = (prevEdge.outY + currEdge.outY) * amount;
+      newVerts.push({ x: verts[i].x + sx, y: verts[i].y + sy });
+    }
+    return newVerts;
+  }
+
+  function offsetRectilinearPath(d, amount) {
+    var subpaths = parsePathSubpaths(d);
+    if (subpaths.length === 0) return d;
+    if (subpaths.length === 1) {
+      return vertsToSubpath(offsetPolygon(subpaths[0], amount));
+    }
+
+    // Multiple subpaths: detect inner subpaths (holes) so we can offset them
+    // in the OPPOSITE direction. For a donut-shaped selection, SudokuPad's
+    // outer + inner boundaries would otherwise both shift the same way,
+    // putting the inner border on the wrong side of the gridline (in the
+    // body for Outside mode, in the hole for Inside mode).
+    //
+    // Detection: a subpath is a hole if its bbox is strictly contained by
+    // some other subpath's bbox. (Works for axis-aligned rectilinear shapes;
+    // doesn't try to handle nested holes-within-holes.)
+    var bboxes = subpaths.map(function (verts) {
+      var xs = [], ys = [];
+      for (var i = 0; i < verts.length; i++) { xs.push(verts[i].x); ys.push(verts[i].y); }
+      return {
+        minX: Math.min.apply(null, xs), maxX: Math.max.apply(null, xs),
+        minY: Math.min.apply(null, ys), maxY: Math.max.apply(null, ys),
+      };
+    });
+    function bboxContains(outer, inner) {
+      return outer.minX < inner.minX && outer.maxX > inner.maxX &&
+             outer.minY < inner.minY && outer.maxY > inner.maxY;
+    }
+
+    return subpaths.map(function (verts, i) {
+      var isHole = false;
+      for (var j = 0; j < bboxes.length; j++) {
+        if (i !== j && bboxContains(bboxes[j], bboxes[i])) { isHole = true; break; }
+      }
+      var eff = isHole ? -amount : amount;
+      return vertsToSubpath(offsetPolygon(verts, eff));
+    }).join(' ');
+  }
+
+  // Compute the path-centerline shift amount based on mode + width + offset.
+  //
+  // Both modes have a baseline shift baked in so the user-visible "0" is
+  // the visually pleasing default rather than the raw mathematical zero.
+  //
+  //   Inside mode (+5 baseline, direction unchanged):
+  //     amount = -(1 + (displayed - 5) + W/2) = -displayed + 4 - W/2
+  //     At displayed 0, W=8: amount = 0  (stroke centered on gridline)
+  //     Outer edge of stroke pinned at (-displayed + 4) regardless of W.
+  //     Positive displayed = stroke moves further INWARD (legacy direction).
+  //
+  //   Outside mode (+3 baseline, direction unchanged):
+  //     amount = +(1 + (displayed + 3) + W/2) = displayed + 4 + W/2
+  //     At displayed 0, W=8: amount = 8  (inner stroke edge 4px outside grid)
+  //     Inner edge of stroke pinned at (displayed + 4) regardless of W.
+  //     Positive displayed = stroke moves further OUTWARD.
+  function computeSelectionShift() {
+    var mode = settings.selectionBorderMode;
+    if (mode !== 'inside' && mode !== 'outside') return 0;
+    var width = parseFloat(settings.selectionWidth);
+    if (!isFinite(width)) width = 8;
+    var displayed = parseFloat(settings.selectionBorderOffset);
+    if (!isFinite(displayed)) displayed = 0;
+
+    if (mode === 'inside') {
+      return -displayed + 4 - width / 2;
+    } else {  // outside
+      return displayed + 4 + width / 2;
+    }
+  }
+
+  // Apply (or restore) the selection-border offset on a single path element.
+  //
+  // Two data attributes track state across SudokuPad re-issues + our settings:
+  //   data-spdr-orig-d — SudokuPad's pristine d for this selection. Preserved
+  //                      across mode/width/offset changes so we always re-derive
+  //                      the new offset from the true original, never from an
+  //                      already-offset version (which would cumulate).
+  //   data-spdr-last-d — the d we most recently set. The MutationObserver
+  //                      compares this to the current d to distinguish our own
+  //                      writes (skip) from SudokuPad's re-issues (re-derive).
+  function applySelectionBorderOffset(path) {
+    if (!path) return;
+    var amount = settings.selectionColorEnabled ? computeSelectionShift() : 0;
+
+    if (amount === 0) {
+      // Restore original if we previously modified it
+      var orig = path.getAttribute('data-spdr-orig-d');
+      if (orig) {
+        path.setAttribute('d', orig);
+        path.removeAttribute('data-spdr-orig-d');
+        path.removeAttribute('data-spdr-last-d');
+      }
+      return;
+    }
+
+    // Use stored origD if present (preserved across settings changes),
+    // otherwise capture the current d as the new original.
+    var origD = path.getAttribute('data-spdr-orig-d');
+    if (!origD) {
+      origD = path.getAttribute('d');
+      path.setAttribute('data-spdr-orig-d', origD);
+    }
+    var newD = offsetRectilinearPath(origD, amount);
+    if (newD !== path.getAttribute('d')) {
+      path.setAttribute('d', newD);
+    }
+    path.setAttribute('data-spdr-last-d', newD);
+  }
+
+  function applyAllSelectionBorderOffsets() {
+    document.querySelectorAll('#cell-highlights path.cage-selectioncage')
+      .forEach(applySelectionBorderOffset);
+  }
+
+  // Watches #cell-highlights for new cage-selectioncage paths and for
+  // attribute changes (d) on existing ones. Re-applies the offset when needed.
+  var selectionBorderObserver = null;
+  function startSelectionBorderObserver() {
+    if (selectionBorderObserver) return;
+    var host = document.getElementById('cell-highlights');
+    if (!host) {
+      // Element doesn't exist yet; try again shortly. SudokuPad creates it
+      // when the puzzle SVG is built.
+      setTimeout(startSelectionBorderObserver, 200);
+      return;
+    }
+    applyAllSelectionBorderOffsets();
+    selectionBorderObserver = new MutationObserver(function (muts) {
+      for (var i = 0; i < muts.length; i++) {
+        var m = muts[i];
+        if (m.type === 'childList') {
+          for (var j = 0; j < m.addedNodes.length; j++) {
+            var node = m.addedNodes[j];
+            if (node.nodeType === 1 && node.matches && node.matches('path.cage-selectioncage')) {
+              applySelectionBorderOffset(node);
+            }
+          }
+        } else if (m.type === 'attributes' && m.target.matches && m.target.matches('path.cage-selectioncage')) {
+          var p = m.target;
+          // If the current d matches what we last set, this mutation was
+          // triggered by our own setAttribute — skip to avoid loops and
+          // preserve the cached original.
+          if (p.getAttribute('data-spdr-last-d') === p.getAttribute('d')) continue;
+          // Otherwise SudokuPad changed the path (different selection shape).
+          // Discard the cached original and re-derive from the new d.
+          p.removeAttribute('data-spdr-orig-d');
+          applySelectionBorderOffset(p);
+        }
+      }
+    });
+    selectionBorderObserver.observe(host, {
+      childList: true, subtree: true,
+      attributes: true, attributeFilter: ['d'],
+    });
   }
 
   // ── Inline colour application for pencilmarks (DR-immune) ─────────────────
@@ -650,6 +954,7 @@
     fixAllKropkiDots(svg);
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
+    startSelectionBorderObserver();
     new MutationObserver(function (mutations) {
       var needsFullScan = false;
       for (var i = 0; i < mutations.length; i++) {
@@ -1633,6 +1938,83 @@
       }
     });
     controlSyncers[widthKey] = function () { input.value = settings[widthKey]; };
+
+    row.appendChild(lbl); row.appendChild(input); row.appendChild(unit);
+    return row;
+  }
+
+  // Radio button row: label + N labelled radio inputs sharing a name.
+  // options: [{value: 'center', label: 'Center'}, ...]
+  function makeRadioRow(labelText, settingKey, options) {
+    var row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '10px', marginTop: '4px', flexWrap: 'wrap' });
+
+    var lbl = document.createElement('span');
+    lbl.textContent = labelText + ':';
+    Object.assign(lbl.style, { color: '#a6adc8', fontSize: '11px', flexShrink: '0' });
+    row.appendChild(lbl);
+
+    var radios = [];
+    options.forEach(function (opt) {
+      var l = document.createElement('label');
+      Object.assign(l.style, { display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', color: '#cdd6f4', fontSize: '11px' });
+      var r = document.createElement('input');
+      r.type = 'radio';
+      r.name = 'spdr-radio-' + settingKey;
+      r.value = opt.value;
+      r.checked = settings[settingKey] === opt.value;
+      Object.assign(r.style, { cursor: 'pointer', accentColor: '#89b4fa', margin: '0' });
+      r.addEventListener('change', function () {
+        if (r.checked) {
+          settings[settingKey] = opt.value;
+          saveSettings(settings); applySettings();
+        }
+      });
+      var t = document.createElement('span');
+      t.textContent = opt.label;
+      l.appendChild(r); l.appendChild(t);
+      row.appendChild(l);
+      radios.push(r);
+    });
+
+    controlSyncers[settingKey] = function () {
+      radios.forEach(function (r) { r.checked = r.value === settings[settingKey]; });
+    };
+    return row;
+  }
+
+  // Offset row: numeric input that allows negative + decimal values.
+  function makeOffsetRow(offsetKey) {
+    var row = document.createElement('div');
+    Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' });
+
+    var lbl = document.createElement('span');
+    lbl.textContent = 'Offset:';
+    Object.assign(lbl.style, { color: '#a6adc8', fontSize: '11px', flexShrink: '0' });
+
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.value = settings[offsetKey];
+    input.size = 6;
+    Object.assign(input.style, {
+      width: '60px', padding: '2px 6px',
+      border: '1px solid #45475a', borderRadius: '4px',
+      background: '#313244', color: '#cdd6f4', fontSize: '12px',
+    });
+
+    var unit = document.createElement('span');
+    unit.textContent = 'px';
+    Object.assign(unit.style, { color: '#a6adc8', fontSize: '11px' });
+
+    input.addEventListener('input', function () {
+      var v = input.value.trim();
+      // Allow empty, negative, decimal, lone "-" (mid-typing)
+      if (v === '' || v === '-' || /^-?\d+(\.\d+)?$/.test(v) || /^-?\.\d+$/.test(v)) {
+        settings[offsetKey] = v;
+        saveSettings(settings); applySettings();
+      }
+    });
+    controlSyncers[offsetKey] = function () { input.value = settings[offsetKey]; };
 
     row.appendChild(lbl); row.appendChild(input); row.appendChild(unit);
     return row;
@@ -3302,12 +3684,25 @@
     content.appendChild(buildSection({
       enabledKey: 'selectionColorEnabled',
       label: 'Cell selection border',
-      desc: 'Override the color, opacity, and width of the selection-perimeter border.',
+      desc: 'Override the color, opacity, width, and growth direction of the selection-perimeter border.',
       hasColor: false,
-      resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth'],
+      resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth',
+                  'selectionBorderMode', 'selectionBorderOffset'],
       subBuilder: function (wrap) {
+        // Migrate any leftover 'center' value from a previous version of this
+        // script to 'inside' (the new default), so the radio row has a
+        // matching selected option to display.
+        if (settings.selectionBorderMode !== 'inside' && settings.selectionBorderMode !== 'outside') {
+          settings.selectionBorderMode = 'inside';
+          saveSettings(settings);
+        }
         wrap.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
         wrap.appendChild(makeWidthRow('selectionWidth'));
+        wrap.appendChild(makeRadioRow('Grow', 'selectionBorderMode', [
+          { value: 'inside',  label: 'Inside'  },
+          { value: 'outside', label: 'Outside' },
+        ]));
+        wrap.appendChild(makeOffsetRow('selectionBorderOffset'));
       },
     }));
 
@@ -3799,6 +4194,10 @@
   function buildAllUI() {
     buildVersionLabel();
     buildSettingsUI();
+    // Selection-border offset observer is feature-independent of DarkReader
+    // (works the same in light themes), so start it here rather than gating
+    // on isDarkReader() like the SVG-fix observers do.
+    startSelectionBorderObserver();
     if (!buildActionButtons()) {
       var attempts = 0;
       var timer = setInterval(function () {
