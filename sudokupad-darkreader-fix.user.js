@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.115.0
+// @version      2.116.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -787,16 +787,31 @@
   //   feature-kropki  — explicit Kropki feature (e.g. Galopkis-style puzzles)
   //   textbg (circle) — reused label-bg rect, but rx ≈ width/2 making it circular
   //                     (e.g. My Original Reality Show Entertainment-style)
-  // isKropkiRect identifies both by shape rather than by class name alone.
+  //   feature-kropki + textbg — both classes; some non-Kropki puzzles also use this
+  //
+  // isKropkiRect identifies genuine Kropki dots by class + shape + sibling check.
+  // Real Kropki dots are bare circles: no label text next to them (or an empty one).
+  // Labeled constraint circles (digits, +, ×, X …) always have a non-empty text
+  // sibling immediately following the rect — we reject those as false positives.
 
   function isKropkiRect(rect) {
-    if (rect.classList.contains('feature-kropki')) return true;
-    if (rect.classList.contains('textbg')) {
+    var hasFk = rect.classList.contains('feature-kropki');
+    var hasTb = rect.classList.contains('textbg');
+    if (!hasFk && !hasTb) return false;
+    // textbg-only: must be circular (rx ≈ w/2)
+    if (!hasFk) {
       var rx = parseFloat(rect.getAttribute('rx') || 0);
       var w  = parseFloat(rect.getAttribute('width') || 0);
-      return rx > 0 && Math.abs(rx - w / 2) < 1;
+      if (!(rx > 0 && Math.abs(rx - w / 2) < 1)) return false;
     }
-    return false;
+    // If the next non-spdr sibling is a text with non-empty content, this is a
+    // labeled constraint circle (digit, operator, etc.), not a bare Kropki dot.
+    var next = rect.nextElementSibling;
+    while (next && next.getAttribute && next.getAttribute('data-spdr-kropki-label')) {
+      next = next.nextElementSibling;
+    }
+    if (next && next.tagName === 'text' && next.textContent.trim() !== '') return false;
+    return true;
   }
 
   function fixKropkiDot(rect) {
@@ -854,11 +869,15 @@
   }
 
   // Returns the grid cell size (px) by parsing path.cell-grid, or 0 if not available.
+  // Note: our drawRegionSplitBorders clears the d attribute of path.cell-grid and
+  // saves the original in dataset.spdrOrigD. We fall back to that when d is empty.
   function getGridCellSize() {
     var cgPath = document.querySelector('#cell-grids path.cell-grid');
     if (!cgPath) return 0;
     function gcd(a, b) { a = Math.round(a); b = Math.round(b); return b === 0 ? a : gcd(b, a % b); }
-    var nums = (cgPath.getAttribute('d') || '').match(/\d+(?:\.\d+)?/g);
+    var d = cgPath.getAttribute('d') || '';
+    if (!d) d = cgPath.dataset.spdrOrigD || '';
+    var nums = d.match(/\d+(?:\.\d+)?/g);
     if (!nums) return 0;
     return nums.map(Number).filter(function (n) { return n > 0.5; }).reduce(gcd, 0) || 0;
   }
