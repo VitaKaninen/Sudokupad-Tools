@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.117.0
+// @version      2.118.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -760,8 +760,9 @@
     svg.querySelectorAll(CAGE_FILL_SEL).forEach(fixCagePath);
   }
 
-  // Given digits & overlay text — apply colour via inline fill so DR doesn't
-  // re-convert it (same approach as center/corner pencilmarks).
+  // Given digits — apply colour via inline fill so DR doesn't re-convert it.
+  // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
+  // they have no cell-given class and DarkReader handles their colour correctly.
   function fixGivenText(t) {
     if (settings.givenEnabled) {
       var color = hexToRgba(settings.givenColor, settings.givenOpacity);
@@ -775,7 +776,7 @@
     }
   }
   function fixAllGivens(svg) {
-    svg.querySelectorAll('#cell-givens text, text.cell-given, #overlay text:not([data-spdr-kropki-label]):not([data-spdr-kropki-text])').forEach(fixGivenText);
+    svg.querySelectorAll('#cell-givens text, text.cell-given').forEach(fixGivenText);
   }
 
   // ── Kropki dot color fix ──────────────────────────────────────────────────────
@@ -1025,13 +1026,13 @@
             } else if (el.tagName === 'text') {
               if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
-              else if (el.closest('#cell-givens') || el.closest('#overlay') || el.classList.contains('cell-given')) { fixGivenText(el); }
+              else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-color') {
             if (el.tagName === 'text') {
               if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
-              else if (el.closest('#cell-givens') || el.closest('#overlay') || el.classList.contains('cell-given')) { fixGivenText(el); }
+              else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
             }
           }
         } else if (m.type === 'childList' && m.addedNodes.length > 0) {
@@ -3594,8 +3595,8 @@
 
     content.appendChild(buildSection({
       enabledKey: 'givenEnabled',
-      label: 'Given digit & overlay text',
-      desc: 'Pre-filled clue digits and overlay labels',
+      label: 'Given digits',
+      desc: 'Pre-filled clue digits (cell-given class). Overlay constraint labels are left to DarkReader.',
       hasColor: true,
       colorKey: 'givenColor',
       opacityKey: 'givenOpacity',
