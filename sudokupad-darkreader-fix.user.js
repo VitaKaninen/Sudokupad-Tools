@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.116.0
+// @version      2.117.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -775,26 +775,37 @@
     }
   }
   function fixAllGivens(svg) {
-    svg.querySelectorAll('#cell-givens text, text.cell-given, #overlay text:not([data-spdr-kropki-label])').forEach(fixGivenText);
+    svg.querySelectorAll('#cell-givens text, text.cell-given, #overlay text:not([data-spdr-kropki-label]):not([data-spdr-kropki-text])').forEach(fixGivenText);
   }
 
   // ── Kropki dot color fix ──────────────────────────────────────────────────────
   // DarkReader inverts Kropki dots: white-fill (consecutive) → black, black-fill
   // (2:1 ratio) → white. Restore correct colors via inline style so DR can't
-  // re-convert them. Optionally overlay a ":" label on each black dot.
+  // re-convert them. Optionally overlay a ":" / "~" label on each bare dot.
   //
-  // Puzzles render Kropki dots with different class names:
-  //   feature-kropki  — explicit Kropki feature (e.g. Galopkis-style puzzles)
-  //   textbg (circle) — reused label-bg rect, but rx ≈ width/2 making it circular
-  //                     (e.g. My Original Reality Show Entertainment-style)
-  //   feature-kropki + textbg — both classes; some non-Kropki puzzles also use this
+  // Two tiers:
+  //   isKropkiCircle — shape test: any feature-kropki or circular textbg rect.
+  //                    Used for color fixing (circle + adjacent text).
+  //   isKropkiRect   — isKropkiCircle AND no non-empty text sibling.
+  //                    Used for label injection only (bare dots get our labels).
   //
-  // isKropkiRect identifies genuine Kropki dots by class + shape + sibling check.
-  // Real Kropki dots are bare circles: no label text next to them (or an empty one).
-  // Labeled constraint circles (digits, +, ×, X …) always have a non-empty text
-  // sibling immediately following the rect — we reject those as false positives.
+  // Labeled Kropki-type circles (Difference/Ratio Sudoku etc.) pass isKropkiCircle
+  // but not isKropkiRect. Their circle fill and adjacent text color are DR-proofed,
+  // but we don't inject our own labels on top of the existing text.
+  // data-spdr-kropki-text marks such texts so the MutationObserver can re-fix them.
 
-  function isKropkiRect(rect) {
+  // Returns the non-spdr text immediately following a Kropki circle rect, if it has
+  // non-empty content (= the existing label for labeled Kropki-type circles).
+  function getKropkiAdjacentText(rect) {
+    var next = rect.nextElementSibling;
+    while (next && next.getAttribute && next.getAttribute('data-spdr-kropki-label')) {
+      next = next.nextElementSibling;
+    }
+    return (next && next.tagName === 'text' && next.textContent.trim() !== '') ? next : null;
+  }
+
+  // Any Kropki-shaped circle — used for color fixing.
+  function isKropkiCircle(rect) {
     var hasFk = rect.classList.contains('feature-kropki');
     var hasTb = rect.classList.contains('textbg');
     if (!hasFk && !hasTb) return false;
@@ -804,14 +815,12 @@
       var w  = parseFloat(rect.getAttribute('width') || 0);
       if (!(rx > 0 && Math.abs(rx - w / 2) < 1)) return false;
     }
-    // If the next non-spdr sibling is a text with non-empty content, this is a
-    // labeled constraint circle (digit, operator, etc.), not a bare Kropki dot.
-    var next = rect.nextElementSibling;
-    while (next && next.getAttribute && next.getAttribute('data-spdr-kropki-label')) {
-      next = next.nextElementSibling;
-    }
-    if (next && next.tagName === 'text' && next.textContent.trim() !== '') return false;
     return true;
+  }
+
+  // Bare Kropki dot (no existing label text) — used for label injection.
+  function isKropkiRect(rect) {
+    return isKropkiCircle(rect) && !getKropkiAdjacentText(rect);
   }
 
   function fixKropkiDot(rect) {
@@ -819,6 +828,7 @@
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
     var isBlack = fill && fill.toUpperCase() === '#000000';
     if (!isWhite && !isBlack) return;
+    var adjText = getKropkiAdjacentText(rect);
     if (settings.kropkiFixEnabled) {
       if (isWhite) {
         rect.style.setProperty('fill', '#ffffff', 'important');
@@ -841,15 +851,28 @@
       }
       rect.removeAttribute('data-darkreader-inline-fill');
       rect.style.removeProperty('--darkreader-inline-fill');
+      // For labeled Kropki circles, also DR-proof the existing text color.
+      // White circle → black text; black circle → white text.
+      if (adjText) {
+        var textColor = isWhite ? '#000000' : '#ffffff';
+        adjText.setAttribute('data-spdr-kropki-text', textColor);
+        adjText.style.setProperty('fill', textColor, 'important');
+        adjText.removeAttribute('data-darkreader-inline-color');
+        adjText.style.removeProperty('--darkreader-inline-color');
+      }
     } else {
       rect.style.removeProperty('fill');
       rect.style.removeProperty('stroke');
       rect.style.removeProperty('stroke-width');
+      if (adjText) {
+        adjText.removeAttribute('data-spdr-kropki-text');
+        adjText.style.removeProperty('fill');
+      }
     }
   }
   function fixAllKropkiDots(svg) {
     svg.querySelectorAll('rect.feature-kropki, rect.textbg').forEach(function (rect) {
-      if (isKropkiRect(rect)) fixKropkiDot(rect);
+      if (isKropkiCircle(rect)) fixKropkiDot(rect);
     });
   }
 
@@ -861,6 +884,18 @@
     //   '1'        → legacy format (pre-v2.64.0) — treat as white
     var color = t.getAttribute('data-spdr-kropki-label') || '#ffffff';
     if (color === '1') color = '#ffffff';
+    t.style.setProperty('fill', color, 'important');
+    t.removeAttribute('data-darkreader-inline-color');
+    t.removeAttribute('data-darkreader-inline-fill');
+    t.style.removeProperty('--darkreader-inline-color');
+    t.style.removeProperty('--darkreader-inline-fill');
+  }
+  function fixKropkiText(t) {
+    // Re-apply the stored color for an existing label text inside a labeled
+    // Kropki-type circle (data-spdr-kropki-text holds '#000000' or '#ffffff').
+    // Called by the MutationObserver when DarkReader re-inverts this text.
+    var color = t.getAttribute('data-spdr-kropki-text');
+    if (!color) return;
     t.style.setProperty('fill', color, 'important');
     t.removeAttribute('data-darkreader-inline-color');
     t.removeAttribute('data-darkreader-inline-fill');
@@ -984,16 +1019,18 @@
             if (el.tagName === 'rect') {
               if (el.matches(LABEL_RECT_SEL)) fixLabelRect(el);
               if (el.closest('#underlay')) fixUnderlayRect(el);
-              if (isKropkiRect(el)) fixKropkiDot(el);
+              if (isKropkiCircle(el)) fixKropkiDot(el);
             } else if (el.tagName === 'path') {
               if (el.closest('#cages') && el.matches(CAGE_FILL_SEL)) fixCagePath(el);
             } else if (el.tagName === 'text') {
-              if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
+              if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
+              else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.closest('#overlay') || el.classList.contains('cell-given')) { fixGivenText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-color') {
             if (el.tagName === 'text') {
-              if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
+              if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
+              else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.closest('#overlay') || el.classList.contains('cell-given')) { fixGivenText(el); }
             }
           }
