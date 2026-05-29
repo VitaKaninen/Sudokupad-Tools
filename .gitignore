@@ -2,3 +2,6 @@ test-images
 
 # Per-machine Claude Code settings (not shared)
 .claude/settings.local.json
+
+# Session scratch (compaction-safe working notes; finalized into docs then cleared)
+docs/WIP.md

@@ -10,7 +10,7 @@ TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on Sudo
 
 When you add, rename, or remove a function listed in the Code map — or add a new feature — update the Code map in the same change; keep it coarse (entry points per feature, not every helper).
 
-When a session confirms a new fix or a dead end, add a line to `LESSONS_LEARNED.md`. Every 5–10 sessions (or when it feels stale) rewrite `PROJECT_SUMMARY.md` fresh rather than appending. Git history is the changelog — don't keep narrative history in these docs. (`docs/archive/` holds the pre-2026-05-29 handoff file for human reference only; don't load it.)
+**Record discoveries as you go (compaction-safe).** Conversation context is lost when it compacts; files are not. The moment you confirm a new fix, dead end, or non-obvious fact, append it to `docs/WIP.md` — do not hold it only in the conversation. Mark uncertain items `(tentative)`. **At session start, if `docs/WIP.md` has notes, fold the confirmed ones into `LESSONS_LEARNED.md` / `PROJECT_SUMMARY.md` and clear WIP**; finalize the same way at session end. Record genuine discoveries, not routine progress. Every 5–10 sessions (or when it feels stale) rewrite `PROJECT_SUMMARY.md` fresh rather than appending. Git history is the changelog — don't keep narrative history in these docs. (`docs/archive/` holds the pre-2026-05-29 handoff file for human reference only; don't load it.)
 
 ## Standing instructions
 

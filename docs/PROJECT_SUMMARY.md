@@ -82,19 +82,5 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
 - **Version check:** `window.spdrVersion === 'X.Y.Z'`.
 - **JS inspection:** `Framework.getApp()` → `app.puzzle.cells`, `app.puzzle.selectedCells`, `app.select(cells)`, `app.deselect()`; read CSS via `getComputedStyle(el).prop`.
 
-### Confirmed test puzzles
-| URL | What it exercises |
-|---|---|
-| sudokupad.app/4r2BpLTLNG | Wheel Sudoku — multi-colour borders, concave frame regions, wheel arcs, red/blue puzzle fills |
-| sudokupad.app/c7jl019y8w | Irregular — selection border + hole/donut shapes |
-| sudokupad.app/zpfwvozsu2 | Killer — cage-label rects |
-| sudokupad.app/8za1783934 | Little killer — textbg rects |
-| sudokupad.app/u3wks9egf5 | 6×6 — general MCP test tab |
-| sudokupad.app/jhrb0vsbnk | Arrow constraints — white-only circles (Kropki false-positive test) |
-| sudokupad.app/msdrieflp3 | Labelled Difference/Ratio — black + white labelled Kropki |
-
-### User's typical config (for reproducing issues)
-The user runs close to the script defaults, with these sections enabled: region borders + centre border + multi-colour borders, object shading / underlay, and the cell selection border (Inside mode). `regionColorFillEnabled` is **off** — cell colours come from the puzzle definition, not full-cell fills. For exact numeric values read the `DEFAULTS` object near the top of the script; that's the single source of truth, so this doc deliberately doesn't repeat default values (they'd drift).
-
 ## snippets/
 Experimental code preserved for possible reuse. Currently `rounding-experiment.md` — the dropped corner-rounding feature plus its SVG `stroke-linejoin` lessons.
