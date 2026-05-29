@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.119.0
+// @version      2.120.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.119.0';
+  var SCRIPT_VERSION = '2.120.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -51,13 +51,13 @@
     givenOpacity:                  1.0,
 
     labelBgEnabled:                true,
-    labelBgColor:                  '#000000',   // black so default white label text is readable
+    labelBgColor:                  '#181A1B',   // DarkReader neutral background; white label text stays readable
     labelBgOpacity:                1.0,
 
     underlayEnabled:               true,
-    underlayLightness:             0.3,   // 0..1; fill: 0 = black, 0.5 = pure hue at max saturation, 1 = white
+    underlayLightness:             0.5,   // 0..1; fill: 0 = black, 0.5 = pure hue at max saturation, 1 = white
     underlayLightnessEnabled:      true,
-    underlayOpacity:               0.3,   // 0..1; fill: absolute alpha — 0 = transparent, 1 = fully opaque
+    underlayOpacity:               0.5,   // 0..1; fill: absolute alpha — 0 = transparent, 1 = fully opaque
     underlayOpacityEnabled:        true,
     underlayStrokeLightness:       0.5,   // 0..1; stroke (shape outline): same axis as fill lightness
     underlayStrokeLightnessEnabled:true,

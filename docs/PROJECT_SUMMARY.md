@@ -9,7 +9,7 @@ A single-file TamperMonkey userscript that fixes DarkReader / dark-theme visual 
 - **Version:** 2.119.0
 - **Repo:** https://github.com/VitaKaninen/Sudokupad-darkreader-fix.git (branch `main`)
 - **Matched URLs:** `sudokupad.app/*`, `beta.sudokupad.app/*`, `app.crackingthecryptic.com/*`, `crackingthecryptic.com/*`
-- **Tested on:** Chrome + TamperMonkey + DarkReader (primary); LibreWolf occasionally.
+- **Tested on:** Chrome + TamperMonkey, LibreWolf + ViolentMonkey, and Brave + ViolentMonkey (all with the DarkReader extension).
 
 ## What it fixes / does
 
@@ -87,8 +87,8 @@ One IIFE. Major regions, in order:
 | sudokupad.app/jhrb0vsbnk | Arrow constraints — white-only circles (Kropki false-positive test) |
 | sudokupad.app/msdrieflp3 | Labelled Difference/Ratio — black + white labelled Kropki |
 
-### User's typical active settings
-Region borders ON · Centre borders ON (black, 1px, 100%) · Multi-colour borders ON (20px) · Cell shading + underlay ON (brightness 30%, opacity 30%) · `regionColorFillEnabled` **FALSE** (colours come from the puzzle definition, not full-cell fills) · Cell selection border ON (Inside mode, offset 0).
+### User's typical config (for reproducing issues)
+The user runs close to the script defaults, with these sections enabled: region borders + centre border + multi-colour borders, object shading / underlay, and the cell selection border (Inside mode). `regionColorFillEnabled` is **off** — cell colours come from the puzzle definition, not full-cell fills. For exact numeric values read the `DEFAULTS` object near the top of the script; that's the single source of truth, so this doc deliberately doesn't repeat default values (they'd drift).
 
 ## snippets/
 Experimental code preserved for possible reuse. Currently `rounding-experiment.md` — the dropped corner-rounding feature plus its SVG `stroke-linejoin` lessons.
