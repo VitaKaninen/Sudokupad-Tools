@@ -54,12 +54,18 @@ One IIFE. Major regions, in order:
 
 **Invariant:** our group at `firstChild` → puzzle features render on top of our strips; the cell-grid clone inside the group → strips cover that clone. A position observer re-inserts the group at `firstChild` if SudokuPad prepends nodes.
 
-### Key functions
-- `drawRegionSplitBorders(svg)` — main entry. Clears the old group, restores cell-grid `d`, computes feature needs, calls `inferRegionsFromSVG()`, builds the cell→region map, suppresses cage-box strokes, draws edge runs + concave corner fills, optional fills / centre borders, clones the cell-grid as `group.firstChild` and clears the original `d`, inserts the group at `firstChild`, sets up the position observer.
-- `inferRegionsFromSVG()` — derives `{regions, cellSize, rows, cols}` from the live SVG (cage-box paths as walls, BFS flood-fill, GCD of coords for cellSize). No Framework internals needed.
-- `computeRegion4Colors(regions)` — greedy ≤4-colour graph colouring of the adjacency graph.
-- `fixKropkiDot` / `isKropkiCircle` / `isKropkiRect` / `svgHasBlackKropkiCircle` — Kropki detection + colour fixing (disambiguation rules in LESSONS_LEARNED.md).
-- `applySelectionBorderOffset` / `offsetRectilinearPath` — selection-border path rewriting.
+### Code map
+One IIFE, 120+ functions — **don't read the whole file**. Grep the function name below and read only that region. Coarse on purpose (entry points per feature, not every helper); keep it that way so it stays low-maintenance.
+
+- **Settings & lifecycle:** `loadSettings` / `saveSettings` (localStorage `sp-darkreader-fix`), `buildCSS` (generates the injected stylesheet), `rebuildStyleTag`, `applySettings` (re-applies everything), `waitForDRAndSVG` (startup gate), `buildAllUI` (orchestrates UI on load).
+- **DarkReader fills** (per element type; the `!important` master key is `applyInlineFill`): `fixLabelRect`/`fixAllLabelRects` (white label boxes), `fixCageBox`/`fixAllCageBoxes` + `isCageBoxPath` (cage-box strokes), `fixUnderlayRect`/`fixAllUnderlays` + `applyShadingFill`/`applyShapeStroke`/`shadingTransform` (object shading / underlay), `fixGivenText`/`fixAllGivens` (given digits), `fixCagePath`/`fixAllCagePaths`.
+- **Kropki:** `fixKropkiDot`/`fixAllKropkiDots`; detection `isKropkiCircle`/`isKropkiRect`/`svgHasBlackKropkiCircle`/`getKropkiAdjacentText` (rules in LESSONS_LEARNED); `rebuildKropkiLabels`.
+- **Region borders:** `drawRegionSplitBorders` (main entry; inner `drawHorizRuns`/`drawVertRuns`/`addRect`), `inferRegionsFromSVG` (region geometry), `computeRegion4Colors` (<=4-colour).
+- **Selection border:** `applySelectionBorderOffset`/`applyAllSelectionBorderOffsets`/`computeSelectionShift`; geometry `offsetRectilinearPath`/`offsetPolygon`/`parsePathSubpaths`/`removeCollinear`; `startSelectionBorderObserver`.
+- **Action buttons:** `fillSelectedCellsWithCandidates`/`removeInvalidPencilmarks`/`clearMarksInSelected` (the 3 actions), `buildActionButtons`/`buildActionButton`; helpers `getSelectedCells`/`getDigitButton`/`getCurrentMode`/`snapshotPencilmarks`/`diffSnapshots`/`countVisibleConflicts`.
+- **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre), `reorderCornerCell`/`startCornerReflowPatch` (corner), `fixCenterTspan`/`fixCornerText` (validity colours).
+- **Settings UI:** `buildSettingsUI`, `buildSection`, row builders `makeColorControl`/`makeColorRow`/`makeRangeRow`/`makeOpacityRow`/`makeWidthRow`/`makeRadioRow`/`makeOffsetRow`/`makeSubCheckbox`, `isInOurUI` (BLOCKED_EVENTS target test).
+- **Colour / geometry helpers:** `parseColor`/`rgbToHsl`/`hslToRgb`/`hexToRgba`, `getGridCellSize`/`detectGridSize`.
 
 ## Terminology
 - **Region / cage-box** — a bordered area; its boundaries are `#cell-grids path:not(.cell-grid)`.

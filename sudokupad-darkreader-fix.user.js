@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.120.0
+// @version      2.121.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -19,7 +19,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
   // Settings
   //
   // Defaults match the actual on-screen colours after DarkReader's conversion,
@@ -29,9 +29,9 @@
   // Default values were sampled from a live SudokuPad page with DarkReader on.
   // If your environment differs, just pick the colours you want once and they
   // persist via localStorage.
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.120.0';
+  var SCRIPT_VERSION = '2.121.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -200,9 +200,9 @@
     return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
   // CSS
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function buildCSS(s) {
     var css = '';
@@ -1778,9 +1778,9 @@
   }
   waitForCellPencilmarks();
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
   // Part 6: Settings UI
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
 
   var controlSyncers = {};
 
@@ -2242,7 +2242,7 @@
     return section;
   }
 
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
   // "Remove invalid pencilmarks" action
   //
   // Simulates user input to actually delete each conflict pencilmark from
@@ -2256,7 +2256,7 @@
   //
   // 10ms delays between steps are necessary — SudokuPad processes user input
   // asynchronously and a tighter sequence drops events.
-  // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+  // ═══════════════════════════════════════════════════════════════════════════
 
   function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
@@ -3095,10 +3095,10 @@
     var textColor = colorRefStyle ? colorRefStyle.color       : 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
-    var EXPANDED_W = 260;    // â† expanded button width in pixels — change to taste
-    var DELAY_MS   = 300;    // â† hover delay before expanding (ms)
-    var EXPAND_S   = '0.4s'; // â† expansion animation duration
-    var COLLAPSE_S = '0.15s'; // â† collapse animation duration
+    var EXPANDED_W = 260;    // ← expanded button width in pixels — change to taste
+    var DELAY_MS   = 300;    // ← hover delay before expanding (ms)
+    var EXPAND_S   = '0.4s'; // ← expansion animation duration
+    var COLLAPSE_S = '0.15s'; // ← collapse animation duration
 
     function applyColors(el, props) {
       Object.keys(props).forEach(function (p) { el.style.setProperty(p, props[p], 'important'); });
@@ -3173,9 +3173,9 @@
       textAlign:      'center',        // centers each line within the text block
       whiteSpace:     'pre',           // preserves \n in shortLabel
       boxSizing:      'border-box',
-      fontSize:       '15px',          // â† font size — change to taste
+      fontSize:       '15px',          // ← font size — change to taste
       fontFamily:     'Roboto, Arial, sans-serif',
-      fontWeight:     '800',           // â† weight — 700=bold, 800/900=heavier
+      fontWeight:     '800',           // ← weight — 700=bold, 800/900=heavier
       lineHeight:     '1.2',
       pointerEvents:  'none',
       zIndex:         '2',
