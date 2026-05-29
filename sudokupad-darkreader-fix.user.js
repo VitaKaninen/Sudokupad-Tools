@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.118.0
+// @version      2.119.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 
-  var SCRIPT_VERSION = '2.115.0';
+  var SCRIPT_VERSION = '2.119.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -824,11 +824,33 @@
     return isKropkiCircle(rect) && !getKropkiAdjacentText(rect);
   }
 
+  // True iff the SVG contains at least one black-filled Kropki-shaped circle.
+  // Used to disambiguate real white Kropki dots from non-Kropki labeled white
+  // circles (arrow constraints etc.). Black Kropki circles are unambiguous;
+  // if a puzzle has any, all its circles are Kropki-type. If the puzzle has
+  // only white circles, treat them as non-Kropki and leave DR alone.
+  function svgHasBlackKropkiCircle(svg) {
+    var rects = svg.querySelectorAll('rect.feature-kropki, rect.textbg');
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      if (!isKropkiCircle(r)) continue;
+      var f = r.getAttribute('fill');
+      if (f && f.toUpperCase() === '#000000') return true;
+    }
+    return false;
+  }
+
   function fixKropkiDot(rect) {
     var fill = rect.getAttribute('fill');
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
     var isBlack = fill && fill.toUpperCase() === '#000000';
     if (!isWhite && !isBlack) return;
+    // White circles are only Kropki if the puzzle also has black Kropki circles.
+    // Otherwise they're non-Kropki constraints (arrows etc.) — skip.
+    if (isWhite) {
+      var svg = rect.ownerSVGElement;
+      if (svg && !svgHasBlackKropkiCircle(svg)) return;
+    }
     var adjText = getKropkiAdjacentText(rect);
     if (settings.kropkiFixEnabled) {
       if (isWhite) {
