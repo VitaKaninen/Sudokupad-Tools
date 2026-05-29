@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.121.0
+// @version      2.122.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.121.0';
+  var SCRIPT_VERSION = '2.122.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -322,7 +322,7 @@
   function applySettings() {
     rebuildStyleTag();
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -760,6 +760,55 @@
     svg.querySelectorAll(CAGE_FILL_SEL).forEach(fixCagePath);
   }
 
+  // Thermo shafts. A thermometer is two separate elements: the bulb is a
+  // rounded rect in #underlay (shaded by Object shading as a FILL), and the
+  // shaft is a stroked <path> in #arrows that shares the bulb's source colour.
+  // The shaft isn't in #underlay, so without this DR leaves it near-white while
+  // the bulb is shaded dark — a visible mismatch. We shade the shaft STROKE
+  // with the same lightness/opacity used for the bulb fill so the two always
+  // match. Scope: only #arrows paths whose stroke colour equals a bulb fill
+  // colour — real Arrow-sudoku arrows / other line constraints are left to DR.
+  function getBulbFillColors(svg) {
+    var set = {};
+    svg.querySelectorAll('#underlay rect').forEach(function (r) {
+      var c = parseColor(r.getAttribute('fill') || '');
+      if (c && c.a !== 0) set[c.r + ',' + c.g + ',' + c.b] = true;
+    });
+    return set;
+  }
+  function isThermoShaft(el, bulbColors) {
+    if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
+    var s = el.getAttribute('stroke');
+    if (!s || s === 'none') return false;
+    var c = parseColor(s);
+    return !!(c && bulbColors[c.r + ',' + c.g + ',' + c.b]);
+  }
+  function applyThermoShaft(el) {
+    // Mirror the bulb-fill transform (Object shading lightness + opacity),
+    // applied to the shaft stroke.
+    var c = parseColor(el.getAttribute('stroke') || '');
+    if (!c || c.a === 0) return;
+    var doFL = settings.underlayLightnessEnabled;
+    var doFO = settings.underlayOpacityEnabled;
+    if (!settings.underlayEnabled || (!doFL && !doFO)) {
+      el.style.removeProperty('stroke');
+      el.style.removeProperty('stroke-opacity');
+      return;
+    }
+    var rgb = doFL ? shadingTransform(c, settings.underlayLightness) : [c.r, c.g, c.b];
+    var sa = doFO ? settings.underlayOpacity : c.a;
+    if (sa < 0) sa = 0; else if (sa > 1) sa = 1;
+    el.style.setProperty('stroke', 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', 'important');
+    el.style.setProperty('stroke-opacity', String(sa), 'important');
+    el.style.removeProperty('--darkreader-inline-stroke');
+  }
+  function fixAllThermoShafts(svg) {
+    var bulbColors = getBulbFillColors(svg);
+    svg.querySelectorAll('#arrows path[stroke]').forEach(function (el) {
+      if (isThermoShaft(el, bulbColors)) applyThermoShaft(el);
+    });
+  }
+
   // Given digits — apply colour via inline fill so DR doesn't re-convert it.
   // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
   // they have no cell-given class and DarkReader handles their colour correctly.
@@ -1027,6 +1076,7 @@
     fixAllLabelRects(svg);
     fixAllUnderlays(svg);
     fixAllCagePaths(svg);
+    fixAllThermoShafts(svg);
     fixAllGivens(svg);
     fixAllKropkiDots(svg);
     rebuildKropkiLabels(svg);
@@ -1056,6 +1106,9 @@
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
             }
+          } else if (m.attributeName === 'data-darkreader-inline-stroke') {
+            // Thermo shafts: DR re-converts the shaft stroke after our scan.
+            if (el.tagName === 'path' && el.closest('#arrows') && isThermoShaft(el, getBulbFillColors(svg))) applyThermoShaft(el);
           }
         } else if (m.type === 'childList' && m.addedNodes.length > 0) {
           // Ignore childList mutations caused by our own label insertions to avoid
@@ -1069,8 +1122,8 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
-    }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color'] });
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
+    }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
   }
 
   function waitForDRAndSVG() {

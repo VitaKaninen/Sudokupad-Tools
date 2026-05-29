@@ -22,6 +22,7 @@ A single-file TamperMonkey userscript that fixes DarkReader / dark-theme visual 
 6. Cage-box path strokes (opaque black at z=8)
 7. Kropki dot colour inversion
 8. Region border strips (multi-colour / centre / fill)
+9. Thermo shaft lines staying light while bulbs are shaded (shaft shaded to match bulb)
 
 **Added features:**
 - **Region borders** — multi-colour split borders per region (filled rects), optional centre border, optional full-cell fill. The big `drawRegionSplitBorders` subsystem.
@@ -58,7 +59,7 @@ One IIFE. Major regions, in order:
 One IIFE, 120+ functions — **don't read the whole file**. Grep the function name below and read only that region. Coarse on purpose (entry points per feature, not every helper); keep it that way so it stays low-maintenance.
 
 - **Settings & lifecycle:** `loadSettings` / `saveSettings` (localStorage `sp-darkreader-fix`), `buildCSS` (generates the injected stylesheet), `rebuildStyleTag`, `applySettings` (re-applies everything), `waitForDRAndSVG` (startup gate), `buildAllUI` (orchestrates UI on load).
-- **DarkReader fills** (per element type; the `!important` master key is `applyInlineFill`): `fixLabelRect`/`fixAllLabelRects` (white label boxes), `fixCageBox`/`fixAllCageBoxes` + `isCageBoxPath` (cage-box strokes), `fixUnderlayRect`/`fixAllUnderlays` + `applyShadingFill`/`applyShapeStroke`/`shadingTransform` (object shading / underlay), `fixGivenText`/`fixAllGivens` (given digits), `fixCagePath`/`fixAllCagePaths`.
+- **DarkReader fills** (per element type; the `!important` master key is `applyInlineFill`): `fixLabelRect`/`fixAllLabelRects` (white label boxes), `fixCageBox`/`fixAllCageBoxes` + `isCageBoxPath` (cage-box strokes), `fixUnderlayRect`/`fixAllUnderlays` + `applyShadingFill`/`applyShapeStroke`/`shadingTransform` (object shading / underlay), `fixGivenText`/`fixAllGivens` (given digits), `fixCagePath`/`fixAllCagePaths`. **Thermo shafts:** `fixAllThermoShafts` + `isThermoShaft`/`getBulbFillColors`/`applyThermoShaft` — shade the `#arrows` shaft stroke with the bulb's Object-shading lightness/opacity so shaft and bulb match (scoped to `#arrows` paths whose stroke equals a bulb fill colour).
 - **Kropki:** `fixKropkiDot`/`fixAllKropkiDots`; detection `isKropkiCircle`/`isKropkiRect`/`svgHasBlackKropkiCircle`/`getKropkiAdjacentText` (rules in LESSONS_LEARNED); `rebuildKropkiLabels`.
 - **Region borders:** `drawRegionSplitBorders` (main entry; inner `drawHorizRuns`/`drawVertRuns`/`addRect`), `inferRegionsFromSVG` (region geometry), `computeRegion4Colors` (<=4-colour).
 - **Selection border:** `applySelectionBorderOffset`/`applyAllSelectionBorderOffsets`/`computeSelectionShift`; geometry `offsetRectilinearPath`/`offsetPolygon`/`parsePathSubpaths`/`removeCollinear`; `startSelectionBorderObserver`.

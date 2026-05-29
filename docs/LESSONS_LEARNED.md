@@ -39,5 +39,11 @@ The trap: SudokuPad uses the same `rect.textbg` class for Kropki circles **and**
 
 - ✅ **Use the `app.select(cells)` API** (v2.102 refactor): select the N cells that need a digit, then dispatch ONE click on that digit button — O(distinct digits) instead of O(cells × digits) per-cell drags. Removed ~820 lines of dead drag helpers. Guard with `actionInProgress`, snapshot the DOM before/after each click, and auto-rollback via the Undo button on a critical mismatch.
 
+## Thermos (bulb + shaft)
+
+- A thermometer is **two separate elements in two different groups**: the **bulb** is a rounded `rect` in `#underlay` (so Object shading already catches it as a *fill*), and the **shaft** is a stroked `<path>` in `#arrows` (Object shading did *not* touch it pre-v2.122). They share the **same source colour** (e.g. `#CFCFCF`). Result before the fix: shaded-dark bulbs + DR-lightened near-white shafts — a visible mismatch.
+- ✅ **Match shaft to bulb** (v2.122): shade the shaft *stroke* with the **same** `underlayLightness`/`underlayOpacity` used for the bulb fill (`applyThermoShaft`). Scope by colour — only `#arrows` paths whose stroke equals a bulb fill colour (`getBulbFillColors`/`isThermoShaft`) — so real Arrow-sudoku arrows and other line constraints (also in `#arrows`) are left to DR.
+- DR converts the shaft via `data-darkreader-inline-stroke` (not `-fill`); the SVG observer watches that attribute too. Our inline `stroke … !important` overrides DR's stylesheet `!important` rule; no mutation loop observed.
+
 ---
 *Personal / non-session notes (removed-feature history, browser-environment workarounds) live in [personal-notes.md](personal-notes.md) — not loaded by default.*
