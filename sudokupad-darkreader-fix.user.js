@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.123.0
+// @version      2.124.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.123.0';
+  var SCRIPT_VERSION = '2.124.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -274,8 +274,13 @@
     }
 
     // Always-on: colour-swatch palette restoration (DR overrides --cell-color-N).
+    // The selector repeats the attribute ([…][data-darkreader-scheme]) to raise
+    // specificity to (0,2,1) — above DarkReader's own (0,1,1) --cell-color rule —
+    // so we win regardless of stylesheet order. (Belt-and-suspenders with the
+    // head guard that keeps our <style> last; the swatches were intermittently
+    // black on first load when DR's sheet landed after ours.)
     css += `
-    html[data-darkreader-scheme="dark"] {
+    html[data-darkreader-scheme="dark"][data-darkreader-scheme] {
       --cell-color-0: transparent !important;
       --cell-color-1: rgb(214, 214, 214) !important;
       --cell-color-2: rgb(124, 124, 124) !important;
@@ -321,6 +326,28 @@
     styleTag = newTag;
   }
   rebuildStyleTag();
+
+  // Keep our override stylesheet LAST in <head>. DarkReader injects its own
+  // <style> sheets during/after load; for rules of equal specificity the later
+  // sheet wins on cascade order, which is why the colour swatches were
+  // intermittently black on first load (DR's sheet sometimes landed after ours).
+  // Re-appending ours whenever <head> changes makes our restoration win
+  // deterministically. (Moving our own node fires the observer once more, but it
+  // is then already last → no-op, so there is no loop, and DR does not react to
+  // our non-DR node moving.)
+  var headStyleObserver = null;
+  function startStyleTagGuard() {
+    if (headStyleObserver) return;
+    var head = document.head || document.documentElement;
+    if (!head) return;
+    headStyleObserver = new MutationObserver(function () {
+      if (styleTag && styleTag.parentNode === head && head.lastElementChild !== styleTag) {
+        head.appendChild(styleTag);
+      }
+    });
+    headStyleObserver.observe(head, { childList: true });
+  }
+  startStyleTagGuard();
 
   function applySettings() {
     rebuildStyleTag();
@@ -754,20 +781,20 @@
   // Shaded "extra regions" (e.g. "grey regions must contain 1-9"). When the
   // Easy Shade shaded-region mode is on, each cage-extraregion path carries a
   // precomputed palette index in dataset.spdrExtraColorIdx (set by
-  // assignExtraRegionColors); we paint it that palette colour instead of the
-  // Object-shading grey. Re-asserted on DR rewrites via the #cages fill observer.
+  // assignExtraRegionColors). The COLOUR is drawn by a recoloured clone inside
+  // mainGroup (drawRegionSplitBorders), positioned BELOW the region borders.
+  // Here we just hide the original #cages path so its grey fill doesn't render
+  // on top of the borders. Re-asserted on DR rewrites via the #cages observer.
   function isExtraRegionColored(path) {
     return settings.shadedRegionColorEnabled
       && path.classList.contains('cage-extraregion')
       && path.dataset.spdrExtraColorIdx != null;
   }
   function applyExtraRegionFill(path) {
-    var idx = parseInt(path.dataset.spdrExtraColorIdx, 10) || 0;
-    var pal = [settings.regionColorPalette0 || '#e05252', settings.regionColorPalette1 || '#5294e0',
-               settings.regionColorPalette2 || '#52a84e', settings.regionColorPalette3 || '#e8a030'];
-    var op  = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
-    applyInlineFill(path, hexToRgba(pal[idx % 4], op)); // sets fill !important + strips DR markers
-    path.style.removeProperty('fill-opacity');          // alpha lives in the rgba() above
+    path.style.setProperty('fill', 'transparent', 'important');
+    path.style.removeProperty('fill-opacity');
+    path.removeAttribute('data-darkreader-inline-fill');
+    path.style.removeProperty('--darkreader-inline-fill');
   }
   function fixCagePath(path) {
     if (isExtraRegionColored(path)) {
@@ -1473,7 +1500,11 @@
     var needFills        = settings.regionColorFillEnabled;
     var needMultiBorders = settings.regionBorderEnabled && settings.regionBorderMultiEnabled;
     var needCenterBorder = settings.regionBorderEnabled && settings.regionBorderCenterEnabled;
-    var geo = (needFills || needMultiBorders || needCenterBorder)
+    // Shaded extra-regions are drawn (as clones) inside mainGroup too, so they
+    // can sit BELOW the region borders. They don't need region geometry, but we
+    // still create mainGroup for them.
+    var needShaded       = settings.shadedRegionColorEnabled && puzzleHasShadedRegions();
+    var geo = (needFills || needMultiBorders || needCenterBorder || needShaded)
       ? inferRegionsFromSVG() : null;
 
     // Build cell→region map (used by inR() when drawing border strips).
@@ -1500,7 +1531,7 @@
       });
     }
 
-    if (!needFills && !needMultiBorders && !needCenterBorder) return;
+    if (!needFills && !needMultiBorders && !needCenterBorder && !needShaded) return;
     if (!geo || geo.regions.length < 2) return;
 
     var regions = geo.regions;
@@ -1686,14 +1717,13 @@
         if (!fillColor) return;
         cells.forEach(function (rc) {
           var r = rc[0], c = rc[1];
-          // Extend fill rect by SW into the adjacent border-strip territory on each
-          // boundary side so there is no sub-pixel gap between the fill and the strip.
-          // The border strips drawn on top completely cover the extension.
-          var x0 = c * cs       - (!inR(ri, r, c - 1) ? SW : 0);
-          var y0 = r * cs       - (!inR(ri, r - 1, c) ? SW : 0);
-          var x1 = (c + 1) * cs + (!inR(ri, r, c + 1) ? SW : 0);
-          var y1 = (r + 1) * cs + (!inR(ri, r + 1, c) ? SW : 0);
-          addRect(ri, x0, y0, x1 - x0, y1 - y0, fillColor);
+          // Fill exactly the cell — no outward growth. (Earlier versions grew each
+          // boundary side by SW to tuck under the border strips, but with no
+          // neighbour at the puzzle's outer edge that overhang pokes past the
+          // border, and at interior boundaries the two regions' fills overlapped
+          // into a lighter double-painted seam. Exact cell rects avoid both; the
+          // strips still draw on top at the boundaries.)
+          addRect(ri, c * cs, r * cs, cs, cs, fillColor);
         });
       });
     }
@@ -1733,6 +1763,37 @@
       mainGroup.insertBefore(cgClone, mainGroup.firstChild);
       cgp.setAttribute('d', '');
     })();
+
+    // Shaded extra-regions: recoloured clones of each #cages path.cage-extraregion,
+    // inserted as the FIRST children of mainGroup so they render BELOW the region
+    // border strips (and the cell-grid clone). The originals are hidden by
+    // fixCagePath. Colour index comes from assignExtraRegionColors.
+    if (needShaded) {
+      // Recompute colour indices here so they are fresh regardless of which path
+      // triggered this draw (observers call drawRegionSplitBorders independently
+      // of applySettings, so we can't rely on a prior assignExtraRegionColors).
+      assignExtraRegionColors(svg);
+      var shadedGroup = document.createElementNS(NS, 'g');
+      shadedGroup.setAttribute('data-spdr-shaded', '1');
+      var shOp  = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+      var shPal = [
+        hexToRgba(settings.regionColorPalette0 || '#e05252', shOp),
+        hexToRgba(settings.regionColorPalette1 || '#5294e0', shOp),
+        hexToRgba(settings.regionColorPalette2 || '#52a84e', shOp),
+        hexToRgba(settings.regionColorPalette3 || '#e8a030', shOp),
+      ];
+      document.querySelectorAll('#cages path.cage-extraregion').forEach(function (p) {
+        if (p.dataset.spdrExtraColorIdx == null) return; // no colour assigned (e.g. geometry failed)
+        var idx = parseInt(p.dataset.spdrExtraColorIdx, 10) || 0;
+        var clone = document.createElementNS(NS, 'path');
+        clone.setAttribute('d', p.getAttribute('d') || '');
+        clone.setAttribute('pointer-events', 'none');
+        clone.style.setProperty('fill', shPal[idx % 4], 'important');
+        clone.style.setProperty('stroke', 'none', 'important');
+        shadedGroup.appendChild(clone);
+      });
+      mainGroup.insertBefore(shadedGroup, mainGroup.firstChild);
+    }
 
     // Insert mainGroup immediately after #cell-colors so our borders render above
     // puzzle-defined colored cell fills but below arrows, cages, overlay (Kropki
