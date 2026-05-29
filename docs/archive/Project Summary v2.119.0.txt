@@ -1,9 +1,63 @@
 
 # SudokuPad DarkReader Fix — Handoff Summary
-# Last updated: 2026-05-23  (version 2.62.0)
+# Last updated: 2026-05-29  (version 2.119.0)
+
+NOTE: The bulk of this file documents the v2.62.0 era. Everything from
+v2.63.0 onward is captured in the memory files (project_overview.md,
+script_architecture.md, selection_border.md, darkreader_mechanics.md,
+testing_setup.md). Only the most recent session block at the top of this
+file is current; the rest is preserved for historical context.
 
 ───────────────────────────────────────────────────────────────────────────────
-## RECENT SESSION CHANGES  (v2.61.3 → v2.62.0)
+## RECENT SESSION CHANGES  (v2.118.0 → v2.119.0)
+───────────────────────────────────────────────────────────────────────────────
+
+This session was a single targeted fix to Kropki dot detection. No other
+features were touched.
+
+### The bug
+
+On puzzle https://sudokupad.app/jhrb0vsbnk (arrow-constraint puzzle, no
+Kropki dots), our script was inverting the appearance of the white arrow
+circles. The circles are `rect.textbg` elements with `rx ≈ width/2`
+(circular), `fill="#FFFFFF"`, and a text sibling containing an arrow glyph
+(↖ U+2196 etc.). They passed `isKropkiCircle()` — which is a pure shape
+test — and `fixKropkiDot()` then forced the white fill back via inline
+`!important` style, overriding DarkReader's correct dark-mode inversion.
+
+### The fix (v2.119.0)
+
+Added a `svgHasBlackKropkiCircle(svg)` helper that scans for any black-
+filled circular `textbg` / `feature-kropki` rect. `fixKropkiDot` now early-
+returns on a white circle if no black Kropki circle exists in the same
+SVG. Black 2:1-ratio dots are unambiguous, so if a puzzle has any, all its
+circles are Kropki-type. If a puzzle has only white labeled circles, treat
+them as non-Kropki constraints (arrows, operators, etc.) and leave them to
+DarkReader.
+
+Coverage:
+- `msdrieflp3`  — labeled Difference/Ratio (black + white labeled) →
+                   has black → fix both. ✓
+- `jhrb0vsbnk`  — arrow constraints (white-only) → no black → don't fix. ✓
+- Standard Kropki (bare black + bare white) → has black → fix both. ✓
+- Pure-white-only Kropki (consecutive-only, theoretical) → no black →
+                   we'd skip. Not seen in practice; not a concern.
+
+### Resolves possible-future-work item 7 (textbg Kropki detection safety)
+
+The item flagged below ("textbg Kropki detection safety") is now closed
+for the white-circle case. The black-circle false-positive concern
+(rebuildKropkiLabels adding ":" overlays to a non-Kropki black circle)
+remains theoretically open but has not been observed in any puzzle.
+
+### Where to read more
+
+See `memory/script_architecture.md` → "Kropki dot detection
+(v2.116–v2.119 refinements)" for the full disambiguation rules, including
+the earlier v2.116/v2.117 work (sideways-rotation + adjacent-text gate).
+
+───────────────────────────────────────────────────────────────────────────────
+## EARLIER SESSION CHANGES  (v2.61.3 → v2.62.0)
 ───────────────────────────────────────────────────────────────────────────────
 
 This session reworked the multi-color split-border feature. No changes to the
