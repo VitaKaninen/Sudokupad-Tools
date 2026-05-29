@@ -21,6 +21,12 @@ DarkReader overrides SVG fills two ways:
 - ❌ **Never use `display:none` (or any style change) on `path.cell-grid`:** the `#cell-grids` MutationObserver watches `attributeFilter: ['style']`. A style change fires it → infinite loop. Changing `d` does **not** trigger it — that's exactly why we clear `d` instead.
 - ❌ **Dead end — `fixCellGrid`** (the v2.71–v2.80 clipping function): tried to clip cell-grid segments at region boundaries. Removed v2.83. The "white lines in black cells" it chased were actually the cage-box strokes (fixed v2.81) + sub-pixel anti-aliasing (fixed v2.82). v2.67 had neither `fixCellGrid` nor the white-lines problem — confirmed baseline.
 
+## Region / shaded-region geometry
+
+- ✅ **Cell membership of a `#cages` shading path → `SVGGeometryElement.isPointInFill` at each cell centre** (`pt.x = c*cs + cs/2`). `#svgrenderer`/`#cages`/the path carry no element transform, so cell-grid user units map straight into `isPointInFill`'s local coordinate space. This is how `assignExtraRegionColors` finds which cells each grey "extra region" covers (v2.123).
+- ⚠️ **Don't derive cell size from `cage-box` path coords.** SudokuPad draws each box outline with a *midpoint* vertex at the box centre — e.g. a 3×3 box of 64px cells emits `M0 0 L96 0 L192 0 …` (96 = box centre, not a cell boundary). GCD-of-coords on that gives 96 and makes a 9×9 look like 6×6. Use `getGridCellSize()` (GCD of the `path.cell-grid` coords, with `dataset.spdrOrigD` fallback since our z-order fix clears `d`) + `detectGridSize()` instead. `.cell` element count also confirms grid size (81 = 9×9).
+- ✅ **Greedy 4-colouring, highest-degree-first** gives a valid adjacency-aware colouring for the grey-region touch graph (planar). Same approach as `computeRegion4Colors`; a 5th-colour fallback (reuse least-clashing) guards the rare non-planar case.
+
 ## Border-strip drawing
 
 - ✅ **Filled rects, one per contiguous run** of cells along an edge (not one rect per cell, not `<line>`s). Horizontal strips are trimmed by SW at ends where a perpendicular vertical strip exists; vertical strips own the corner pixels; concave inner corners (3 of 4 surrounding cells in-region) get an SW×SW patch.

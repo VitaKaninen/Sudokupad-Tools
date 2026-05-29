@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.122.0
+// @version      2.123.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.122.0';
+  var SCRIPT_VERSION = '2.123.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -113,6 +113,9 @@
     regionColorOpacity:           1.0,        // opacity of border stripes
     regionColorFillEnabled:       false,      // fill entire cell backgrounds with region colors
     regionColorFillOpacity:       0.3,        // opacity of cell-fill backgrounds (independent of border opacity)
+
+    shadedRegionColorEnabled:     false,      // recolor puzzle "extra region" grey shadings (#cages path.cage-extraregion) with the region palette
+    shadedRegionColorOpacity:     0.5,        // opacity of the recolored shaded-region fills
 
     cellColorsOpacity:            0.5,        // 0..1; opacity of #cell-colors (puzzle-defined colored cells)
     cellColorsOpacityEnabled:     false,      // override #cell-colors opacity when true
@@ -322,7 +325,7 @@
   function applySettings() {
     rebuildStyleTag();
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -747,7 +750,31 @@
   }
 
   var CAGE_FILL_SEL = '#cages path[fill]:not([fill="none"])';
+
+  // Shaded "extra regions" (e.g. "grey regions must contain 1-9"). When the
+  // Easy Shade shaded-region mode is on, each cage-extraregion path carries a
+  // precomputed palette index in dataset.spdrExtraColorIdx (set by
+  // assignExtraRegionColors); we paint it that palette colour instead of the
+  // Object-shading grey. Re-asserted on DR rewrites via the #cages fill observer.
+  function isExtraRegionColored(path) {
+    return settings.shadedRegionColorEnabled
+      && path.classList.contains('cage-extraregion')
+      && path.dataset.spdrExtraColorIdx != null;
+  }
+  function applyExtraRegionFill(path) {
+    var idx = parseInt(path.dataset.spdrExtraColorIdx, 10) || 0;
+    var pal = [settings.regionColorPalette0 || '#e05252', settings.regionColorPalette1 || '#5294e0',
+               settings.regionColorPalette2 || '#52a84e', settings.regionColorPalette3 || '#e8a030'];
+    var op  = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+    applyInlineFill(path, hexToRgba(pal[idx % 4], op)); // sets fill !important + strips DR markers
+    path.style.removeProperty('fill-opacity');          // alpha lives in the rgba() above
+  }
   function fixCagePath(path) {
+    if (isExtraRegionColored(path)) {
+      applyExtraRegionFill(path);
+      applyShapeStroke(path);
+      return;
+    }
     if (settings.underlayEnabled) {
       applyShadingFill(path);
     } else {
@@ -758,6 +785,73 @@
   }
   function fixAllCagePaths(svg) {
     svg.querySelectorAll(CAGE_FILL_SEL).forEach(fixCagePath);
+  }
+
+  // Detect whether this puzzle has shaded "extra regions" we can recolor.
+  function puzzleHasShadedRegions() {
+    return !!document.querySelector('#cages path.cage-extraregion');
+  }
+
+  // Assign each cage-extraregion path a palette index (0-3) such that any two
+  // grey regions that touch orthogonally get different colours. Membership is
+  // sampled via SVGGeometryElement.isPointInFill at each cell centre (the grid
+  // has no element transform, so cell-grid user units map directly). The index
+  // is stored on the element for fixCagePath to read; cleared when the mode is
+  // off so normal Object-shading resumes.
+  function assignExtraRegionColors(svg) {
+    var paths = [].slice.call(svg.querySelectorAll('#cages path.cage-extraregion'));
+    if (!settings.shadedRegionColorEnabled || paths.length === 0) {
+      paths.forEach(function (p) { delete p.dataset.spdrExtraColorIdx; });
+      return;
+    }
+    var cs = getGridCellSize();
+    var N  = detectGridSize();
+    if (!cs || cs < 4 || !N || N < 2 || !svg.createSVGPoint) {
+      paths.forEach(function (p) { delete p.dataset.spdrExtraColorIdx; });
+      return;
+    }
+    // Sample the cells each grey region covers.
+    var pt = svg.createSVGPoint();
+    var sets = paths.map(function (p) {
+      var cells = [];
+      for (var r = 0; r < N; r++) for (var c = 0; c < N; c++) {
+        pt.x = c * cs + cs / 2; pt.y = r * cs + cs / 2;
+        try { if (p.isPointInFill(pt)) cells.push([r, c]); } catch (e) {}
+      }
+      return cells;
+    });
+    // Build the touch-adjacency graph between regions.
+    var cellReg = {};
+    sets.forEach(function (s, i) { s.forEach(function (rc) { cellReg[rc[0] + ',' + rc[1]] = i; }); });
+    var n = sets.length, adj = [];
+    for (var i = 0; i < n; i++) adj.push(new Set());
+    sets.forEach(function (s, i) {
+      s.forEach(function (rc) {
+        var r = rc[0], c = rc[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var j = cellReg[nb[0] + ',' + nb[1]];
+          if (j !== undefined && j !== i) { adj[i].add(j); adj[j].add(i); }
+        });
+      });
+    });
+    // Greedy colour, most-constrained (highest degree) first → 4 colours suffice
+    // for the planar touch graph; if ever exceeded, reuse the least-clashing one.
+    var order = []; for (var i = 0; i < n; i++) order.push(i);
+    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
+    var colors = new Array(n).fill(-1);
+    order.forEach(function (i) {
+      var used = new Set();
+      adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
+      var pick = -1;
+      for (var k = 0; k < 4; k++) { if (!used.has(k)) { pick = k; break; } }
+      if (pick < 0) {
+        var cnt = [0,0,0,0];
+        adj[i].forEach(function (j) { if (colors[j] >= 0) cnt[colors[j]]++; });
+        pick = cnt.indexOf(Math.min.apply(null, cnt));
+      }
+      colors[i] = pick;
+    });
+    paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
   // Thermo shafts. A thermometer is two separate elements: the bulb is a
@@ -1122,7 +1216,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
     }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
   }
 
@@ -4152,6 +4246,16 @@
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
+    // Mode indicator. Only shown on puzzles that have shaded regions, where the
+    // button cycles Both / Regions / Shaded. On normal puzzles the border glow
+    // alone conveys on/off, so this stays hidden.
+    var modeLbl = document.createElement('div');
+    Object.assign(modeLbl.style, {
+      fontSize: '9px', fontWeight: '700', lineHeight: '1', letterSpacing: '0.3px',
+      textAlign: 'center', pointerEvents: 'none', display: 'none',
+    });
+    btn.appendChild(modeLbl);
+
     // ── Opacity slider card ───────────────────────────────────────────────────
     // Floats above the button. Shows when fill is active; dismissed by clicking
     // outside or by toggling the button off.
@@ -4181,32 +4285,41 @@
     });
     card.appendChild(noteDiv);
 
-    var opVal = (settings.regionColorFillOpacity != null) ? settings.regionColorFillOpacity : 1;
-    var sliderRow = document.createElement('div');
-    Object.assign(sliderRow.style, { display: 'flex', alignItems: 'center', gap: '6px' });
+    // Generic opacity row bound to one setting key. Returns the row plus a sync()
+    // that refreshes the slider/percentage from current settings.
+    function makeOpacityRow(labelText, key, defVal) {
+      var row = document.createElement('div');
+      Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' });
+      var lblEl = document.createElement('span');
+      lblEl.textContent = labelText;
+      Object.assign(lblEl.style, { fontSize: '11px', color: '#a6adc8', flexShrink: '0', width: '92px' });
+      var sld = document.createElement('input');
+      sld.type = 'range'; sld.min = '0'; sld.max = '1'; sld.step = '0.01';
+      var v0 = (settings[key] != null) ? settings[key] : defVal;
+      sld.value = v0;
+      Object.assign(sld.style, { flex: '1', cursor: 'pointer', accentColor: accentCol, minWidth: '0' });
+      var pctEl = document.createElement('span');
+      pctEl.textContent = Math.round(v0 * 100) + '%';
+      Object.assign(pctEl.style, { fontSize: '11px', color: '#a6adc8', flexShrink: '0', width: '35px', textAlign: 'right' });
+      sld.addEventListener('input', function () {
+        var v = parseFloat(sld.value);
+        settings[key] = v;
+        pctEl.textContent = Math.round(v * 100) + '%';
+        saveSettings(settings); applySettings();
+      });
+      row.appendChild(lblEl); row.appendChild(sld); row.appendChild(pctEl);
+      return { row: row, sync: function () {
+        var v = (settings[key] != null) ? settings[key] : defVal;
+        sld.value = v; pctEl.textContent = Math.round(v * 100) + '%';
+      } };
+    }
 
-    var sliderLbl = document.createElement('span');
-    sliderLbl.textContent = 'Opacity:';
-    Object.assign(sliderLbl.style, { fontSize: '11px', color: '#a6adc8', flexShrink: '0' });
-
-    var slider = document.createElement('input');
-    slider.type = 'range'; slider.min = '0'; slider.max = '1'; slider.step = '0.01';
-    slider.value = opVal;
-    Object.assign(slider.style, { flex: '1', cursor: 'pointer', accentColor: accentCol, minWidth: '0' });
-
-    var pct = document.createElement('span');
-    pct.textContent = Math.round(opVal * 100) + '%';
-    Object.assign(pct.style, { fontSize: '11px', color: '#a6adc8', flexShrink: '0', width: '35px', textAlign: 'right' });
-
-    slider.addEventListener('input', function () {
-      var v = parseFloat(slider.value);
-      settings.regionColorFillOpacity = v;
-      pct.textContent = Math.round(v * 100) + '%';
-      saveSettings(settings); applySettings();
-    });
-
-    sliderRow.appendChild(sliderLbl); sliderRow.appendChild(slider); sliderRow.appendChild(pct);
-    card.appendChild(sliderRow);
+    // Region-fill opacity (always relevant). Shaded-region opacity is shown only
+    // when the puzzle has shaded regions (toggled in showCard()).
+    var regionOp = makeOpacityRow('Region opacity:', 'regionColorFillOpacity', 0.3);
+    var shadedOp = makeOpacityRow('Shaded opacity:', 'shadedRegionColorOpacity', 0.5);
+    card.appendChild(regionOp.row);
+    card.appendChild(shadedOp.row);
     document.body.appendChild(card);
 
     // ── Card positioning ──────────────────────────────────────────────────────
@@ -4218,7 +4331,12 @@
       card.style.left   = 'auto';
     }
 
-    function showCard() { positionCard(); card.style.display = 'block'; }
+    function showCard() {
+      // Second slider only makes sense when there are shaded regions to recolor.
+      shadedOp.row.style.display = puzzleHasShadedRegions() ? 'flex' : 'none';
+      regionOp.sync(); shadedOp.sync();
+      positionCard(); card.style.display = 'block';
+    }
     function hideCard() { card.style.display = 'none'; }
 
     // Click outside the card and button dismisses the card (fill stays on).
@@ -4230,7 +4348,9 @@
 
     // ── Toggle style ──────────────────────────────────────────────────────────
     function applyToggleStyle() {
-      var active = !!settings.regionColorFillEnabled;
+      var reg    = !!settings.regionColorFillEnabled;
+      var shd    = !!settings.shadedRegionColorEnabled;
+      var active = reg || shd;
       btn.style.setProperty('background-color', bgBase,    'important');
       btn.style.setProperty('color',            accentCol, 'important');
       if (active) {
@@ -4241,10 +4361,16 @@
         btn.style.setProperty('box-shadow', 'none',                    'important');
         hideCard();
       }
-      // Keep slider in sync with settings (e.g. after a reset).
-      var v = (settings.regionColorFillOpacity != null) ? settings.regionColorFillOpacity : 1;
-      slider.value = v;
-      pct.textContent = Math.round(v * 100) + '%';
+      // Mode indicator — only meaningful on puzzles with shaded regions.
+      if (active && puzzleHasShadedRegions()) {
+        modeLbl.textContent = (reg && shd) ? 'Both' : (reg ? 'Regions' : 'Shaded');
+        modeLbl.style.color = accentCol;
+        modeLbl.style.display = 'block';
+      } else {
+        modeLbl.style.display = 'none';
+      }
+      // Keep sliders in sync with settings (e.g. after a reset).
+      regionOp.sync(); shadedOp.sync();
     }
 
     // DarkReader may rewrite inline styles — restore ours when it does.
@@ -4259,24 +4385,35 @@
     }).observe(btn, { attributes: true });
 
     btn.addEventListener('click', function () {
-      var wasActive = !!settings.regionColorFillEnabled;
-      settings.regionColorFillEnabled = !wasActive;
+      var reg = !!settings.regionColorFillEnabled;
+      var shd = !!settings.shadedRegionColorEnabled;
+      var wasActive = reg || shd;
+      if (puzzleHasShadedRegions()) {
+        // 4-state cycle: off → Both → Regions → Shaded → off.
+        if      (!reg && !shd) { reg = true;  shd = true;  }
+        else if ( reg &&  shd) { reg = true;  shd = false; }
+        else if ( reg && !shd) { reg = false; shd = true;  }
+        else                   { reg = false; shd = false; }
+      } else {
+        // No shaded regions — simple on/off of region colours.
+        reg = !reg; shd = false;
+      }
+      settings.regionColorFillEnabled   = reg;
+      settings.shadedRegionColorEnabled = shd;
       saveSettings(settings); applySettings();
       applyToggleStyle();
-      if (!wasActive) {
-        // Just activated — show the card.
+      if (!wasActive && (reg || shd)) {
+        // Just activated from fully off — show the card.
         setTimeout(showCard, 0);
       }
-      // If deactivated, applyToggleStyle already called hideCard().
+      // If fully deactivated, applyToggleStyle already called hideCard().
     });
 
     // Sync when the settings panel's reset button fires.
-    controlSyncers['regionColorFillEnabled']  = applyToggleStyle;
-    controlSyncers['regionColorFillOpacity']  = function () {
-      var v = (settings.regionColorFillOpacity != null) ? settings.regionColorFillOpacity : 1;
-      slider.value = v;
-      pct.textContent = Math.round(v * 100) + '%';
-    };
+    controlSyncers['regionColorFillEnabled']    = applyToggleStyle;
+    controlSyncers['shadedRegionColorEnabled']  = applyToggleStyle;
+    controlSyncers['regionColorFillOpacity']    = regionOp.sync;
+    controlSyncers['shadedRegionColorOpacity']  = shadedOp.sync;
 
     auxRow.appendChild(btn);
 
@@ -4292,8 +4429,8 @@
 
     applyToggleStyle();
 
-    // If fill is already active on load, show card once layout has settled.
-    if (settings.regionColorFillEnabled) {
+    // If any fill mode is already active on load, show card once layout settled.
+    if (settings.regionColorFillEnabled || settings.shadedRegionColorEnabled) {
       setTimeout(showCard, 150);
     }
 
