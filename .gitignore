@@ -5,3 +5,6 @@ test-images
 
 # Session scratch (compaction-safe working notes; finalized into docs then cleared)
 docs/WIP.md
+
+# Personal puzzle tracker (local only)
+docs/Puzzle list.txt
