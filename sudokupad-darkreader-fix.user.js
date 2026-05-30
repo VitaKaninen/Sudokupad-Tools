@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.136.0
+// @version      2.137.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.136.0';
+  var SCRIPT_VERSION = '2.137.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1030,16 +1030,41 @@
     return false;
   }
 
+  // True iff the circle's centre sits on a cell border — a gridline in exactly
+  // one axis and mid-cell in the other. That's the defining position of an edge
+  // clue (Kropki / X-V / operator dot). Arrow bulbs and other in-cell circles
+  // sit at a cell centre and fail this test. Lets us treat any black/white
+  // border dot as Kropki-type for colour/outline purposes, whatever its true
+  // constraint meaning. Origin is assumed grid-aligned at 0 (mod cs), matching
+  // the onHorizBorder test in rebuildKropkiLabels.
+  function isOnCellBorder(rect, cs) {
+    if (!cs || cs <= 0) return false;
+    var x = parseFloat(rect.getAttribute('x') || 0);
+    var y = parseFloat(rect.getAttribute('y') || 0);
+    var w = parseFloat(rect.getAttribute('width') || 0);
+    var h = parseFloat(rect.getAttribute('height') || 0);
+    var cx = x + w / 2, cy = y + h / 2;
+    function gridDist(v) { var m = ((v % cs) + cs) % cs; return Math.min(m, cs - m); }
+    var tol  = cs * 0.15;
+    var half = cs / 2;
+    var dx = gridDist(cx), dy = gridDist(cy);
+    var onVert  = dx < tol && Math.abs(dy - half) < tol;  // on a vertical cell border
+    var onHoriz = dy < tol && Math.abs(dx - half) < tol;  // on a horizontal cell border
+    return onVert || onHoriz;
+  }
+
   function fixKropkiDot(rect) {
     var fill = rect.getAttribute('fill');
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
     var isBlack = fill && fill.toUpperCase() === '#000000';
     if (!isWhite && !isBlack) return;
-    // White circles are only Kropki if the puzzle also has black Kropki circles.
-    // Otherwise they're non-Kropki constraints (arrows etc.) — skip.
+    // A white circle counts as Kropki if it sits on a cell border (any edge
+    // clue — Kropki / operator dot) OR the puzzle has an unambiguous black dot.
+    // Centre-of-cell white circles (arrow bulbs etc.) match neither, so they're
+    // left to DarkReader.
     if (isWhite) {
       var svg = rect.ownerSVGElement;
-      if (svg && !svgHasBlackKropkiCircle(svg)) return;
+      if (!isOnCellBorder(rect, getGridCellSize()) && svg && !svgHasBlackKropkiCircle(svg)) return;
     }
     var adjText = getKropkiAdjacentText(rect);
     if (settings.kropkiFixEnabled) {
