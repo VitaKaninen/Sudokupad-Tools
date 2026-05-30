@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.147.0
+// @version      2.148.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.147.0';
+  var SCRIPT_VERSION = '2.148.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1904,13 +1904,17 @@
         var parts = [];
         for (var rr = 0; rr <= rows; rr++) {
           for (var cc = 0; cc < cols; cc++) {
-            var hBound = (rr > 0 && rr < rows) && (cellRegion[(rr - 1) + ',' + cc] !== cellRegion[rr + ',' + cc]);
+            // Drop an edge that is the outer wall (rr 0 / rows) or an interior
+            // region boundary; keep within-region cell dividers.
+            var hBound = (rr === 0 || rr === rows) ||
+                         (cellRegion[(rr - 1) + ',' + cc] !== cellRegion[rr + ',' + cc]);
             if (!hBound) parts.push('M' + (cc * cs) + ' ' + (rr * cs) + 'L' + ((cc + 1) * cs) + ' ' + (rr * cs));
           }
         }
         for (var ccx = 0; ccx <= cols; ccx++) {
           for (var rrx = 0; rrx < rows; rrx++) {
-            var vBound = (ccx > 0 && ccx < cols) && (cellRegion[rrx + ',' + (ccx - 1)] !== cellRegion[rrx + ',' + ccx]);
+            var vBound = (ccx === 0 || ccx === cols) ||
+                         (cellRegion[rrx + ',' + (ccx - 1)] !== cellRegion[rrx + ',' + ccx]);
             if (!vBound) parts.push('M' + (ccx * cs) + ' ' + (rrx * cs) + 'L' + (ccx * cs) + ' ' + ((rrx + 1) * cs));
           }
         }
