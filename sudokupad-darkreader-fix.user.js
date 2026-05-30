@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.144.0
+// @version      2.145.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.144.0';
+  var SCRIPT_VERSION = '2.145.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -742,8 +742,36 @@
     return { rgb: rgb, a: a };
   }
 
+  // ── Restoring DarkReader's look when our Object-shading is turned off ──────
+  // DarkReader abandons an element once we set an `!important` inline colour and
+  // strip its `data-darkreader-inline-*` marker (see LESSONS_LEARNED). So we
+  // can't rely on DR to re-darken when shading is disabled: the FIRST disable
+  // happens to work (DR's load-time pass re-converts once), but the SECOND
+  // disable after a re-enable leaves the raw, bright attribute colour ("twice as
+  // bright" bug). Fix: capture DR's converted value the moment we see it, and on
+  // disable paint that value ourselves. We restore it as a plain `style` colour
+  // (not the data attribute) so DR's data-marker MutationObserver doesn't loop —
+  // and because DR's stylesheet rule needs its attribute, which is gone, the var
+  // must be applied directly to `fill`/`stroke`, not via `--darkreader-inline-*`.
+  function captureDrInline(el, prop) { // prop: 'fill' | 'stroke'
+    var v = el.style.getPropertyValue('--darkreader-inline-' + prop);
+    if (v) el.dataset[prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill'] = v;
+  }
+  // Remove our override and restore DR's converted look: use the captured value
+  // if we have one (deterministic, DR-independent), else fall back to letting DR
+  // / the raw attribute take over. Never touches DR's data attribute, so the
+  // observer in startLabelRectPatch won't re-fire.
+  function restoreToDr(el, prop) {
+    captureDrInline(el, prop);               // grab DR's value if it's present now
+    el.style.removeProperty(prop + '-opacity');
+    var saved = el.dataset[prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill'];
+    if (saved) el.style.setProperty(prop, saved, 'important');
+    else el.style.removeProperty(prop);
+  }
+
   // Fill only — called when Cell shading section is enabled.
   function applyShadingFill(el) {
+    captureDrInline(el, 'fill');
     var c = parseColor(el.getAttribute('fill') || '');
     if (!c || c.a === 0) {
       // No fill or layout-helper rect (fill="#FFFFFF00") — leave it transparent.
@@ -753,8 +781,9 @@
     }
     var sh = computeObjectShade(c);
     if (!sh) {
-      el.style.removeProperty('fill');
-      el.style.removeProperty('fill-opacity');
+      // Both controls for this colour group are off — hand the element back to
+      // DarkReader's converted look (captured), not the raw bright attribute.
+      restoreToDr(el, 'fill');
       return;
     }
     el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
@@ -769,11 +798,11 @@
   // the element's hue via shadingTransform; opacity is now configurable too
   // (was hardcoded 1.0 before v2.143).
   function applyShapeStroke(el) {
+    captureDrInline(el, 'stroke');
     var doSL = settings.underlayStrokeLightnessEnabled;
     var doSO = settings.underlayStrokeOpacityEnabled;
     if (!settings.underlayEnabled || (!doSL && !doSO)) {
-      el.style.removeProperty('stroke');
-      el.style.removeProperty('stroke-opacity');
+      restoreToDr(el, 'stroke');
       return;
     }
     var strokeAttr = el.getAttribute('stroke');
@@ -797,8 +826,7 @@
     if (settings.underlayEnabled) {
       applyShadingFill(rect);
     } else {
-      rect.style.removeProperty('fill');
-      rect.style.removeProperty('fill-opacity');
+      restoreToDr(rect, 'fill');
     }
     // Stroke (Region borders section)
     applyShapeStroke(rect);
@@ -828,10 +856,8 @@
         fixUnderlayRect(r);
         r.dataset.spdrOverlayShaded = '1';
       } else if (r.dataset.spdrOverlayShaded) {
-        r.style.removeProperty('fill');
-        r.style.removeProperty('fill-opacity');
-        r.style.removeProperty('stroke');
-        r.style.removeProperty('stroke-opacity');
+        restoreToDr(r, 'fill');
+        restoreToDr(r, 'stroke');
         delete r.dataset.spdrOverlayShaded;
       }
     });
@@ -870,8 +896,7 @@
     if (settings.underlayEnabled) {
       applyShadingFill(path);
     } else {
-      path.style.removeProperty('fill');
-      path.style.removeProperty('fill-opacity');
+      restoreToDr(path, 'fill');
     }
     applyShapeStroke(path);
   }
@@ -957,17 +982,16 @@
   // (was the v2.122 thermo-only rule; bulbless line puzzles like 9p6eahqmux fell
   // through to DR before v2.140). Stroke width is never touched.
   function applyLineStroke(el) {
+    captureDrInline(el, 'stroke');
     var c = parseColor(el.getAttribute('stroke') || '');
     if (!c || c.a === 0) return;
     if (!settings.underlayEnabled) {
-      el.style.removeProperty('stroke');
-      el.style.removeProperty('stroke-opacity');
+      restoreToDr(el, 'stroke');
       return;
     }
     var sh = computeObjectShade(c);
     if (!sh) {
-      el.style.removeProperty('stroke');
-      el.style.removeProperty('stroke-opacity');
+      restoreToDr(el, 'stroke');
       return;
     }
     el.style.setProperty('stroke', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
