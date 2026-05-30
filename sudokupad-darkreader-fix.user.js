@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.126.0
+// @version      2.127.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.126.0';
+  var SCRIPT_VERSION = '2.127.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4259,13 +4259,13 @@
     var btnH      = (refBtn && refBtn.offsetHeight > 0) ? refBtn.offsetHeight : 64;
     var bgBase    = (refStyle && refStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
                       ? refStyle.backgroundColor : 'rgb(34, 36, 38)';
-    // Use the live theme variable for the accent (the purple the native buttons
-    // use) rather than a snapshot of a computed colour, so our text/glow no longer
-    // flickers white↔purple as a captured value races DR's conversion at build
-    // time. Prefer DR's text-converted variant (bright purple, readable on the
-    // dark button) — DR only rewrites var usage inside stylesheets, not inline,
-    // so the plain --controls-button-bg would resolve to the dark bg purple here.
-    var accentCol = 'var(--darkreader-text--controls-button-bg, var(--controls-button-bg, rgb(181, 104, 228)))';
+    // Fixed theme purple (== the native buttons' DR-converted accent #b568e4).
+    // Using a literal — not a snapshot of a computed colour, and not a CSS var —
+    // is what finally stopped the white↔purple flicker: snapshots race DR's
+    // build-time conversion, and DR doesn't rewrite inline var() usage (it would
+    // resolve to the dark background purple). A literal !important + a one-time DR
+    // marker strip is stable: DR does not re-override it.
+    var accentCol = 'rgb(181, 104, 228)';
     var borderCol = refStyle ? refStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
     var marginVal = refStyle ? refStyle.margin       : '2.4px';
@@ -4326,12 +4326,7 @@
     }
     refreshSwatches();
     easyShadeSwatchRefresh = refreshSwatches; // let applySettings keep them current
-    // Re-assert swatch colours if DarkReader rewrites them.
-    new MutationObserver(function (muts) {
-      if (muts.some(function (m) { return m.attributeName && m.attributeName.indexOf('darkreader') !== -1; })) {
-        refreshSwatches();
-      }
-    }).observe(swatches, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-bgcolor'] });
+    // (DR re-assertion for swatches is handled by the subtree observer on btn below.)
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
@@ -4354,7 +4349,7 @@
       position:    'fixed',
       display:     'none',
       background:  '#1e1e2e',
-      color:       '#cdd6f4',
+      color:       accentCol,   // match the buttons' accent (purple), via the live theme var
       border:      '1px solid ' + borderCol,
       borderRadius: borderRad,
       padding:     '10px 12px',
@@ -4364,15 +4359,18 @@
       fontFamily:  'system-ui, -apple-system, sans-serif',
     });
 
+    var cardTextEls = [];  // text nodes whose colour we hold against DR (see refreshCardText)
+
     var noteDiv = document.createElement('div');
     noteDiv.textContent = 'Colors can be changed in Settings under "Multi-color borders"';
     Object.assign(noteDiv.style, {
       fontSize:     '11px',
-      color:        '#a6adc8',
+      color:        accentCol,
       lineHeight:   '1.4',
       marginBottom: '8px',
     });
     card.appendChild(noteDiv);
+    cardTextEls.push(noteDiv);
 
     // Generic opacity row bound to one setting key. Returns the row plus a sync()
     // that refreshes the slider/percentage from current settings.
@@ -4381,7 +4379,7 @@
       Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '6px' });
       var lblEl = document.createElement('span');
       lblEl.textContent = labelText;
-      Object.assign(lblEl.style, { fontSize: '11px', color: '#a6adc8', flexShrink: '0', width: '92px' });
+      Object.assign(lblEl.style, { fontSize: '11px', color: accentCol, flexShrink: '0', width: '92px' });
       var sld = document.createElement('input');
       sld.type = 'range'; sld.min = '0'; sld.max = '1'; sld.step = '0.01';
       var v0 = (settings[key] != null) ? settings[key] : defVal;
@@ -4389,7 +4387,7 @@
       Object.assign(sld.style, { flex: '1', cursor: 'pointer', accentColor: accentCol, minWidth: '0' });
       var pctEl = document.createElement('span');
       pctEl.textContent = Math.round(v0 * 100) + '%';
-      Object.assign(pctEl.style, { fontSize: '11px', color: '#a6adc8', flexShrink: '0', width: '35px', textAlign: 'right' });
+      Object.assign(pctEl.style, { fontSize: '11px', color: accentCol, flexShrink: '0', width: '35px', textAlign: 'right' });
       sld.addEventListener('input', function () {
         var v = parseFloat(sld.value);
         settings[key] = v;
@@ -4397,6 +4395,7 @@
         saveSettings(settings); applySettings();
       });
       row.appendChild(lblEl); row.appendChild(sld); row.appendChild(pctEl);
+      cardTextEls.push(lblEl, pctEl);
       return { row: row, sync: function () {
         var v = (settings[key] != null) ? settings[key] : defVal;
         sld.value = v; pctEl.textContent = Math.round(v * 100) + '%';
@@ -4410,10 +4409,18 @@
     card.appendChild(regionOp.row);
     card.appendChild(shadedOp.row);
     document.body.appendChild(card);
-    // No DR-proofing here on purpose: we let DarkReader convert the card like it
-    // converts SudokuPad's own dark popups (deterministic per value → stable). An
-    // earlier !important + observer approach FOUGHT DR and caused the text to
-    // flicker white↔purple, so it was removed.
+
+    // Hold the card text at the accent purple against DarkReader. A literal
+    // colour + !important + stripping DR's marker is stable (DR doesn't come back
+    // — unlike the var/observer approaches that flickered). Re-asserted on show.
+    function refreshCardText() {
+      cardTextEls.forEach(function (el) {
+        el.style.setProperty('color', accentCol, 'important');
+        el.removeAttribute('data-darkreader-inline-color');
+        el.style.removeProperty('--darkreader-inline-color');
+      });
+    }
+    refreshCardText();
 
     // ── Card positioning ──────────────────────────────────────────────────────
     function positionCard() {
@@ -4430,6 +4437,7 @@
       regionOp.row.style.display = settings.regionColorFillEnabled ? 'flex' : 'none';
       shadedOp.row.style.display = (settings.shadedRegionColorEnabled && puzzleHasShadedRegions()) ? 'flex' : 'none';
       regionOp.sync(); shadedOp.sync();
+      refreshCardText();
       positionCard(); card.style.display = 'block';
     }
     function hideCard() { card.style.display = 'none'; }
@@ -4446,8 +4454,7 @@
       var reg    = !!settings.regionColorFillEnabled;
       var shd    = !!settings.shadedRegionColorEnabled;
       var active = reg || shd;
-      btn.style.setProperty('background-color', bgBase,    'important');
-      btn.style.setProperty('color',            accentCol, 'important');
+      btn.style.setProperty('background-color', bgBase, 'important');
       if (active) {
         btn.style.setProperty('border',     '2px solid ' + accentCol, 'important');
         btn.style.setProperty('box-shadow', '0 0 6px ' + accentCol,   'important');
@@ -4459,25 +4466,34 @@
       // Mode indicator — only meaningful on puzzles with shaded regions.
       if (active && puzzleHasShadedRegions()) {
         modeLbl.textContent = (reg && shd) ? 'Both' : (reg ? 'Regions' : 'Shaded');
-        modeLbl.style.color = accentCol;
         modeLbl.style.display = 'block';
       } else {
         modeLbl.style.display = 'none';
       }
+      // Force the text colour on the button AND its child text divs — DarkReader
+      // converts child text nodes independently, so the label would otherwise go
+      // grey while btn's own colour stays purple. Literal + !important + strip = stable.
+      [btn, lbl, modeLbl].forEach(function (el) {
+        el.style.setProperty('color', accentCol, 'important');
+        el.removeAttribute('data-darkreader-inline-color');
+        el.style.removeProperty('--darkreader-inline-color');
+      });
       // Keep sliders in sync with settings (e.g. after a reset).
       regionOp.sync(); shadedOp.sync();
     }
 
-    // DarkReader may rewrite inline styles — restore ours when it does.
+    // DarkReader may rewrite inline styles on the button OR its children (text
+    // divs, swatches) — restore ours when it does. Subtree so child mutations fire.
     new MutationObserver(function (mutations) {
       var hit = false;
       mutations.forEach(function (m) {
         if (m.attributeName && m.attributeName.indexOf('darkreader') !== -1) {
-          btn.removeAttribute(m.attributeName); hit = true;
+          if (m.target.removeAttribute) m.target.removeAttribute(m.attributeName);
+          hit = true;
         }
       });
-      if (hit) applyToggleStyle();
-    }).observe(btn, { attributes: true });
+      if (hit) { applyToggleStyle(); refreshSwatches(); }
+    }).observe(btn, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-color', 'data-darkreader-inline-bgcolor'] });
 
     btn.addEventListener('click', function () {
       var reg = !!settings.regionColorFillEnabled;
