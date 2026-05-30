@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.149.0
+// @version      2.150.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.149.0';
+  var SCRIPT_VERSION = '2.150.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -47,7 +47,7 @@
     regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
     regionBorderSuppressBoundary:  false,   // (center sub-option) drop the built-in cell grid line along region boundaries
     regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
-    regionBorderCellColor:         '#808080',// cell grid line colour
+    regionBorderCellColor:         '#dddad6',// cell grid line colour — matches DR's converted native grid-line colour so enabling looks identical to disabled by default
     regionBorderCellOpacity:       1.0,     // cell grid line opacity
 
     givenEnabled:                  false,
