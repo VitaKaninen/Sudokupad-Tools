@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.151.0
+// @version      2.152.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.151.0';
+  var SCRIPT_VERSION = '2.152.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -137,7 +137,7 @@
     shadedRegionColorEnabled:     false,      // recolor puzzle "extra region" grey shadings (#cages path.cage-extraregion) with the region palette
     shadedRegionColorOpacity:     0.5,        // opacity of the recolored shaded-region fills
 
-    cellColorsOpacity:            0.5,        // 0..1; opacity of #cell-colors (puzzle-defined colored cells)
+    cellColorsOpacity:            0.6,        // 0..1; opacity of #cell-colors. Matches SudokuPad's native --cell-color-opacity (0.6), so enabling at default = no visible change
     cellColorsOpacityEnabled:     false,      // override #cell-colors opacity when true
   };
 
