@@ -24,4 +24,9 @@ After every version bump, immediately and without asking:
 Bump `@version` in the `==UserScript==` header for every change — semver minor increments (e.g. 2.119.0 → 2.120.0).
 
 ### Testing in Chrome (standing permission)
-Connect Claude in Chrome any time it would help — don't ask. **Always `location.reload()` before inspecting** (DOM reads, screenshots): the user refreshes all tabs after edits, so the MCP tab may be stale. Say upfront when the browser tool would give a better answer (e.g. pixel-level rendering issues) instead of guessing.
+
+**Diagnosing up front is yours; the first "does it work now" test is the user's.** Connect Claude in Chrome any time it helps you *diagnose* a problem — don't ask. Say upfront when the browser would answer better than guessing (e.g. pixel-level rendering). If you need a screenshot to understand an issue, take it yourself: the cost is in *analysing* the image, not capturing it, so having the user paste one in saves nothing.
+
+But **do not verify your own fix in-browser.** Self-testing a change burns a lot of reload/inspect/screenshot round-trips, and that's expensive. Once you've made and committed a change, instead of testing it yourself, **state precisely what the user should expect to see**, and let the user run that initial check and report back. Only go back to the browser yourself if the user reports it's still wrong and you need to inspect (or they ask you to). At that point more screenshots/tests are fine.
+
+**Your working tab is yours alone — the user will not touch it.** The user deliberately does *not* refresh or change the tab you're driving, so you never lose track of its state; take full control of it and they'll keep their own changes to a minimum. (This is the opposite of the user's *own* testing tabs, which they reload freely.) Reload your tab yourself whenever you need the latest script live — TamperMonkey serves the file on its own poll, so a just-saved edit may not be running yet; confirm via `window.spdrVersion`. Never ask the user "did you reload?": when the user reports an issue, they have **already** reloaded and confirmed the correct script version is running before telling you.
