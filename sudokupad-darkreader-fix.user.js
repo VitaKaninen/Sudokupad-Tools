@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.127.0
+// @version      2.128.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.127.0';
+  var SCRIPT_VERSION = '2.128.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3302,7 +3302,7 @@
     var textColor = colorRefStyle ? colorRefStyle.color       : 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
-    var EXPANDED_W = 260;    // ← expanded button width in pixels — change to taste
+    var EXPANDED_W = 245;    // ← expanded button width in pixels — change to taste
     var DELAY_MS   = 300;    // ← hover delay before expanding (ms)
     var EXPAND_S   = '0.4s'; // ← expansion animation duration
     var COLLAPSE_S = '0.15s'; // ← collapse animation duration
@@ -3358,7 +3358,7 @@
     // Both collapsed and expanded text use the same paddingLeft, so they share the same x position.
     var _canvas = document.createElement('canvas');
     var _ctx = _canvas.getContext('2d');
-    _ctx.font = '800 15px Roboto, Arial, sans-serif';
+    _ctx.font = '700 14px Roboto, Arial, sans-serif';  // ← keep in sync with the label fontSize/weight below
     var _maxLineW = Math.max.apply(null, opts.shortLabel.split('\n').map(function(l) { return _ctx.measureText(l).width; }));
     var labelPadLeft = Math.max(2, Math.round((btnW - _maxLineW) / 2));
 
@@ -3380,9 +3380,9 @@
       textAlign:      'center',        // centers each line within the text block
       whiteSpace:     'pre',           // preserves \n in shortLabel
       boxSizing:      'border-box',
-      fontSize:       '15px',          // ← font size — change to taste
+      fontSize:       '14px',          // ← font size — change to taste (keep canvas font above in sync)
       fontFamily:     'Roboto, Arial, sans-serif',
-      fontWeight:     '800',           // ← weight — 700=bold, 800/900=heavier
+      fontWeight:     '700',           // ← weight — 700=bold, 800/900=heavier
       lineHeight:     '1.2',
       pointerEvents:  'none',
       zIndex:         '2',
@@ -4536,11 +4536,7 @@
     controlSyncers['showEasyShadeButton'] = applyButtonVisibility;
 
     applyToggleStyle();
-
-    // If any fill mode is already active on load, show card once layout settled.
-    if (settings.regionColorFillEnabled || settings.shadedRegionColorEnabled) {
-      setTimeout(showCard, 150);
-    }
+    // (No auto-open on load — the card opens only when the button is pressed.)
 
     return true;
   }
