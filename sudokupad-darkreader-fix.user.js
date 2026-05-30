@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.154.0
+// @version      2.155.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.154.0';
+  var SCRIPT_VERSION = '2.155.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2629,11 +2629,14 @@
   // outline boxes; we position one per target rect. Lives above everything incl.
   // the settings panel so it shows through when the panel is dimmed.
   var spdrHi = (function () {
-    var layer = null, pool = [], dimmedPanel = null;
+    var layer = null, pool = [], dimmedPanel = null, flashTimer = null;
+    var FLASH_MS = 850;
     function ensure() {
       if (layer) return;
       var st = document.createElement('style');
-      st.textContent = '@keyframes spdrHiPulse{0%,100%{box-shadow:0 0 0 2px #f9e2af,0 0 7px 3px rgba(249,226,175,.65);opacity:.95}50%{box-shadow:0 0 0 3px #f9e2af,0 0 15px 7px rgba(249,226,175,.95);opacity:1}}';
+      // One-shot flash: rise to a bright glow, fall back to nothing. Played once
+      // per hover-in (not looping); JS hides the boxes when it ends.
+      st.textContent = '@keyframes spdrHiFlash{0%{box-shadow:0 0 0 1px #f9e2af,0 0 0 0 rgba(249,226,175,0);opacity:.2}35%{box-shadow:0 0 0 3px #f9e2af,0 0 16px 7px rgba(249,226,175,.95);opacity:1}100%{box-shadow:0 0 0 1px rgba(249,226,175,0),0 0 0 0 rgba(249,226,175,0);opacity:0}}';
       document.head.appendChild(st);
       layer = document.createElement('div');
       layer.id = 'spdr-highlight-layer';
@@ -2643,11 +2646,12 @@
     function box(i) {
       if (pool[i]) return pool[i];
       var b = document.createElement('div');
-      Object.assign(b.style, { position: 'fixed', border: '2px solid #f9e2af', borderRadius: '4px', boxSizing: 'border-box', animation: 'spdrHiPulse 1s ease-in-out infinite', pointerEvents: 'none', display: 'none' });
+      Object.assign(b.style, { position: 'fixed', border: '2px solid #f9e2af', borderRadius: '4px', boxSizing: 'border-box', pointerEvents: 'none', display: 'none' });
       layer.appendChild(b); pool[i] = b; return b;
     }
     function show(els) {
       ensure();
+      clearTimeout(flashTimer);
       els = (els || []).filter(Boolean);
       if (els.length > 150) els = els.slice(0, 150); // cap: avoid pathological perf
       var rects = [], pad = 3, k = 0;
@@ -2660,9 +2664,15 @@
         b.style.display = 'block';
         b.style.left = (r.left - pad) + 'px'; b.style.top = (r.top - pad) + 'px';
         b.style.width = (r.width + pad * 2) + 'px'; b.style.height = (r.height + pad * 2) + 'px';
+        // Restart the one-shot animation (boxes are pooled, so force a reflow).
+        b.style.animation = 'none'; void b.offsetWidth;
+        b.style.animation = 'spdrHiFlash ' + FLASH_MS + 'ms ease-out 1 forwards';
       }
       for (; k < pool.length; k++) pool[k].style.display = 'none';
       dimPanel(rects);
+      // After the single flash, clear the boxes and un-dim the panel. Re-hovering
+      // (mouse out then back in) triggers a fresh flash.
+      flashTimer = setTimeout(hide, FLASH_MS + 30);
     }
     // Occlusion handling: if any highlighted rect overlaps the settings panel,
     // fade the panel so the user can see what's highlighted beneath it.
@@ -2681,6 +2691,7 @@
       }
     }
     function hide() {
+      clearTimeout(flashTimer);
       for (var i = 0; i < pool.length; i++) pool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
