@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.135.0
+// @version      2.136.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.133.0';
+  var SCRIPT_VERSION = '2.136.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -105,6 +105,7 @@
     showToasts:                   true,   // show action result notifications (toasts)
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
     showEasyShadeButton:          true,   // show/hide the Easy Shade button in the controls bar
+    suppressStartDialog:          true,   // auto-dismiss SudokuPad's "Start/Resume Puzzle" rules popup on load
 
     regionColorPalette0:          '#e05252',  // red
     regionColorPalette1:          '#5294e0',  // blue
@@ -4054,7 +4055,7 @@
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexShrink: '0',
     });
-    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'showToasts', 'toastPersist'];
+    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'suppressStartDialog', 'showToasts', 'toastPersist'];
     actionResetBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       ACTION_RESET_KEYS.forEach(function (k) { if (k in DEFAULTS) settings[k] = DEFAULTS[k]; });
@@ -4100,6 +4101,23 @@
     easyShadeVisCbRow.appendChild(easyShadeVisCb);
     easyShadeVisCbRow.appendChild(document.createTextNode('Show Easy Shade button'));
     actionSection.appendChild(easyShadeVisCbRow);
+
+    // Suppress the "Start/Resume Puzzle" rules popup on load (applies next load).
+    var suppressDlgCbRow = document.createElement('label');
+    suppressDlgCbRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-size:12px;';
+    var suppressDlgCb = document.createElement('input');
+    suppressDlgCb.id = 'sp-suppress-start-dialog-cb';
+    suppressDlgCb.type = 'checkbox';
+    suppressDlgCb.checked = settings.suppressStartDialog !== false;
+    Object.assign(suppressDlgCb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+    suppressDlgCb.addEventListener('change', function () {
+      settings.suppressStartDialog = suppressDlgCb.checked;
+      saveSettings(settings);
+    });
+    suppressDlgCbRow.appendChild(suppressDlgCb);
+    suppressDlgCbRow.appendChild(document.createTextNode('Skip start/rules popup on load'));
+    actionSection.appendChild(suppressDlgCbRow);
+    controlSyncers['suppressStartDialog'] = function () { suppressDlgCb.checked = settings.suppressStartDialog !== false; };
 
     // Show toasts checkbox
     var showToastsCbRow = document.createElement('label');
@@ -4604,7 +4622,55 @@
     document.body.appendChild(label);
   }
 
+  // Auto-dismiss SudokuPad's start gate — the "Start Puzzle" / "Resume Puzzle"
+  // modal that displays the puzzle rules on load. The rules stay visible in the
+  // side panel; only the blocking modal is skipped. Controlled by the
+  // suppressStartDialog setting (applies on the next page load).
+  //
+  // History (v2.91–v2.106, then removed): simulated mouse/pointer/touch clicks
+  // on the button never worked. SudokuPad's button handler passes the button's
+  // *label* string to Framework.dialogOpts.onButton, which calls .match() on it
+  // — a synthetic DOM click supplies no such argument, so onButton throws.
+  // And closeDialog() alone closes the modal but leaves the puzzle PAUSED
+  // (timer frozen at 0:00, board covered), because the real button *resumes*
+  // the timer.
+  //
+  // What works (verified live): replicate the real click by calling the dialog's
+  // own handler with the button's label — onButton(label) starts/resumes the
+  // puzzle — then closeDialog() to clear the overlay. Result is identical to a
+  // genuine "Start Puzzle" click: overlay gone, puzzle unpaused and interactive.
+  //
+  // Poll because the modal appears during SudokuPad's async init, which can land
+  // before or after buildAllUI runs. Only ever acts on a dialog whose button
+  // reads "Start/Resume Puzzle", so other dialogs (solved, settings, errors)
+  // are never touched.
+  function suppressStartDialog() {
+    if (settings.suppressStartDialog === false) return;
+    var attempts = 0;
+    var timer = setInterval(function () {
+      attempts++;
+      if (attempts > 200) { clearInterval(timer); return; }   // give up after ~10s
+      if (typeof Framework === 'undefined' || !document.body.classList.contains('overlay-visible')) return;
+      var btns = document.querySelectorAll('.dialog-overlay button, .dialog-options button');
+      var startBtn = null;
+      for (var i = 0; i < btns.length; i++) {
+        if (/(start|resume)\s*puzzle/i.test(btns[i].textContent || '')) { startBtn = btns[i]; break; }
+      }
+      if (!startBtn) return;   // some other dialog is up — leave it alone
+      var label = startBtn.textContent.trim();
+      try {
+        var opts = Framework.dialogOpts;
+        if (opts && typeof opts.onButton === 'function') opts.onButton(label);   // = the real "Start Puzzle" action (resumes timer)
+      } catch (e) { /* fall through to closeDialog */ }
+      try {
+        if (document.body.classList.contains('overlay-visible') && typeof Framework.closeDialog === 'function') Framework.closeDialog();
+      } catch (e) {}
+      clearInterval(timer);
+    }, 50);
+  }
+
   function buildAllUI() {
+    suppressStartDialog();
     buildVersionLabel();
     buildSettingsUI();
     // Selection-border offset observer is feature-independent of DarkReader
