@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.138.0
+// @version      2.139.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.138.0';
+  var SCRIPT_VERSION = '2.139.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1087,6 +1087,11 @@
           rect.style.removeProperty('stroke-width');
         }
       }
+      // Some puzzles draw dots with an inline fill-opacity < 1 (e.g. author-
+      // styled translucent black dots that render as grey). Force full opacity
+      // so fixed dots are solid; stash the original to restore on disable.
+      if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
+      rect.style.setProperty('fill-opacity', '1', 'important');
       rect.removeAttribute('data-darkreader-inline-fill');
       rect.style.removeProperty('--darkreader-inline-fill');
       // For labeled Kropki circles, also DR-proof the existing text color.
@@ -1102,6 +1107,12 @@
       rect.style.removeProperty('fill');
       rect.style.removeProperty('stroke');
       rect.style.removeProperty('stroke-width');
+      // Restore the puzzle's original fill-opacity (if we overrode it).
+      if (rect.dataset.spdrKropkiFo !== undefined) {
+        if (rect.dataset.spdrKropkiFo) rect.style.setProperty('fill-opacity', rect.dataset.spdrKropkiFo);
+        else rect.style.removeProperty('fill-opacity');
+        delete rect.dataset.spdrKropkiFo;
+      }
       if (adjText) {
         adjText.removeAttribute('data-spdr-kropki-text');
         adjText.style.removeProperty('fill');
