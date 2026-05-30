@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.139.0
+// @version      2.140.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.139.0';
+  var SCRIPT_VERSION = '2.140.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -55,13 +55,18 @@
     labelBgOpacity:                1.0,
 
     underlayEnabled:               true,
+    // COLORED objects (saturation > 0): separate brightness + opacity.
     underlayLightness:             0.4,   // 0..1; fill: 0 = black, 0.5 = pure hue at max saturation, 1 = white
     underlayLightnessEnabled:      true,
     underlayOpacity:               0.4,   // 0..1; fill: absolute alpha — 0 = transparent, 1 = fully opaque
     underlayOpacityEnabled:        true,
+    // GRAY objects (saturation ≈ 0, e.g. #CFCFCF thermo/palindrome lines): one
+    // linked slider drives BOTH brightness and opacity to the same value, since
+    // gray reads dim where the colored brightness reads bright at the same number.
+    underlayGrayLevel:             0.4,   // 0..1; gray fill/line: brightness = opacity = this
+    underlayGrayLevelEnabled:      true,
     underlayStrokeLightness:       0.5,   // 0..1; stroke (shape outline): same axis as fill lightness
     underlayStrokeLightnessEnabled:true,
-    underlayOverlayEnabled:        true,  // also shade colored shapes drawn in #overlay (e.g. "lucky charm" shapes), not just #underlay
 
     centerEnabled:                 false,
     centerValidColor:              '#338fe8',   // SudokuPad's pencilmark blue
@@ -335,7 +340,7 @@
     rebuildStyleTag();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -700,6 +705,33 @@
     return hslToRgb(h, 1, L);
   }
 
+  // A colour is "gray" when it has (near) zero saturation — black/white/grey.
+  function isGrayColor(c) {
+    return rgbToHsl(c.r, c.g, c.b)[1] < 0.08;
+  }
+  // Central object-shading transform for FILLS and LINES. Routes gray colours
+  // through the single linked Gray slider (brightness = opacity = underlayGrayLevel)
+  // and coloured ones through the separate Brightness / Opacity sliders. Returns
+  // { rgb:[r,g,b], a:alpha } to apply, or null meaning "leave it to DarkReader"
+  // (the relevant control(s) are disabled). Does NOT cover shape outlines — those
+  // keep their own independent Border-brightness slider via applyShapeStroke.
+  function computeObjectShade(c) {
+    if (isGrayColor(c)) {
+      if (!settings.underlayGrayLevelEnabled) return null;
+      var G = settings.underlayGrayLevel;
+      if (G < 0) G = 0; else if (G > 1) G = 1;
+      var v = Math.round(G * 255);
+      return { rgb: [v, v, v], a: G };
+    }
+    var doFL = settings.underlayLightnessEnabled;
+    var doFO = settings.underlayOpacityEnabled;
+    if (!doFL && !doFO) return null;
+    var rgb = doFL ? shadingTransform(c, settings.underlayLightness) : [c.r, c.g, c.b];
+    var a   = doFO ? settings.underlayOpacity : c.a;
+    if (a < 0) a = 0; else if (a > 1) a = 1;
+    return { rgb: rgb, a: a };
+  }
+
   // Fill only — called when Cell shading section is enabled.
   function applyShadingFill(el) {
     var c = parseColor(el.getAttribute('fill') || '');
@@ -709,18 +741,14 @@
       el.style.removeProperty('fill-opacity');
       return;
     }
-    var doFL = settings.underlayLightnessEnabled;
-    var doFO = settings.underlayOpacityEnabled;
-    if (!doFL && !doFO) {
+    var sh = computeObjectShade(c);
+    if (!sh) {
       el.style.removeProperty('fill');
       el.style.removeProperty('fill-opacity');
       return;
     }
-    var rgb = doFL ? shadingTransform(c, settings.underlayLightness) : [c.r, c.g, c.b];
-    var fa = doFO ? settings.underlayOpacity : c.a;
-    if (fa < 0) fa = 0; else if (fa > 1) fa = 1;
-    el.style.setProperty('fill', 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', 'important');
-    el.style.setProperty('fill-opacity', String(fa), 'important');
+    el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
+    el.style.setProperty('fill-opacity', String(sh.a), 'important');
     el.removeAttribute('data-darkreader-inline-fill');
     el.style.removeProperty('--darkreader-inline-fill');
   }
@@ -777,7 +805,9 @@
     svg.querySelectorAll('#underlay rect').forEach(fixUnderlayRect);
     // Overlay shapes (opt-in): shade the coloured ones, clear ours from any we
     // previously touched but no longer should (e.g. toggle off, or it changed).
-    var shadeOverlay = settings.underlayEnabled && settings.underlayOverlayEnabled;
+    // Overlay shapes are always shaded alongside underlay shapes when Object
+    // shading is on (the former opt-in checkbox was removed in v2.140).
+    var shadeOverlay = settings.underlayEnabled;
     svg.querySelectorAll('#overlay rect').forEach(function (r) {
       if (shadeOverlay && shouldShadeOverlayRect(r)) {
         fixUnderlayRect(r);
@@ -901,52 +931,42 @@
     paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
-  // Thermo shafts. A thermometer is two separate elements: the bulb is a
-  // rounded rect in #underlay (shaded by Object shading as a FILL), and the
-  // shaft is a stroked <path> in #arrows that shares the bulb's source colour.
-  // The shaft isn't in #underlay, so without this DR leaves it near-white while
-  // the bulb is shaded dark — a visible mismatch. We shade the shaft STROKE
-  // with the same lightness/opacity used for the bulb fill so the two always
-  // match. Scope: only #arrows paths whose stroke colour equals a bulb fill
-  // colour — real Arrow-sudoku arrows / other line constraints are left to DR.
-  function getBulbFillColors(svg) {
-    var set = {};
-    svg.querySelectorAll('#underlay rect').forEach(function (r) {
-      var c = parseColor(r.getAttribute('fill') || '');
-      if (c && c.a !== 0) set[c.r + ',' + c.g + ',' + c.b] = true;
-    });
-    return set;
-  }
-  function isThermoShaft(el, bulbColors) {
-    if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
-    var s = el.getAttribute('stroke');
-    if (!s || s === 'none') return false;
-    var c = parseColor(s);
-    return !!(c && bulbColors[c.r + ',' + c.g + ',' + c.b]);
-  }
-  function applyThermoShaft(el) {
-    // Mirror the bulb-fill transform (Object shading lightness + opacity),
-    // applied to the shaft stroke.
+  // Line constraints. Every line-type clue — thermo shafts, palindromes, renban,
+  // whispers, region-sum lines, arrow-sudoku arrow lines — renders as a stroked
+  // <path> in #arrows (fill=none). DR leaves these near-white in dark mode while
+  // any matching bulb/underlay shape is shaded dark — a mismatch. We shade the
+  // line STROKE through the same object-shading transform used for fills
+  // (computeObjectShade): gray lines (e.g. #CFCFCF thermos/palindromes) follow
+  // the linked Gray slider, coloured lines the Brightness/Opacity sliders. Scope
+  // is broad on purpose — ALL stroked #arrows paths, not just bulb-matched shafts
+  // (was the v2.122 thermo-only rule; bulbless line puzzles like 9p6eahqmux fell
+  // through to DR before v2.140). Stroke width is never touched.
+  function applyLineStroke(el) {
     var c = parseColor(el.getAttribute('stroke') || '');
     if (!c || c.a === 0) return;
-    var doFL = settings.underlayLightnessEnabled;
-    var doFO = settings.underlayOpacityEnabled;
-    if (!settings.underlayEnabled || (!doFL && !doFO)) {
+    if (!settings.underlayEnabled) {
       el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-opacity');
       return;
     }
-    var rgb = doFL ? shadingTransform(c, settings.underlayLightness) : [c.r, c.g, c.b];
-    var sa = doFO ? settings.underlayOpacity : c.a;
-    if (sa < 0) sa = 0; else if (sa > 1) sa = 1;
-    el.style.setProperty('stroke', 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', 'important');
-    el.style.setProperty('stroke-opacity', String(sa), 'important');
+    var sh = computeObjectShade(c);
+    if (!sh) {
+      el.style.removeProperty('stroke');
+      el.style.removeProperty('stroke-opacity');
+      return;
+    }
+    el.style.setProperty('stroke', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
+    el.style.setProperty('stroke-opacity', String(sh.a), 'important');
     el.style.removeProperty('--darkreader-inline-stroke');
   }
-  function fixAllThermoShafts(svg) {
-    var bulbColors = getBulbFillColors(svg);
+  function isLineStroke(el) {
+    if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
+    var s = el.getAttribute('stroke');
+    return !!(s && s !== 'none');
+  }
+  function fixAllLines(svg) {
     svg.querySelectorAll('#arrows path[stroke]').forEach(function (el) {
-      if (isThermoShaft(el, bulbColors)) applyThermoShaft(el);
+      if (isLineStroke(el)) applyLineStroke(el);
     });
   }
 
@@ -1253,7 +1273,7 @@
     fixAllLabelRects(svg);
     fixAllUnderlays(svg);
     fixAllCagePaths(svg);
-    fixAllThermoShafts(svg);
+    fixAllLines(svg);
     fixAllGivens(svg);
     fixAllKropkiDots(svg);
     rebuildKropkiLabels(svg);
@@ -1284,8 +1304,8 @@
               else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-stroke') {
-            // Thermo shafts: DR re-converts the shaft stroke after our scan.
-            if (el.tagName === 'path' && el.closest('#arrows') && isThermoShaft(el, getBulbFillColors(svg))) applyThermoShaft(el);
+            // Lines: DR re-converts the stroke after our scan.
+            if (isLineStroke(el)) applyLineStroke(el);
           }
         } else if (m.type === 'childList' && m.addedNodes.length > 0) {
           // Ignore childList mutations caused by our own label insertions to avoid
@@ -1299,7 +1319,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
     }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
   }
 
@@ -1853,10 +1873,9 @@
           // Object-shaded look so it just moves below the borders unchanged.
           var gc = parseColor(p.getAttribute('fill') || '');
           if (gc && gc.a !== 0) {
-            var rgb = (settings.underlayEnabled && settings.underlayLightnessEnabled)
-              ? shadingTransform(gc, settings.underlayLightness) : [gc.r, gc.g, gc.b];
-            var fa = (settings.underlayEnabled && settings.underlayOpacityEnabled)
-              ? settings.underlayOpacity : gc.a;
+            var sh = settings.underlayEnabled ? computeObjectShade(gc) : null;
+            var rgb = sh ? sh.rgb : [gc.r, gc.g, gc.b];
+            var fa  = sh ? sh.a   : gc.a;
             clone.style.setProperty('fill', 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fa + ')', 'important');
           }
         }
@@ -3920,19 +3939,19 @@
     content.appendChild(buildSection({
       enabledKey: 'underlayEnabled',
       label: 'Object shading / underlay',
-      desc: 'Tint and outline puzzle objects drawn as underlays — shape backgrounds, cage fills, and their borders.',
+      desc: 'Tint and outline puzzle objects — shape backgrounds, cage fills, lines (thermos, palindromes, etc.), and their borders. Colored and gray objects have separate controls because gray reads dim where color reads bright at the same value.',
       hasColor: false,
       resetKeys: [
         'underlayLightness','underlayLightnessEnabled',
         'underlayOpacity','underlayOpacityEnabled',
+        'underlayGrayLevel','underlayGrayLevelEnabled',
         'underlayStrokeLightness','underlayStrokeLightnessEnabled',
-        'underlayOverlayEnabled',
       ],
       subBuilder: function (wrap) {
-        wrap.appendChild(makeRangeRow({ key: 'underlayLightness', enabledKey: 'underlayLightnessEnabled', label: 'Brightness', min: 0, max: 1, step: 0.05 }));
-        wrap.appendChild(makeRangeRow({ key: 'underlayOpacity',   enabledKey: 'underlayOpacityEnabled',   label: 'Opacity',   min: 0, max: 1, step: 0.05 }));
+        wrap.appendChild(makeRangeRow({ key: 'underlayLightness', enabledKey: 'underlayLightnessEnabled', label: 'Color brightness', min: 0, max: 1, step: 0.05 }));
+        wrap.appendChild(makeRangeRow({ key: 'underlayOpacity',   enabledKey: 'underlayOpacityEnabled',   label: 'Color opacity',   min: 0, max: 1, step: 0.05 }));
+        wrap.appendChild(makeRangeRow({ key: 'underlayGrayLevel', enabledKey: 'underlayGrayLevelEnabled', label: 'Gray brightness + opacity', min: 0, max: 1, step: 0.05 }));
         wrap.appendChild(makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', label: 'Border brightness', min: 0, max: 1, step: 0.05 }));
-        wrap.appendChild(makeSubCheckbox('underlayOverlayEnabled', 'Also shade overlay shapes'));
       },
     }));
 

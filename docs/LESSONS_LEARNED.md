@@ -60,11 +60,17 @@ The trap: SudokuPad uses the same `rect.textbg` class for Kropki circles **and**
 
 - ✅ **Use the `app.select(cells)` API** (v2.102 refactor): select the N cells that need a digit, then dispatch ONE click on that digit button — O(distinct digits) instead of O(cells × digits) per-cell drags. Removed ~820 lines of dead drag helpers. Guard with `actionInProgress`, snapshot the DOM before/after each click, and auto-rollback via the Undo button on a critical mismatch.
 
-## Thermos (bulb + shaft)
+## Lines (thermos, palindromes, renban, whispers, arrows…)
 
-- A thermometer is **two separate elements in two different groups**: the **bulb** is a rounded `rect` in `#underlay` (so Object shading already catches it as a *fill*), and the **shaft** is a stroked `<path>` in `#arrows` (Object shading did *not* touch it pre-v2.122). They share the **same source colour** (e.g. `#CFCFCF`). Result before the fix: shaded-dark bulbs + DR-lightened near-white shafts — a visible mismatch.
-- ✅ **Match shaft to bulb** (v2.122): shade the shaft *stroke* with the **same** `underlayLightness`/`underlayOpacity` used for the bulb fill (`applyThermoShaft`). Scope by colour — only `#arrows` paths whose stroke equals a bulb fill colour (`getBulbFillColors`/`isThermoShaft`) — so real Arrow-sudoku arrows and other line constraints (also in `#arrows`) are left to DR.
-- DR converts the shaft via `data-darkreader-inline-stroke` (not `-fill`); the SVG observer watches that attribute too. Our inline `stroke … !important` overrides DR's stylesheet `!important` rule; no mutation loop observed.
+- Every line-type clue renders as a stroked `<path>` in `#arrows` (`fill=none`). A thermometer is **two separate elements**: the **bulb** is a rounded `rect` in `#underlay` (caught by Object shading as a *fill*), and the **shaft** is one of these `#arrows` paths. They share a source colour (e.g. `#CFCFCF`). DR leaves the line near-white in dark mode → a mismatch against shaded fills.
+- ✅ **Shade the line stroke** with the same Object-shading transform as fills (`computeObjectShade`, applied to the stroke in `applyLineStroke`). Gray lines follow the linked Gray slider, colored lines the Brightness/Opacity sliders. Stroke **width is never touched** — only stroke colour + opacity.
+- ⚠️ **Scope is now ALL stroked `#arrows` paths** (v2.140, `fixAllLines`/`isLineStroke`). The old v2.122 rule matched only shafts whose stroke equalled a `#underlay` bulb fill colour (`getBulbFillColors`/`isThermoShaft`, removed) — so **bulbless** line puzzles (palindromes/quads like `9p6eahqmux`, which have *zero* `#underlay` rects) fell through to DR and stayed bright. Broadening to every stroked `#arrows` path fixes those and is intentional: real arrow-sudoku arrows are shaded too now (user wanted it; dial back here if it ever regresses).
+- DR converts the stroke via `data-darkreader-inline-stroke` (not `-fill`); the SVG observer watches that attribute too. Our inline `stroke … !important` overrides DR's stylesheet `!important` rule; no mutation loop observed.
+
+## Gray vs colored object shading (v2.140)
+
+- ✅ **Gray and colored need separate sliders.** `shadingTransform` forces **full saturation** for colored objects (vivid at L=0.4) but returns plain `rgb(L·255 …)` for gray (saturation 0) — genuinely dark at the same number. So one slider can't serve both. Split: colored = **Color brightness** + **Color opacity**; gray = one linked **Gray brightness + opacity** slider (both axes = the one value). `computeObjectShade(c)` routes on `isGrayColor` (saturation `< 0.08`) and returns `null` when the relevant control is disabled (caller then clears its inline style → back to DR). Used by both fills (`applyShadingFill`) and lines (`applyLineStroke`).
+- Shape **outlines** (`applyShapeStroke` / Border brightness) are deliberately **not** part of the split — independent single slider, opacity locked at 1.
 
 ---
 *Personal / non-session notes (removed-feature history, browser-environment workarounds) live in [personal-notes.md](personal-notes.md) — not loaded by default.*
