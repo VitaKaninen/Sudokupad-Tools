@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.145.0
+// @version      2.146.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.145.0';
+  var SCRIPT_VERSION = '2.146.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1876,6 +1876,15 @@
       cgp.dataset.spdrOrigD = cgp.getAttribute('d') || '';
       var cgClone = cgp.cloneNode(false);
       cgClone.removeAttribute('data-spdr-orig-d');
+      // mainGroup carries shape-rendering:crispEdges (needed so the border-strip
+      // rects don't anti-alias into a dark fringe). But the thin cell-grid lines
+      // (1px in user units, ~1.33px after the SVG's ~1.33× scale) must NOT be
+      // pixel-snapped: crispEdges rounds each line to 1px or 2px depending on its
+      // sub-pixel position, so some dividers render brighter/wider than others,
+      // and the rounding differs per browser. The original path.cell-grid used
+      // shape-rendering:auto; override the inherited crispEdges back to smooth so
+      // the clone matches it.
+      cgClone.setAttribute('shape-rendering', 'geometricPrecision');
       mainGroup.insertBefore(cgClone, mainGroup.firstChild);
       cgp.setAttribute('d', '');
     })();
