@@ -6,7 +6,7 @@
 A single-file TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on SudokuPad, and adds several quality-of-life features on top.
 
 - **File:** `sudokupad-darkreader-fix.user.js` — one ~4,200-line IIFE
-- **Version:** see the script's `@version` header (source of truth — not duplicated here, so it can't drift)
+- **Version:** bump in **two** places every release — the `@version` header (TamperMonkey uses this) **and** the `SCRIPT_VERSION` const near the top of the IIFE (drives `window.spdrVersion` + the on-screen version label). They must match; if `window.spdrVersion` lags `@version`, `SCRIPT_VERSION` was missed.
 - **Repo:** https://github.com/VitaKaninen/Sudokupad-darkreader-fix.git (branch `main`)
 - **Matched URLs:** `sudokupad.app/*`, `beta.sudokupad.app/*`, `app.crackingthecryptic.com/*`, `crackingthecryptic.com/*`
 - **Tested on:** Chrome + TamperMonkey, LibreWolf + ViolentMonkey, and Brave + ViolentMonkey (all with the DarkReader extension).
