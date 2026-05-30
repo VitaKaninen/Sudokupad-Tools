@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.128.0
+// @version      2.129.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.128.0';
+  var SCRIPT_VERSION = '2.129.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3299,7 +3299,10 @@
     var colorRefStyle = colorRefBtn ? getComputedStyle(colorRefBtn) : refStyle;
     var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
                       ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
-    var textColor = colorRefStyle ? colorRefStyle.color       : 'rgb(181, 104, 228)';
+    // Literal theme purple (not a snapshot of colorRefStyle.color): a captured
+    // computed colour races DR's build-time conversion and can load grey, and
+    // also lets DR ping-pong our label on hover. A literal + watchDR is stable.
+    var textColor = 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
     var EXPANDED_W = 245;    // ← expanded button width in pixels — change to taste
@@ -3455,7 +3458,9 @@
                    document.querySelector('[data-control="centre"]') || ref;
     var colorCs = getComputedStyle(colorRef);
     var bg = colorCs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? colorCs.backgroundColor : null;
-    var fg = colorCs.color || null;
+    // Text colour is a fixed literal (set in buildActionButton) + held by watchDR —
+    // we deliberately do NOT re-read/re-apply a live colour here, which used to
+    // re-introduce the snapshot race.
     ['sp-fill-btn-wrap', 'sp-clear-btn-wrap', 'sp-clearall-btn-wrap'].forEach(function(id) {
       var wrap = document.getElementById(id);
       if (!wrap || !wrap.firstElementChild) return;
@@ -3465,11 +3470,10 @@
       if (bw) { clipper.style.width = bw + 'px'; clipper.dataset.collapsedW = bw; }
       if (bh) clipper.style.height = bh + 'px';
       if (bg) clipper.style.setProperty('background-color', bg, 'important');
-      // Keep label dimensions and color in sync so collapsed-state centering stays correct.
+      // Keep label dimensions in sync so collapsed-state centering stays correct.
       var label = clipper.firstElementChild;
       if (label && bw) label.style.width = bw + 'px';
       if (label && bh) label.style.height = bh + 'px';
-      if (label && fg) label.style.setProperty('color', fg, 'important');
     });
   }
 

@@ -40,6 +40,7 @@ DarkReader overrides SVG fills two ways:
   - **A stylesheet rule** with `var(--controls-button-bg)` added late (not in DR's initial scan) — DR didn't rewrite it either; resolved dark.
 - ⚠️ **DR converts CHILD text nodes independently of the parent.** Forcing `color` on the button is not enough — the child `<div>` label (and mode indicator) go grey on their own. Force the colour on every text element (loop over `[btn, lbl, modeLbl]`; the card loops over `cardTextEls`), and observe the button **subtree** for DR markers, not just the button.
 - ✅ **Swatches** (the 4 palette squares) still use literal `!important` + strip + the same subtree observer — they must keep their exact palette colours, not be DR-converted.
+- ✅ **Action buttons (Fill/Clear/Clear All) migrated to the literal too (v2.129).** They used to snapshot `colorRefStyle.color` *and* `syncClipperOffsets` re-applied a live re-read — both the snapshot race and a DR ping-pong on hover (DR re-scans when the label text/size changes on expand). Now `textColor` is the literal `rgb(181,104,228)` + `watchDR`, and `syncClipperOffsets` no longer touches the colour (only geometry/bg).
 
 ## Border-strip drawing
 
