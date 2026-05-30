@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.142.0
+// @version      2.143.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.142.0';
+  var SCRIPT_VERSION = '2.143.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -71,8 +71,10 @@
     underlayGrayBrightnessEnabled: true,
     underlayGrayOpacity:           0.6,   // 0..1; gray fill/line opacity
     underlayGrayOpacityEnabled:    true,
-    underlayStrokeLightness:       0.5,   // 0..1; stroke (shape outline): same axis as fill lightness
+    underlayStrokeLightness:       0.5,   // 0..1; stroke (shape outline) brightness
     underlayStrokeLightnessEnabled:true,
+    underlayStrokeOpacity:         0.5,   // 0..1; stroke (shape outline) opacity
+    underlayStrokeOpacityEnabled:  true,
 
     centerEnabled:                 false,
     centerValidColor:              '#338fe8',   // SudokuPad's pencilmark blue
@@ -761,12 +763,15 @@
     el.style.removeProperty('--darkreader-inline-fill');
   }
 
-  // Stroke (shape outline) — gated by the Object shading section's enable +
-  // this slider's own sub-enable. Opacity locked at 1.0; only lightness is
-  // configurable. (Previously this lived under Region borders and required
-  // regionBorderEnabled + regionBorderCenterEnabled; moved here in v2.109.)
+  // Stroke (shape outline) — gated by the Object Shading section's enable + its
+  // own Border brightness / Border opacity sub-enables (combined into one slider
+  // when "Control opacity and brightness separately" is off). Brightness keeps
+  // the element's hue via shadingTransform; opacity is now configurable too
+  // (was hardcoded 1.0 before v2.143).
   function applyShapeStroke(el) {
-    if (!settings.underlayEnabled || !settings.underlayStrokeLightnessEnabled) {
+    var doSL = settings.underlayStrokeLightnessEnabled;
+    var doSO = settings.underlayStrokeOpacityEnabled;
+    if (!settings.underlayEnabled || (!doSL && !doSO)) {
       el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-opacity');
       return;
@@ -779,9 +784,11 @@
       el.style.removeProperty('stroke-opacity');
       return;
     }
-    var srgb = shadingTransform(sc, settings.underlayStrokeLightness);
+    var srgb = doSL ? shadingTransform(sc, settings.underlayStrokeLightness) : [sc.r, sc.g, sc.b];
+    var sa   = doSO ? settings.underlayStrokeOpacity : sc.a;
+    if (sa < 0) sa = 0; else if (sa > 1) sa = 1;
     el.style.setProperty('stroke', 'rgb(' + srgb[0] + ',' + srgb[1] + ',' + srgb[2] + ')', 'important');
-    el.style.setProperty('stroke-opacity', '1', 'important');
+    el.style.setProperty('stroke-opacity', String(sa), 'important');
     el.style.removeProperty('--darkreader-inline-stroke');
   }
 
@@ -3969,35 +3976,41 @@
     content.appendChild(buildSection({
       enabledKey: 'underlayEnabled',
       label: 'Object Shading',
-      desc: 'Tint and outline puzzle objects — shape backgrounds, cage fills, lines (thermos, palindromes, etc.), and their borders. Colored and gray objects have separate controls because gray reads dim where color reads bright at the same value.',
+      desc: 'Tint and outline puzzle objects — shape backgrounds, cage fills, lines (thermos, palindromes, etc.), and their borders.',
       hasColor: false,
+      // NOTE: underlaySeparateBrightnessOpacity is intentionally NOT in resetKeys —
+      // the section ↺ leaves the combined/separate checkbox in whatever state it's
+      // in. Only the bottom "Reset all" restores it (to the default, off).
       resetKeys: [
-        'underlaySeparateBrightnessOpacity',
         'underlayLightness','underlayLightnessEnabled',
         'underlayOpacity','underlayOpacityEnabled',
         'underlayGrayBrightness','underlayGrayBrightnessEnabled',
         'underlayGrayOpacity','underlayGrayOpacityEnabled',
         'underlayStrokeLightness','underlayStrokeLightnessEnabled',
+        'underlayStrokeOpacity','underlayStrokeOpacityEnabled',
       ],
       subBuilder: function (wrap) {
         // Combined sliders (shown when "separate" is OFF): each drives both its
         // brightness and opacity keys to the same value via extraKeys.
-        var rowColorCombined = makeRangeRow({ key: 'underlayLightness', enabledKey: 'underlayLightnessEnabled', extraKeys: ['underlayOpacity'], extraEnabledKeys: ['underlayOpacityEnabled'], label: 'Color object brightness', min: 0, max: 1, step: 0.05 });
-        var rowGrayCombined  = makeRangeRow({ key: 'underlayGrayBrightness', enabledKey: 'underlayGrayBrightnessEnabled', extraKeys: ['underlayGrayOpacity'], extraEnabledKeys: ['underlayGrayOpacityEnabled'], label: 'Gray object brightness', min: 0, max: 1, step: 0.05 });
+        var rowColorCombined  = makeRangeRow({ key: 'underlayLightness',      enabledKey: 'underlayLightnessEnabled',      extraKeys: ['underlayOpacity'],          extraEnabledKeys: ['underlayOpacityEnabled'],          label: 'Colored object brightness', min: 0, max: 1, step: 0.05 });
+        var rowGrayCombined   = makeRangeRow({ key: 'underlayGrayBrightness', enabledKey: 'underlayGrayBrightnessEnabled', extraKeys: ['underlayGrayOpacity'],      extraEnabledKeys: ['underlayGrayOpacityEnabled'],      label: 'Gray object brightness',    min: 0, max: 1, step: 0.05 });
+        var rowBorderCombined = makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', extraKeys: ['underlayStrokeOpacity'], extraEnabledKeys: ['underlayStrokeOpacityEnabled'], label: 'Border brightness',         min: 0, max: 1, step: 0.05 });
         // Separate sliders (shown when "separate" is ON).
-        var rowColorBright  = makeRangeRow({ key: 'underlayLightness',      enabledKey: 'underlayLightnessEnabled',      label: 'Color brightness', min: 0, max: 1, step: 0.05 });
-        var rowColorOpacity = makeRangeRow({ key: 'underlayOpacity',        enabledKey: 'underlayOpacityEnabled',        label: 'Color opacity',    min: 0, max: 1, step: 0.05 });
-        var rowGrayBright   = makeRangeRow({ key: 'underlayGrayBrightness', enabledKey: 'underlayGrayBrightnessEnabled', label: 'Gray brightness',  min: 0, max: 1, step: 0.05 });
-        var rowGrayOpacity  = makeRangeRow({ key: 'underlayGrayOpacity',    enabledKey: 'underlayGrayOpacityEnabled',    label: 'Gray opacity',     min: 0, max: 1, step: 0.05 });
-        var rowBorder       = makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', label: 'Border brightness', min: 0, max: 1, step: 0.05 });
+        var rowColorBright   = makeRangeRow({ key: 'underlayLightness',       enabledKey: 'underlayLightnessEnabled',       label: 'Colored object brightness', min: 0, max: 1, step: 0.05 });
+        var rowColorOpacity  = makeRangeRow({ key: 'underlayOpacity',         enabledKey: 'underlayOpacityEnabled',         label: 'Colored object opacity',    min: 0, max: 1, step: 0.05 });
+        var rowGrayBright    = makeRangeRow({ key: 'underlayGrayBrightness',  enabledKey: 'underlayGrayBrightnessEnabled',  label: 'Gray object brightness',    min: 0, max: 1, step: 0.05 });
+        var rowGrayOpacity   = makeRangeRow({ key: 'underlayGrayOpacity',     enabledKey: 'underlayGrayOpacityEnabled',     label: 'Gray object opacity',       min: 0, max: 1, step: 0.05 });
+        var rowBorderBright  = makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', label: 'Border brightness',         min: 0, max: 1, step: 0.05 });
+        var rowBorderOpacity = makeRangeRow({ key: 'underlayStrokeOpacity',   enabledKey: 'underlayStrokeOpacityEnabled',   label: 'Border opacity',            min: 0, max: 1, step: 0.05 });
 
-        var combinedRows = [rowColorCombined, rowGrayCombined];
-        var separateRows = [rowColorBright, rowColorOpacity, rowGrayBright, rowGrayOpacity];
-        var allRows = [rowColorCombined, rowColorBright, rowColorOpacity, rowGrayCombined, rowGrayBright, rowGrayOpacity, rowBorder];
+        var combinedRows = [rowColorCombined, rowGrayCombined, rowBorderCombined];
+        var separateRows = [rowColorBright, rowColorOpacity, rowGrayBright, rowGrayOpacity, rowBorderBright, rowBorderOpacity];
+        var allRows = [rowColorCombined, rowColorBright, rowColorOpacity, rowGrayCombined, rowGrayBright, rowGrayOpacity, rowBorderCombined, rowBorderBright, rowBorderOpacity];
 
-        // Order: color first, then gray, then the always-single border row.
-        [rowColorCombined, rowColorBright, rowColorOpacity, rowGrayCombined, rowGrayBright, rowGrayOpacity, rowBorder]
-          .forEach(function (r) { wrap.appendChild(r); });
+        // DOM order groups each object type (combined row + its two separate rows);
+        // only one mode's rows are visible at a time, so within a mode this yields
+        // colored → gray → border.
+        allRows.forEach(function (r) { wrap.appendChild(r); });
 
         // "Control opacity and brightness separately" — toggles which rows show.
         var sepLabel = document.createElement('label');
@@ -4026,6 +4039,8 @@
             settings.underlayOpacityEnabled = settings.underlayLightnessEnabled;
             settings.underlayGrayOpacity = settings.underlayGrayBrightness;
             settings.underlayGrayOpacityEnabled = settings.underlayGrayBrightnessEnabled;
+            settings.underlayStrokeOpacity = settings.underlayStrokeLightness;
+            settings.underlayStrokeOpacityEnabled = settings.underlayStrokeLightnessEnabled;
           }
           saveSettings(settings); applySettings();
           allRows.forEach(function (r) { r.spdrRefresh(); });
@@ -4044,7 +4059,8 @@
          'underlayOpacity','underlayOpacityEnabled',
          'underlayGrayBrightness','underlayGrayBrightnessEnabled',
          'underlayGrayOpacity','underlayGrayOpacityEnabled',
-         'underlayStrokeLightness','underlayStrokeLightnessEnabled'
+         'underlayStrokeLightness','underlayStrokeLightnessEnabled',
+         'underlayStrokeOpacity','underlayStrokeOpacityEnabled'
         ].forEach(function (k) { controlSyncers[k] = refreshAll; });
 
         updateMode();
