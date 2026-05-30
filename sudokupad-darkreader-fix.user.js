@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.150.0
+// @version      2.151.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.150.0';
+  var SCRIPT_VERSION = '2.151.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -49,6 +49,7 @@
     regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
     regionBorderCellColor:         '#dddad6',// cell grid line colour — matches DR's converted native grid-line colour so enabling looks identical to disabled by default
     regionBorderCellOpacity:       1.0,     // cell grid line opacity
+    regionBorderCellWidth:         '1',     // cell grid line width (user units) — matches SudokuPad's native grid line
 
     givenEnabled:                  false,
     givenColor:                    '#e8e6e3',
@@ -1960,6 +1961,8 @@
       // it alone (the clone is recreated fresh each draw, so no need to restore).
       if (needCellColor) {
         cgClone.style.setProperty('stroke', hexToRgba(settings.regionBorderCellColor, settings.regionBorderCellOpacity), 'important');
+        var cellW = parseFloat(settings.regionBorderCellWidth);
+        if (!isNaN(cellW)) cgClone.style.setProperty('stroke-width', cellW + 'px', 'important');
         cgClone.removeAttribute('data-darkreader-inline-stroke');
         cgClone.style.removeProperty('--darkreader-inline-stroke');
       }
@@ -3990,7 +3993,7 @@
                   'regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
                   'regionColorStripeWidth', 'regionColorOpacity',
-                  'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity'],
+                  'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
       subBuilder: function (wrap) {
         // Inset divider between the three subsections (doesn't reach the panel edges,
         // so it reads as one big section split into three).
@@ -4066,6 +4069,7 @@
           var c = colorRow('Color:', 'regionBorderCellColor', 'regionBorderCellOpacity');
           opt.appendChild(c.row);
           opt.appendChild(makeOpacityRow('regionBorderCellOpacity', c.ref));
+          opt.appendChild(makeWidthRow('regionBorderCellWidth'));
         }));
       },
     }));
