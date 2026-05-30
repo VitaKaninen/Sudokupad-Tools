@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.134.0
+// @version      2.135.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -4539,10 +4539,10 @@
       var reg = !!settings.regionColorFillEnabled;
       var shd = !!settings.shadedRegionColorEnabled;
       if (puzzleHasShadedRegions()) {
-        // 4-state cycle: off → Both → Regions → Shaded → off.
-        if      (!reg && !shd) { reg = true;  shd = true;  }
-        else if ( reg &&  shd) { reg = true;  shd = false; }
-        else if ( reg && !shd) { reg = false; shd = true;  }
+        // 4-state cycle: off → Shaded → Regions → Both → off.
+        if      (!reg && !shd) { reg = false; shd = true;  }
+        else if (!reg &&  shd) { reg = true;  shd = false; }
+        else if ( reg && !shd) { reg = true;  shd = true;  }
         else                   { reg = false; shd = false; }
       } else {
         // No shaded regions — simple on/off of region colours.
