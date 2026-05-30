@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.153.0
+// @version      2.154.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.153.0';
+  var SCRIPT_VERSION = '2.154.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2591,6 +2591,124 @@
     return wrap;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Settings clarity: live highlight + empty-state hints + flash-preview
+  //
+  // Each section declares, via HILITE[enabledKey], what it controls on the page:
+  //   sel     — CSS selector for the affected board elements (the "real" target)
+  //   control — selector for the SudokuPad tool button that CREATES those elements
+  //             (used as the highlight target + empty hint when `sel` finds none,
+  //             e.g. Cell shading → the Colour tool, since #cell-colors starts empty)
+  //   msg     — empty-state line shown in the panel when `sel` finds nothing
+  // Hovering a section header pulses an outline around its targets on the live
+  // puzzle. If a target sits under the settings panel (small windows), the panel
+  // goes semi-transparent so the highlight is visible underneath.
+  // ═══════════════════════════════════════════════════════════════════════════
+  var HILITE = {
+    regionBorderEnabled:      { sel: '#cell-grids path, #cages path' },
+    givenEnabled:             { sel: '#cell-givens text, text.cell-given', msg: 'This puzzle has no given clue digits.' },
+    labelBgEnabled:           { sel: 'rect.textbg',                        msg: 'This puzzle has no text labels (cage sums etc.).' },
+    underlayEnabled:          { sel: '#underlay rect, #cages path[fill], #overlay rect', msg: 'This puzzle has no shaded objects to tint.' },
+    cellColorsOpacityEnabled: { sel: '#cell-colors > *', control: '#control-colour', msg: 'No colored cells yet — use the highlighted Color tool to paint some.' },
+    centerEnabled:            { sel: 'text.cell-candidate', control: '#control-centre', msg: 'No center pencilmarks yet — use the highlighted Centre tool to add some.' },
+    cornerEnabled:            { sel: '#cell-pencilmarks text', control: '#control-corner', msg: 'No corner pencilmarks yet — use the highlighted Corner tool to add some.' },
+    kropkiFixEnabled:         { sel: 'rect.feature-kropki, text[data-spdr-kropki-label]', msg: 'This puzzle has no Kropki dots.' },
+    selectionColorEnabled:    { sel: '#cell-highlights path.cage-selectioncage', msg: 'Select one or more cells on the grid to see the selection border.' },
+  };
+
+  // Returns the live elements a section currently affects (its `sel` matches), or
+  // [] if none. Pure DOM read — safe to call on hover/open.
+  function hiliteTargets(enabledKey) {
+    var spec = HILITE[enabledKey];
+    if (!spec) return [];
+    try { return Array.prototype.slice.call(document.querySelectorAll(spec.sel)); }
+    catch (e) { return []; }
+  }
+
+  // The pulsing-outline overlay. One fixed-position layer holds a reusable pool of
+  // outline boxes; we position one per target rect. Lives above everything incl.
+  // the settings panel so it shows through when the panel is dimmed.
+  var spdrHi = (function () {
+    var layer = null, pool = [], dimmedPanel = null;
+    function ensure() {
+      if (layer) return;
+      var st = document.createElement('style');
+      st.textContent = '@keyframes spdrHiPulse{0%,100%{box-shadow:0 0 0 2px #f9e2af,0 0 7px 3px rgba(249,226,175,.65);opacity:.95}50%{box-shadow:0 0 0 3px #f9e2af,0 0 15px 7px rgba(249,226,175,.95);opacity:1}}';
+      document.head.appendChild(st);
+      layer = document.createElement('div');
+      layer.id = 'spdr-highlight-layer';
+      Object.assign(layer.style, { position: 'fixed', left: '0', top: '0', width: '0', height: '0', pointerEvents: 'none', zIndex: '2147483646' });
+      document.body.appendChild(layer);
+    }
+    function box(i) {
+      if (pool[i]) return pool[i];
+      var b = document.createElement('div');
+      Object.assign(b.style, { position: 'fixed', border: '2px solid #f9e2af', borderRadius: '4px', boxSizing: 'border-box', animation: 'spdrHiPulse 1s ease-in-out infinite', pointerEvents: 'none', display: 'none' });
+      layer.appendChild(b); pool[i] = b; return b;
+    }
+    function show(els) {
+      ensure();
+      els = (els || []).filter(Boolean);
+      if (els.length > 150) els = els.slice(0, 150); // cap: avoid pathological perf
+      var rects = [], pad = 3, k = 0;
+      for (var i = 0; i < els.length; i++) {
+        var r = els[i].getBoundingClientRect();
+        if (r.width < 0.5 && r.height < 0.5) continue;       // not rendered
+        if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue; // off-screen
+        rects.push(r);
+        var b = box(k++);
+        b.style.display = 'block';
+        b.style.left = (r.left - pad) + 'px'; b.style.top = (r.top - pad) + 'px';
+        b.style.width = (r.width + pad * 2) + 'px'; b.style.height = (r.height + pad * 2) + 'px';
+      }
+      for (; k < pool.length; k++) pool[k].style.display = 'none';
+      dimPanel(rects);
+    }
+    // Occlusion handling: if any highlighted rect overlaps the settings panel,
+    // fade the panel so the user can see what's highlighted beneath it.
+    function dimPanel(rects) {
+      var panel = document.getElementById('sp-fix-panel');
+      if (!panel) return;
+      var pr = panel.getBoundingClientRect();
+      var overlap = rects.some(function (r) {
+        return r.left < pr.right && r.right > pr.left && r.top < pr.bottom && r.bottom > pr.top;
+      });
+      if (overlap) {
+        if (!dimmedPanel) { dimmedPanel = panel; panel.style.transition = 'opacity .12s'; }
+        panel.style.opacity = '0.18';
+      } else if (dimmedPanel) {
+        dimmedPanel.style.opacity = ''; dimmedPanel = null;
+      }
+    }
+    function hide() {
+      for (var i = 0; i < pool.length; i++) pool[i].style.display = 'none';
+      if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
+    }
+    return { show: show, hide: hide };
+  })();
+
+  // Briefly toggle a section's effect on/off so the before/after pops. Does NOT
+  // persist (no saveSettings) — restores the original state when done.
+  var spdrFlashing = false;
+  function flashSection(enabledKey, checkbox) {
+    if (spdrFlashing) return;
+    spdrFlashing = true;
+    var orig = settings[enabledKey];
+    var seq = [!orig, orig, !orig, orig], i = 0;
+    (function step() {
+      if (i >= seq.length) { settings[enabledKey] = orig; applySettings(); spdrFlashing = false; return; }
+      settings[enabledKey] = seq[i++];
+      if (checkbox) checkbox.checked = settings[enabledKey];
+      applySettings();
+      setTimeout(step, 360);
+    })();
+  }
+
+  // Empty-state hints recompute when the panel opens (puzzle state may have
+  // changed since build). Each section registers its updater here.
+  var spdrEmptyCheckers = [];
+  function refreshEmptyHints() { spdrEmptyCheckers.forEach(function (f) { try { f(); } catch (e) {} }); }
+
   // Top-level section. resetKeys = list of every setting key the reset button
   // should restore to DEFAULTS (including the section's enabled key).
   function buildSection(opts) {
@@ -2621,12 +2739,50 @@
       textBlock.appendChild(desc);
     }
 
+    // Empty-state hint — shown when this section has nothing to act on in the
+    // current puzzle (its HILITE.sel matches no elements). Recomputed on panel open.
+    var emptyHint = null;
+    if (HILITE[opts.enabledKey] && HILITE[opts.enabledKey].msg) {
+      emptyHint = document.createElement('div');
+      Object.assign(emptyHint.style, { color: '#f9a85a', fontSize: '11px', marginTop: '3px', display: 'none' });
+      textBlock.appendChild(emptyHint);
+      var updateEmpty = function () {
+        var empty = hiliteTargets(opts.enabledKey).length === 0;
+        emptyHint.textContent = empty ? '⚠ ' + HILITE[opts.enabledKey].msg : '';
+        emptyHint.style.display = empty ? 'block' : 'none';
+      };
+      updateEmpty();
+      spdrEmptyCheckers.push(updateEmpty);
+    }
+
     head.appendChild(checkbox); head.appendChild(textBlock);
 
     var headColor = null;
     if (opts.hasColor) {
       headColor = makeColorControl(opts.colorKey, opts.opacityKey);
       head.appendChild(headColor);
+    }
+
+    // Flash-preview button — briefly toggles the effect on/off so the change pops.
+    var flashBtn = null;
+    if (HILITE[opts.enabledKey]) {
+      flashBtn = document.createElement('button');
+      flashBtn.type = 'button';
+      flashBtn.textContent = '👁';
+      flashBtn.title = 'Flash this effect on/off on the puzzle';
+      Object.assign(flashBtn.style, {
+        background: '#313244', color: '#a6adc8',
+        border: '1px solid #45475a', borderRadius: '5px',
+        width: '26px', height: '26px', cursor: 'pointer',
+        fontSize: '13px', padding: '0', lineHeight: '1',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        flexShrink: '0', marginLeft: '6px', marginTop: '1px',
+      });
+      flashBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        flashSection(opts.enabledKey, checkbox);
+      });
+      head.appendChild(flashBtn);
     }
 
     // Single section-level reset button (right side of header)
@@ -2667,6 +2823,27 @@
       subWrap.style.pointerEvents = enabled ? 'auto' : 'none';
     }
     updateDim();
+
+    // Hover the section → pulse an outline around what it controls on the live
+    // puzzle. Falls back to the section's tool button (e.g. Colour tool) when the
+    // board target is empty, so there's always something to point at.
+    if (HILITE[opts.enabledKey]) {
+      var hoverTimer = null;
+      var doHighlight = function () {
+        var els = hiliteTargets(opts.enabledKey);
+        if (!els.length && HILITE[opts.enabledKey].control) {
+          var ctrl = document.querySelector(HILITE[opts.enabledKey].control);
+          if (ctrl) els = [ctrl];
+        }
+        spdrHi.show(els);
+      };
+      section.addEventListener('mouseenter', function () {
+        hoverTimer = setTimeout(doHighlight, 110);
+      });
+      section.addEventListener('mouseleave', function () {
+        clearTimeout(hoverTimer); spdrHi.hide();
+      });
+    }
 
     controlSyncers[opts.enabledKey] = function () { checkbox.checked = !!settings[opts.enabledKey]; updateDim(); };
 
@@ -4547,6 +4724,7 @@
     // Save the digit set field and hide the panel.
     function closePanel() {
       if (panel.style.display === 'none') return;
+      spdrHi.hide();
       if (buttonsAnyEnabled()) {
         var dsInput = document.getElementById('sp-digit-set-input');
         if (dsInput) {
@@ -4567,6 +4745,7 @@
       e.stopPropagation();
       if (panel.style.display === 'none') {
         panel.style.display = 'flex';
+        refreshEmptyHints();
         var toast = document.getElementById('sp-remove-invalid-toast');
         if (toast) toast.style.bottom = getToastBottom();
       } else {
