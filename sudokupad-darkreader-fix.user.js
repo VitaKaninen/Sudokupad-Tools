@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.148.0
+// @version      2.149.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.148.0';
+  var SCRIPT_VERSION = '2.149.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -747,24 +747,58 @@
   }
 
   // ── Restoring DarkReader's look when our Object-shading is turned off ──────
-  // DarkReader abandons an element once we set an `!important` inline colour and
-  // strip its `data-darkreader-inline-*` marker (see LESSONS_LEARNED). So we
-  // can't rely on DR to re-darken when shading is disabled: the FIRST disable
-  // happens to work (DR's load-time pass re-converts once), but the SECOND
-  // disable after a re-enable leaves the raw, bright attribute colour ("twice as
-  // bright" bug). Fix: capture DR's converted value the moment we see it, and on
-  // disable paint that value ourselves. We restore it as a plain `style` colour
-  // (not the data attribute) so DR's data-marker MutationObserver doesn't loop —
-  // and because DR's stylesheet rule needs its attribute, which is gone, the var
-  // must be applied directly to `fill`/`stroke`, not via `--darkreader-inline-*`.
-  function captureDrInline(el, prop) { // prop: 'fill' | 'stroke'
-    var v = el.style.getPropertyValue('--darkreader-inline-' + prop);
-    if (v) el.dataset[prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill'] = v;
+  // Once we set an `!important` inline colour, DarkReader gives up on the element
+  // and CLEARS its own `--darkreader-inline-*` var (verified). So when shading is
+  // disabled we can't lean on DR to re-darken — it would fall back to the raw,
+  // bright attribute colour. We must repaint DR's dark value ourselves.
+  //
+  // CRITICAL: store a RESOLVED LITERAL (e.g. "rgb(51,55,57)"), never DR's var
+  // EXPRESSION. The v2.145 bug stored the expression `var(--darkreader-background-
+  // cfcfcf,#333739)` and set it as `style.fill`; DR's observer then saw the `#333739`
+  // hex and re-converted it into a *text*-colour var (light!), nesting deeper and
+  // drifting brighter on every toggle. A literal gives DR nothing to re-nest.
+  // Resolve a colour expression to a literal rgb via a throwaway element (DR's vars
+  // are defined on :root, so var() references resolve synchronously through the
+  // cascade — independent of DR clearing the element's own inline var).
+  function resolveCssColor(expr) {
+    var p = document.createElement('span');
+    p.style.color = expr; p.style.display = 'none';
+    document.documentElement.appendChild(p);
+    var c = getComputedStyle(p).color;
+    p.remove();
+    return c;
   }
-  // Remove our override and restore DR's converted look: use the captured value
-  // if we have one (deterministic, DR-independent), else fall back to letting DR
-  // / the raw attribute take over. Never touches DR's data attribute, so the
-  // observer in startLabelRectPatch won't re-fire.
+  // Capture DR's converted colour as a literal — once. The element's original
+  // colour never changes, so the first clean capture (DR's untouched var, seen via
+  // the data-marker observer on load) is authoritative; don't overwrite it later
+  // with a value DR may have re-derived from our own fill.
+  function captureDrInline(el, prop) { // prop: 'fill' | 'stroke'
+    var key = prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill';
+    if (el.dataset[key]) return;
+    var lit = '';
+    var v = el.style.getPropertyValue('--darkreader-inline-' + prop);
+    if (v) {
+      lit = resolveCssColor(v);                 // DR's own var (most accurate)
+    } else {
+      // Deterministic fallback — no dependency on DR having set the element's
+      // inline var yet (avoids a scan-vs-DR ordering race). DR publishes its
+      // converted colours as :root vars `--darkreader-<kind>-<hex>` keyed by the
+      // element's STABLE original colour attribute (fills convert as background,
+      // strokes as text). Falls back to the raw colour if DR hasn't defined it.
+      var orig = el.getAttribute(prop);
+      var c = orig && parseColor(orig);
+      if (c) {
+        var hex = ((1 << 24) + (c.r << 16) + (c.g << 8) + c.b).toString(16).slice(1);
+        var kind = prop === 'stroke' ? 'text' : 'background';
+        lit = resolveCssColor('var(--darkreader-' + kind + '-' + hex + ', ' + orig + ')');
+      }
+    }
+    if (lit && lit !== 'none') el.dataset[key] = lit;
+  }
+  // Remove our override and restore DR's converted look: paint the captured literal
+  // if we have one (DR-independent), else fall back to letting DR / the raw
+  // attribute take over. Never touches DR's data attribute, so the observer in
+  // startLabelRectPatch won't re-fire.
   function restoreToDr(el, prop) {
     captureDrInline(el, prop);               // grab DR's value if it's present now
     el.style.removeProperty(prop + '-opacity');
