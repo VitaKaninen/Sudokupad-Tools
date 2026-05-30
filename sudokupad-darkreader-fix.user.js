@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.130.0
+// @version      2.131.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.130.0';
+  var SCRIPT_VERSION = '2.131.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1783,7 +1783,18 @@
     // elements render above the center border rather than behind it.
     if (needCenterBorder) {
       var cellGridsEl = document.getElementById('cell-grids');
-      if (cellGridsEl) {
+      // A pure-black centre border is invisible against the dark background by
+      // design (it's the default value — a separator you only see if you give it
+      // a real colour). Drawing it anyway is a cross-browser hazard: Chrome's
+      // DarkReader honours our `!important` and keeps the stroke black (so it
+      // paints nothing), but Firefox/Gecko DarkReader LIGHTENS the black stroke
+      // to grey, so the box outlines surface as a grey "ring" that isn't meant to
+      // be there. Black paints nothing visible here, so skip it entirely — this
+      // removes the leak on every engine with zero visible change in Chrome.
+      // Any non-black centre border is still drawn as before.
+      var cbColor = parseColor(settings.regionBorderColor || '');
+      var cbIsBlack = cbColor && cbColor.r === 0 && cbColor.g === 0 && cbColor.b === 0;
+      if (cellGridsEl && !cbIsBlack) {
         var centerStroke = hexToRgba(settings.regionBorderColor, settings.regionBorderOpacity);
         var centerWidth  = parseFloat(settings.regionBorderWidth) || 3;
         cellGridsEl.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
