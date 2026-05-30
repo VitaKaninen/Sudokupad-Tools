@@ -12,7 +12,6 @@ DarkReader overrides SVG fills two ways:
 - ✅ **CSS variables — restore via `html[data-darkreader-scheme="dark"]`** (specificity 0,1,1), which beats DarkReader's `:root` block (0,1,0) for `--cell-color-*`.
 - ❌ **CSS `!important` alone does NOT work:** DarkReader generates an equal-specificity counter-rule that appears *after* ours and wins. Always use inline-style `!important` for fills, never a stylesheet rule.
 - ❌ **Don't strip `data-darkreader-inline-fill` from all rects:** it breaks the textbg-rect fix. No blanket removal.
-- ⚠️ **Pure-black strokes/fills are a cross-engine hazard: Chrome DarkReader honours our `!important` and keeps them black, but Firefox/Gecko DarkReader LIGHTENS them to grey.** Verified v2.131 (puzzle `dlan7yj0cq`): the centre-border feature drew the 9 box outlines with `stroke: #000000 !important` — invisible black-on-black in Chrome, but a visible grey "ring" (the box-division windowpane / central-box square) in LibreWolf. Fix: **don't paint a pure-black centre border at all** — in a dark-mode tool black paints nothing visible anyway, so skipping it removes the leak on every engine with zero visible change (`cbIsBlack` guard in `drawRegionSplitBorders`, ~line 1784). General rule: never rely on "black = invisible against the dark background"; if you want invisible, don't draw it. (Diagnosed by recolouring the 9 centre-border clones magenta in Chrome → they traced exactly the reported ring.)
 
 ## SVG rendering
 
