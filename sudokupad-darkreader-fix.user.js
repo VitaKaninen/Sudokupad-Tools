@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.146.0
+// @version      2.147.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.146.0';
+  var SCRIPT_VERSION = '2.147.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -45,6 +45,10 @@
     regionBorderWidth:             '3',
     regionBorderCenterEnabled:     true,    // center border: single-color CSS stroke on region outlines
     regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
+    regionBorderSuppressBoundary:  false,   // (center sub-option) drop the built-in cell grid line along region boundaries
+    regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
+    regionBorderCellColor:         '#808080',// cell grid line colour
+    regionBorderCellOpacity:       1.0,     // cell grid line opacity
 
     givenEnabled:                  false,
     givenColor:                    '#e8e6e3',
@@ -1620,7 +1624,12 @@
     // same grey. Done whenever any region feature is active (so there are borders
     // to sit under) and the puzzle actually has shaded regions.
     var needShadedClones = regionFeatureActive() && puzzleHasShadedRegions();
-    var geo = (needFills || needMultiBorders || needCenterBorder || needShadedClones)
+    // Cell borders (recolor the thin grid lines) and Suppress-boundary both act on
+    // the cell-grid clone, so they keep mainGroup alive on their own (standalone).
+    // Suppress also needs region geometry to know which grid edges are boundaries.
+    var needCellColor = settings.regionBorderEnabled && settings.regionBorderCellEnabled;
+    var needSuppress  = settings.regionBorderEnabled && settings.regionBorderSuppressBoundary;
+    var geo = (needFills || needMultiBorders || needCenterBorder || needShadedClones || needCellColor || needSuppress)
       ? inferRegionsFromSVG() : null;
 
     // Build cell→region map (used by inR() when drawing border strips).
@@ -1647,7 +1656,7 @@
       });
     }
 
-    if (!needFills && !needMultiBorders && !needCenterBorder && !needShadedClones) return;
+    if (!needFills && !needMultiBorders && !needCenterBorder && !needShadedClones && !needCellColor && !needSuppress) return;
     if (!geo || geo.regions.length < 2) return;
 
     var regions = geo.regions;
@@ -1885,6 +1894,38 @@
       // shape-rendering:auto; override the inherited crispEdges back to smooth so
       // the clone matches it.
       cgClone.setAttribute('shape-rendering', 'geometricPrecision');
+
+      // Suppress grid line on region boundaries (Center-borders sub-option): rebuild
+      // the clone's path from individual cell edges, omitting any interior edge that
+      // separates two DIFFERENT regions. Perimeter edges and within-region cell
+      // dividers are kept. Lets a low-opacity region border fade to nothing at the
+      // boundary instead of leaving the built-in grid line showing through.
+      if (needSuppress) {
+        var parts = [];
+        for (var rr = 0; rr <= rows; rr++) {
+          for (var cc = 0; cc < cols; cc++) {
+            var hBound = (rr > 0 && rr < rows) && (cellRegion[(rr - 1) + ',' + cc] !== cellRegion[rr + ',' + cc]);
+            if (!hBound) parts.push('M' + (cc * cs) + ' ' + (rr * cs) + 'L' + ((cc + 1) * cs) + ' ' + (rr * cs));
+          }
+        }
+        for (var ccx = 0; ccx <= cols; ccx++) {
+          for (var rrx = 0; rrx < rows; rrx++) {
+            var vBound = (ccx > 0 && ccx < cols) && (cellRegion[rrx + ',' + (ccx - 1)] !== cellRegion[rrx + ',' + ccx]);
+            if (!vBound) parts.push('M' + (ccx * cs) + ' ' + (rrx * cs) + 'L' + (ccx * cs) + ' ' + ((rrx + 1) * cs));
+          }
+        }
+        cgClone.setAttribute('d', parts.join(''));
+      }
+
+      // Cell borders: recolor the thin grid lines to the chosen colour/opacity.
+      // Set an !important inline stroke and strip DR's marker so DarkReader leaves
+      // it alone (the clone is recreated fresh each draw, so no need to restore).
+      if (needCellColor) {
+        cgClone.style.setProperty('stroke', hexToRgba(settings.regionBorderCellColor, settings.regionBorderCellOpacity), 'important');
+        cgClone.removeAttribute('data-darkreader-inline-stroke');
+        cgClone.style.removeProperty('--darkreader-inline-stroke');
+      }
+
       mainGroup.insertBefore(cgClone, mainGroup.firstChild);
       cgp.setAttribute('d', '');
     })();
@@ -2572,6 +2613,13 @@
 
     function updateDim() {
       var enabled = checkbox.checked;
+      // collapseWhenDisabled: fully hide the sub-content when off (only the header —
+      // checkbox, description, reset — stays). Otherwise just dim it (legacy look).
+      if (opts.collapseWhenDisabled) {
+        subWrap.style.display = enabled ? '' : 'none';
+        if (headColor) headColor.style.display = enabled ? '' : 'none';
+        return;
+      }
       var op = enabled ? '1' : '0.4';
       if (headColor) { headColor.style.opacity = op; headColor.style.pointerEvents = enabled ? 'auto' : 'none'; }
       subWrap.style.opacity = op;
@@ -3899,90 +3947,88 @@
       label: 'Region borders',
       desc: 'Solid, center-only, or multi-color borders around the puzzle\'s regions (boxes / cages / shape groups).',
       hasColor: false,
+      collapseWhenDisabled: true,   // section off → only the header (checkbox + desc + ↺) shows
       resetKeys: ['regionBorderEnabled',
-                  'regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth',
+                  'regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
-                  'regionColorStripeWidth', 'regionColorOpacity'],
+                  'regionColorStripeWidth', 'regionColorOpacity',
+                  'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity'],
       subBuilder: function (wrap) {
-        // ── Checkbox: Center border ───────────────────────────────────────
-        var cbCenterRow = document.createElement('label');
-        Object.assign(cbCenterRow.style, { display:'flex', alignItems:'center', gap:'7px', marginTop:'8px', cursor:'pointer', color:'#cdd6f4', fontSize:'12px' });
-        var cbCenter = document.createElement('input');
-        cbCenter.type = 'checkbox'; cbCenter.checked = !!settings.regionBorderCenterEnabled;
-        Object.assign(cbCenter.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
-        cbCenterRow.appendChild(cbCenter);
-        var cbCenterTxt = document.createElement('span'); cbCenterTxt.textContent = 'Center borders';
-        cbCenterRow.appendChild(cbCenterTxt);
-        wrap.appendChild(cbCenterRow);
-
-        // Center border sub-options
-        var singleSub = document.createElement('div');
-        Object.assign(singleSub.style, { paddingLeft:'20px' });
-        var singleColorRef = makeColorControl('regionBorderColor', 'regionBorderOpacity');
-        var singleColorRow = document.createElement('div');
-        Object.assign(singleColorRow.style, { display:'flex', alignItems:'center', gap:'8px', marginTop:'6px' });
-        var singleColorLbl = document.createElement('span'); singleColorLbl.textContent = 'Color:';
-        Object.assign(singleColorLbl.style, { color:'#cdd6f4', fontSize:'12px', flex:'1' });
-        singleColorRow.appendChild(singleColorLbl); singleColorRow.appendChild(singleColorRef);
-        singleSub.appendChild(singleColorRow);
-        singleSub.appendChild(makeOpacityRow('regionBorderOpacity', singleColorRef));
-        singleSub.appendChild(makeWidthRow('regionBorderWidth'));
-        wrap.appendChild(singleSub);
-
-        function applyCenterDim() {
-          var on = !!settings.regionBorderCenterEnabled;
-          singleSub.style.opacity       = on ? '1' : '0.4';
-          singleSub.style.pointerEvents = on ? 'auto' : 'none';
-          cbCenter.checked = on;
+        // Inset divider between the three subsections (doesn't reach the panel edges,
+        // so it reads as one big section split into three).
+        function divider() {
+          var d = document.createElement('div');
+          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+          return d;
         }
-        applyCenterDim();
-        cbCenter.addEventListener('change', function() {
-          settings.regionBorderCenterEnabled = cbCenter.checked;
-          saveSettings(settings); applySettings(); applyCenterDim();
-        });
-        controlSyncers['regionBorderCenterEnabled'] = applyCenterDim;
+        // One collapsible subsection: a checkbox row whose options are hidden until
+        // the checkbox is on (mirrors the section-level collapse behaviour).
+        function makeSubsection(enabledKey, labelText, buildOptions) {
+          var box = document.createElement('div');
+          var row = document.createElement('label');
+          Object.assign(row.style, { display:'flex', alignItems:'center', gap:'7px', marginTop:'10px', cursor:'pointer', color:'#cdd6f4', fontSize:'12px' });
+          var cb = document.createElement('input');
+          cb.type = 'checkbox'; cb.checked = !!settings[enabledKey];
+          Object.assign(cb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+          var txt = document.createElement('span'); txt.textContent = labelText;
+          row.appendChild(cb); row.appendChild(txt); box.appendChild(row);
 
-        // ── Checkbox: Multi-color border ──────────────────────────────────
-        var cbMultiRow = document.createElement('label');
-        Object.assign(cbMultiRow.style, { display:'flex', alignItems:'center', gap:'7px', marginTop:'10px', cursor:'pointer', color:'#cdd6f4', fontSize:'12px' });
-        var cbMulti = document.createElement('input');
-        cbMulti.type = 'checkbox'; cbMulti.checked = !!settings.regionBorderMultiEnabled;
-        Object.assign(cbMulti.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
-        cbMultiRow.appendChild(cbMulti);
-        var cbMultiTxt = document.createElement('span'); cbMultiTxt.textContent = 'Multi-color borders';
-        cbMultiRow.appendChild(cbMultiTxt);
-        wrap.appendChild(cbMultiRow);
+          var opt = document.createElement('div');
+          Object.assign(opt.style, { paddingLeft:'20px' });
+          buildOptions(opt);
+          box.appendChild(opt);
 
-        // Multi-color sub-options
-        var multiSub = document.createElement('div');
-        Object.assign(multiSub.style, { paddingLeft:'20px' });
-
-        // 4 color swatches — horizontal row
-        var swatchRow = document.createElement('div');
-        Object.assign(swatchRow.style, { display:'flex', alignItems:'center', gap:'6px', marginTop:'6px' });
-        var swatchLbl = document.createElement('span'); swatchLbl.textContent = 'Colors:';
-        Object.assign(swatchLbl.style, { color:'#cdd6f4', fontSize:'12px', flexShrink:'0' });
-        swatchRow.appendChild(swatchLbl);
-        ['regionColorPalette0','regionColorPalette1','regionColorPalette2','regionColorPalette3'].forEach(function(k) {
-          swatchRow.appendChild(makeColorControl(k, null));
-        });
-        multiSub.appendChild(swatchRow);
-        multiSub.appendChild(makeWidthRow('regionColorStripeWidth'));
-        multiSub.appendChild(makeOpacityRow('regionColorOpacity', null));
-        wrap.appendChild(multiSub);
-
-        function applyMultiDim() {
-          var on = !!settings.regionBorderMultiEnabled;
-          multiSub.style.opacity       = on ? '1' : '0.4';
-          multiSub.style.pointerEvents = on ? 'auto' : 'none';
-          cbMulti.checked = on;
+          function upd() { var on = !!settings[enabledKey]; opt.style.display = on ? '' : 'none'; cb.checked = on; }
+          upd();
+          cb.addEventListener('change', function () {
+            settings[enabledKey] = cb.checked;
+            saveSettings(settings); applySettings(); upd();
+          });
+          controlSyncers[enabledKey] = upd;
+          return box;
         }
-        applyMultiDim();
-        cbMulti.addEventListener('change', function() {
-          settings.regionBorderMultiEnabled = cbMulti.checked;
-          saveSettings(settings); applySettings(); applyMultiDim();
-        });
-        controlSyncers['regionBorderMultiEnabled'] = applyMultiDim;
+        function colorRow(label, colorKey, opacityKey) {
+          var ref = makeColorControl(colorKey, opacityKey);
+          var r = document.createElement('div');
+          Object.assign(r.style, { display:'flex', alignItems:'center', gap:'8px', marginTop:'6px' });
+          var l = document.createElement('span'); l.textContent = label;
+          Object.assign(l.style, { color:'#cdd6f4', fontSize:'12px', flex:'1' });
+          r.appendChild(l); r.appendChild(ref);
+          return { row: r, ref: ref };
+        }
+
+        // ── Subsection 1: Center borders ──────────────────────────────────
+        wrap.appendChild(makeSubsection('regionBorderCenterEnabled', 'Center borders', function (opt) {
+          var c = colorRow('Color:', 'regionBorderColor', 'regionBorderOpacity');
+          opt.appendChild(c.row);
+          opt.appendChild(makeOpacityRow('regionBorderOpacity', c.ref));
+          opt.appendChild(makeWidthRow('regionBorderWidth'));
+          opt.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries'));
+        }));
+
+        // ── Subsection 2: Multi-color borders ─────────────────────────────
+        wrap.appendChild(divider());
+        wrap.appendChild(makeSubsection('regionBorderMultiEnabled', 'Multi-color borders', function (opt) {
+          var swatchRow = document.createElement('div');
+          Object.assign(swatchRow.style, { display:'flex', alignItems:'center', gap:'6px', marginTop:'6px' });
+          var swatchLbl = document.createElement('span'); swatchLbl.textContent = 'Colors:';
+          Object.assign(swatchLbl.style, { color:'#cdd6f4', fontSize:'12px', flexShrink:'0' });
+          swatchRow.appendChild(swatchLbl);
+          ['regionColorPalette0','regionColorPalette1','regionColorPalette2','regionColorPalette3'].forEach(function (k) {
+            swatchRow.appendChild(makeColorControl(k, null));
+          });
+          opt.appendChild(swatchRow);
+          opt.appendChild(makeWidthRow('regionColorStripeWidth'));
+          opt.appendChild(makeOpacityRow('regionColorOpacity', null));
+        }));
+
+        // ── Subsection 3: Cell borders (recolor the thin built-in grid lines) ──
+        wrap.appendChild(divider());
+        wrap.appendChild(makeSubsection('regionBorderCellEnabled', 'Cell borders', function (opt) {
+          var c = colorRow('Color:', 'regionBorderCellColor', 'regionBorderCellOpacity');
+          opt.appendChild(c.row);
+          opt.appendChild(makeOpacityRow('regionBorderCellOpacity', c.ref));
+        }));
       },
     }));
 
