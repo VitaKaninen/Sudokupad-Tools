@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.125.0
+// @version      2.126.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.125.0';
+  var SCRIPT_VERSION = '2.126.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4259,7 +4259,13 @@
     var btnH      = (refBtn && refBtn.offsetHeight > 0) ? refBtn.offsetHeight : 64;
     var bgBase    = (refStyle && refStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
                       ? refStyle.backgroundColor : 'rgb(34, 36, 38)';
-    var accentCol = refStyle ? refStyle.color       : 'rgb(181, 104, 228)';
+    // Use the live theme variable for the accent (the purple the native buttons
+    // use) rather than a snapshot of a computed colour, so our text/glow no longer
+    // flickers white↔purple as a captured value races DR's conversion at build
+    // time. Prefer DR's text-converted variant (bright purple, readable on the
+    // dark button) — DR only rewrites var usage inside stylesheets, not inline,
+    // so the plain --controls-button-bg would resolve to the dark bg purple here.
+    var accentCol = 'var(--darkreader-text--controls-button-bg, var(--controls-button-bg, rgb(181, 104, 228)))';
     var borderCol = refStyle ? refStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
     var marginVal = refStyle ? refStyle.margin       : '2.4px';
@@ -4404,29 +4410,10 @@
     card.appendChild(regionOp.row);
     card.appendChild(shadedOp.row);
     document.body.appendChild(card);
-
-    // Keep the card's own background/text colours from being inverted by
-    // DarkReader (which otherwise intermittently makes the popup text vanish).
-    // Re-assert our inline colours with !important and strip DR's markers.
-    function refreshCardColors() {
-      card.style.setProperty('background-color', '#1e1e2e', 'important');
-      card.style.setProperty('color', '#cdd6f4', 'important');
-      card.removeAttribute('data-darkreader-inline-bgcolor');
-      card.removeAttribute('data-darkreader-inline-color');
-      card.style.removeProperty('--darkreader-inline-bgcolor');
-      card.style.removeProperty('--darkreader-inline-color');
-      card.querySelectorAll('div, span').forEach(function (el) {
-        if (el.style.color) el.style.setProperty('color', el.style.color, 'important');
-        el.removeAttribute('data-darkreader-inline-color');
-        el.style.removeProperty('--darkreader-inline-color');
-      });
-    }
-    refreshCardColors();
-    new MutationObserver(function (muts) {
-      if (muts.some(function (m) { return m.attributeName && m.attributeName.indexOf('darkreader') !== -1; })) {
-        refreshCardColors();
-      }
-    }).observe(card, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-color', 'data-darkreader-inline-bgcolor'] });
+    // No DR-proofing here on purpose: we let DarkReader convert the card like it
+    // converts SudokuPad's own dark popups (deterministic per value → stable). An
+    // earlier !important + observer approach FOUGHT DR and caused the text to
+    // flicker white↔purple, so it was removed.
 
     // ── Card positioning ──────────────────────────────────────────────────────
     function positionCard() {
@@ -4438,10 +4425,11 @@
     }
 
     function showCard() {
-      // Second slider only makes sense when there are shaded regions to recolor.
-      shadedOp.row.style.display = puzzleHasShadedRegions() ? 'flex' : 'none';
+      // Show only the slider(s) for the active mode: Both → both, Regions →
+      // region only, Shaded → shaded only.
+      regionOp.row.style.display = settings.regionColorFillEnabled ? 'flex' : 'none';
+      shadedOp.row.style.display = (settings.shadedRegionColorEnabled && puzzleHasShadedRegions()) ? 'flex' : 'none';
       regionOp.sync(); shadedOp.sync();
-      refreshCardColors();
       positionCard(); card.style.display = 'block';
     }
     function hideCard() { card.style.display = 'none'; }
