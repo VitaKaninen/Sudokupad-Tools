@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.141.0
+// @version      2.142.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.141.0';
+  var SCRIPT_VERSION = '2.142.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2194,8 +2194,15 @@
     // extraKeys / extraEnabledKeys: additional setting keys driven to the SAME
     // value / checked state as key / enabledKey — used by the "combined" object-
     // shading sliders that lock brightness and opacity together.
+    // Two-line layout so every slider is identical width regardless of label
+    // length or whether a checkbox is present: a header line (checkbox + label +
+    // value) above a full-width slider. This keeps all range rows uniform across
+    // sections and across the object-shading combined/separate modes.
     var row = document.createElement('div');
-    Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' });
+    Object.assign(row.style, { marginTop: '6px' });
+
+    var header = document.createElement('div');
+    Object.assign(header.style, { display: 'flex', alignItems: 'center', gap: '6px' });
 
     // Optional checkbox: when present, dims/disables the slider when unchecked.
     var checkbox = null;
@@ -2212,18 +2219,18 @@
 
     var lbl = document.createElement('span');
     lbl.textContent = opts.label + ':';
-    Object.assign(lbl.style, { color: '#a6adc8', fontSize: '11px', flexShrink: '0', width: opts.enabledKey ? '100px' : '72px' });
+    Object.assign(lbl.style, { color: '#a6adc8', fontSize: '11px', flex: '1', minWidth: '0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
 
     var slider = document.createElement('input');
     slider.type = 'range';
     slider.min = opts.min; slider.max = opts.max; slider.step = opts.step;
     slider.value = settings[opts.key];
-    Object.assign(slider.style, { flex: '1', cursor: 'pointer', accentColor: '#89b4fa', minWidth: '0' });
+    Object.assign(slider.style, { width: '100%', cursor: 'pointer', accentColor: '#89b4fa', margin: '3px 0 0', boxSizing: 'border-box' });
 
     var fmt = opts.format || function (v) { return Math.round(v * 100) + '%'; };
     var pct = document.createElement('span');
     pct.textContent = fmt(settings[opts.key]);
-    Object.assign(pct.style, { color: '#a6adc8', fontSize: '11px', width: '40px', textAlign: 'right' });
+    Object.assign(pct.style, { color: '#a6adc8', fontSize: '11px', width: '40px', flexShrink: '0', textAlign: 'right' });
 
     function refreshDim() {
       var enabled = !checkbox || checkbox.checked;
@@ -2265,8 +2272,9 @@
       refreshDim();
     };
 
-    if (checkbox) row.appendChild(checkbox);
-    row.appendChild(lbl); row.appendChild(slider); row.appendChild(pct);
+    if (checkbox) header.appendChild(checkbox);
+    header.appendChild(lbl); header.appendChild(pct);
+    row.appendChild(header); row.appendChild(slider);
     return row;
   }
 
