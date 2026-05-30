@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.152.0
+// @version      2.153.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.152.0';
+  var SCRIPT_VERSION = '2.153.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4077,7 +4077,7 @@
     content.appendChild(buildSection({
       enabledKey: 'givenEnabled',
       label: 'Given digits',
-      desc: 'Pre-filled clue digits (cell-given class). Overlay constraint labels are left to DarkReader.',
+      desc: 'Recolors the puzzle\'s pre-filled clue digits (the starting numbers given by the author). Digits you enter yourself, and overlay constraint labels, are left untouched.',
       hasColor: true,
       colorKey: 'givenColor',
       opacityKey: 'givenOpacity',
@@ -4087,7 +4087,7 @@
     content.appendChild(buildSection({
       enabledKey: 'labelBgEnabled',
       label: 'Label background',
-      desc: 'Background behind cage sums, little-killer clues, and similar text labels',
+      desc: 'Recolors the small background box behind text labels — cage sums, little-killer clues, and similar. Only puzzles that have such labels are affected.',
       hasColor: true,
       colorKey: 'labelBgColor',
       opacityKey: 'labelBgOpacity',
@@ -4191,7 +4191,7 @@
     content.appendChild(buildSection({
       enabledKey: 'cellColorsOpacityEnabled',
       label: 'Cell shading',
-      desc: 'Adjust the opacity of puzzle-defined colored cells (so borders, pencilmarks, and other elements remain visible beneath them).',
+      desc: 'Sets the opacity of cells that have a background color — either ones the puzzle author filled in, or cells you paint with the color tool — so borders, pencilmarks, and digits stay visible beneath them. No effect on a puzzle with no colored cells.',
       hasColor: false,
       resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
       subBuilder: function (wrap) {
@@ -4202,7 +4202,7 @@
     content.appendChild(buildSection({
       enabledKey: 'centerEnabled',
       label: 'Center pencilmarks',
-      desc: 'Digits entered as center pencilmarks',
+      desc: 'Recolors the small digits you enter as center pencilmarks (the candidates clustered in the middle of a cell). No effect until you place some.',
       hasColor: false,
       resetKeys: ['centerValidColor','centerValidOpacity',
                   'centerInvalidColor','centerInvalidOpacity',
@@ -4218,7 +4218,7 @@
     content.appendChild(buildSection({
       enabledKey: 'cornerEnabled',
       label: 'Corner pencilmarks',
-      desc: 'Digits entered as corner pencilmarks',
+      desc: 'Recolors the small digits you enter as corner pencilmarks (the candidates tucked into a cell\'s corners). No effect until you place some.',
       hasColor: false,
       resetKeys: ['cornerValidColor','cornerValidOpacity',
                   'cornerInvalidColor','cornerInvalidOpacity',
@@ -4234,7 +4234,7 @@
     content.appendChild(buildSection({
       enabledKey: 'kropkiFixEnabled',
       label: 'Kropki dots',
-      desc: 'Fix DarkReader inverting white/black Kropki dot colors.',
+      desc: 'Fixes DarkReader inverting the white/black Kropki dots that sit between cells. Only affects puzzles that have Kropki dots.',
       hasColor: false,
       resetKeys: ['kropkiFixEnabled',
                   'kropkiColonEnabled', 'kropkiBlackLabelText', 'kropkiBlackLabelRotate', 'kropkiOutlineEnabled',
