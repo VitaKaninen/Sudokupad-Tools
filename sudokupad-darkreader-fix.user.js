@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.143.0
+// @version      2.144.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.143.0';
+  var SCRIPT_VERSION = '2.144.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -71,9 +71,9 @@
     underlayGrayBrightnessEnabled: true,
     underlayGrayOpacity:           0.6,   // 0..1; gray fill/line opacity
     underlayGrayOpacityEnabled:    true,
-    underlayStrokeLightness:       0.5,   // 0..1; stroke (shape outline) brightness
+    underlayStrokeLightness:       0.75,  // 0..1; stroke (shape outline) brightness
     underlayStrokeLightnessEnabled:true,
-    underlayStrokeOpacity:         0.5,   // 0..1; stroke (shape outline) opacity
+    underlayStrokeOpacity:         0.75,  // 0..1; stroke (shape outline) opacity
     underlayStrokeOpacityEnabled:  true,
 
     centerEnabled:                 false,
