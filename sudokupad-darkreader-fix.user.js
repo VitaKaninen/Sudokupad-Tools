@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.133.0
+// @version      2.134.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -55,10 +55,9 @@
     labelBgOpacity:                1.0,
 
     underlayEnabled:               true,
-    underlayBrightnessModel:       'absolute', // 'absolute' | 'relative' | 'luminance' — how the Brightness slider maps (see shadingTransform)
-    underlayLightness:             0.5,   // 0..1; fill: 0 = black, 0.5 = pure hue at max saturation, 1 = white
+    underlayLightness:             0.4,   // 0..1; fill: 0 = black, 0.5 = pure hue at max saturation, 1 = white
     underlayLightnessEnabled:      true,
-    underlayOpacity:               0.5,   // 0..1; fill: absolute alpha — 0 = transparent, 1 = fully opaque
+    underlayOpacity:               0.4,   // 0..1; fill: absolute alpha — 0 = transparent, 1 = fully opaque
     underlayOpacityEnabled:        true,
     underlayStrokeLightness:       0.5,   // 0..1; stroke (shape outline): same axis as fill lightness
     underlayStrokeLightnessEnabled:true,
@@ -683,44 +682,16 @@
   // (HSL) by the `underlayInvert` strength to make light pastels darker AND
   // dark colours lighter for dark-mode visibility, then apply the opacity
   // multiplier. Hue and saturation are preserved — colour identity intact.
-  // Perceived (sRGB-weighted, gamma-naive) luma of an [r,g,b] in 0..1.
-  function relLuma(rgb) { return (0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]) / 255; }
-  // Lightness (in HSL, fixed hue+sat) whose resulting colour has perceived
-  // luma ~= target. Luma is monotonic in L for fixed h/s, so bisect.
-  function hslForLuma(h, s, target) {
-    if (target <= 0) return [0, 0, 0];
-    if (target >= 1) return [255, 255, 255];
-    var lo = 0, hi = 1, mid, rgb;
-    for (var i = 0; i < 18; i++) {
-      mid = (lo + hi) / 2; rgb = hslToRgb(h, s, mid);
-      if (relLuma(rgb) < target) lo = mid; else hi = mid;
-    }
-    return hslToRgb(h, s, (lo + hi) / 2);
-  }
 
   // Shared lightness transform. Returns [r,g,b] from an original colour, mapped
-  // by the Brightness slider L (0..1) according to settings.underlayBrightnessModel:
-  //   'absolute'  — current/original behaviour: pure hue (saturation forced to 1)
-  //                 at absolute HSL lightness L. 0=black, 0.5=pure hue, 1=white.
-  //                 Discards the source colour's saturation & lightness, so a fixed
-  //                 slider looks different per hue (green vs blue perceived brightness).
-  //   'relative'  — keep the source hue + saturation + relative lightness; L scales
-  //                 it: 0.5 = original colour, <0.5 fades to black, >0.5 fades to white.
-  //   'luminance' — keep hue + saturation but pick the lightness whose *perceived*
-  //                 luma equals L, so every hue reads equally bright at a given slider.
+  // by the Brightness slider L (0..1): pure hue (saturation forced to 1) at
+  // absolute HSL lightness L. 0=black, 0.5=pure hue, 1=white. Discards the source
+  // colour's saturation & lightness, so a fixed slider looks different per hue
+  // (green vs blue perceived brightness).
   function shadingTransform(c, L) {
     if (L < 0) L = 0; else if (L > 1) L = 1;
     var hsl = rgbToHsl(c.r, c.g, c.b);
-    var h = hsl[0], s = hsl[1], origL = hsl[2];
-    var model = settings.underlayBrightnessModel || 'absolute';
-    if (model === 'relative') {
-      var nl = (L <= 0.5) ? origL * (L / 0.5) : origL + (1 - origL) * ((L - 0.5) / 0.5);
-      return hslToRgb(h, s, nl);
-    }
-    if (model === 'luminance') {
-      return hslForLuma(h, s, L);
-    }
-    // 'absolute' (default)
+    var h = hsl[0], s = hsl[1];
     if (s === 0) {
       var v = Math.round(L * 255);
       return [v, v, v];
@@ -3915,18 +3886,12 @@
       desc: 'Tint and outline puzzle objects drawn as underlays — shape backgrounds, cage fills, and their borders.',
       hasColor: false,
       resetKeys: [
-        'underlayBrightnessModel',
         'underlayLightness','underlayLightnessEnabled',
         'underlayOpacity','underlayOpacityEnabled',
         'underlayStrokeLightness','underlayStrokeLightnessEnabled',
         'underlayOverlayEnabled',
       ],
       subBuilder: function (wrap) {
-        wrap.appendChild(makeRadioRow('Brightness mode', 'underlayBrightnessModel', [
-          { value: 'absolute',  label: 'Absolute' },
-          { value: 'relative',  label: 'Relative' },
-          { value: 'luminance', label: 'Perceptual' },
-        ]));
         wrap.appendChild(makeRangeRow({ key: 'underlayLightness', enabledKey: 'underlayLightnessEnabled', label: 'Brightness', min: 0, max: 1, step: 0.05 }));
         wrap.appendChild(makeRangeRow({ key: 'underlayOpacity',   enabledKey: 'underlayOpacityEnabled',   label: 'Opacity',   min: 0, max: 1, step: 0.05 }));
         wrap.appendChild(makeRangeRow({ key: 'underlayStrokeLightness', enabledKey: 'underlayStrokeLightnessEnabled', label: 'Border brightness', min: 0, max: 1, step: 0.05 }));
