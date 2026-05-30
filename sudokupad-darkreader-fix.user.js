@@ -12,30 +12,6 @@
 // @run-at       document-start
 // ==/UserScript==
 
-/*
- * SudokuPad DarkReader Fix — what this script does
- * ------------------------------------------------
- * A Tampermonkey/userscript-manager script for SudokuPad (sudokupad.app,
- * beta.sudokupad.app, and the Cracking the Cryptic puzzle domains) that
- * repairs DarkReader / dark-theme rendering glitches and layers on a set of
- * quality-of-life features. Reference environments: Chrome+TamperMonkey,
- * LibreWolf/Brave+ViolentMonkey, all with the DarkReader extension.
- * Implemented as a single ~4,200-line IIFE.
- *
- * DarkReader fixes (the original purpose): white label boxes, black colour
- * swatches, SVG text halos, invisible given digits, underlay fill/stroke
- * distortion, cage-box strokes, Kropki dot inversion, region-border strips,
- * and thermo shaft/bulb mismatch.
- *
- * Added features: per-region multi-colour split borders, shaded-region
- * colouring of grey "extra regions", cell-selection-border customization,
- * action buttons (Fill / Clear / Clear All), cell + Object/underlay shading
- * with brightness modes, an in-page settings panel, and `window.spdrVersion`
- * for one-query version verification. Preferences persist via localStorage.
- *
- * See docs/PROJECT_SUMMARY.md and docs/LESSONS_LEARNED.md for details.
- */
-
 (function () {
   'use strict';
 
