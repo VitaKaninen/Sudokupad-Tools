@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.124.0
+// @version      2.125.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.124.0';
+  var SCRIPT_VERSION = '2.125.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -275,10 +275,11 @@
 
     // Always-on: colour-swatch palette restoration (DR overrides --cell-color-N).
     // The selector repeats the attribute ([…][data-darkreader-scheme]) to raise
-    // specificity to (0,2,1) — above DarkReader's own (0,1,1) --cell-color rule —
-    // so we win regardless of stylesheet order. (Belt-and-suspenders with the
-    // head guard that keeps our <style> last; the swatches were intermittently
-    // black on first load when DR's sheet landed after ours.)
+    // specificity to (0,2,1), above DarkReader's own (0,1,1) --cell-color rules.
+    // (This is a load-timing race — DR can momentarily win while it processes; a
+    // reload clears it. We don't try to keep our <style> last: DR inserts a
+    // darkreader--sync sheet after EVERY <style> including ours, so that fight is
+    // unwinnable and only causes thrash.)
     css += `
     html[data-darkreader-scheme="dark"][data-darkreader-scheme] {
       --cell-color-0: transparent !important;
@@ -327,30 +328,10 @@
   }
   rebuildStyleTag();
 
-  // Keep our override stylesheet LAST in <head>. DarkReader injects its own
-  // <style> sheets during/after load; for rules of equal specificity the later
-  // sheet wins on cascade order, which is why the colour swatches were
-  // intermittently black on first load (DR's sheet sometimes landed after ours).
-  // Re-appending ours whenever <head> changes makes our restoration win
-  // deterministically. (Moving our own node fires the observer once more, but it
-  // is then already last → no-op, so there is no loop, and DR does not react to
-  // our non-DR node moving.)
-  var headStyleObserver = null;
-  function startStyleTagGuard() {
-    if (headStyleObserver) return;
-    var head = document.head || document.documentElement;
-    if (!head) return;
-    headStyleObserver = new MutationObserver(function () {
-      if (styleTag && styleTag.parentNode === head && head.lastElementChild !== styleTag) {
-        head.appendChild(styleTag);
-      }
-    });
-    headStyleObserver.observe(head, { childList: true });
-  }
-  startStyleTagGuard();
-
+  var easyShadeSwatchRefresh = null; // set by buildEasyRegionShadeButton; keeps its swatches in sync with the palette
   function applySettings() {
     rebuildStyleTag();
+    if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
     if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllThermoShafts(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
@@ -778,17 +759,21 @@
 
   var CAGE_FILL_SEL = '#cages path[fill]:not([fill="none"])';
 
-  // Shaded "extra regions" (e.g. "grey regions must contain 1-9"). When the
-  // Easy Shade shaded-region mode is on, each cage-extraregion path carries a
-  // precomputed palette index in dataset.spdrExtraColorIdx (set by
-  // assignExtraRegionColors). The COLOUR is drawn by a recoloured clone inside
-  // mainGroup (drawRegionSplitBorders), positioned BELOW the region borders.
-  // Here we just hide the original #cages path so its grey fill doesn't render
-  // on top of the borders. Re-asserted on DR rewrites via the #cages observer.
-  function isExtraRegionColored(path) {
-    return settings.shadedRegionColorEnabled
-      && path.classList.contains('cage-extraregion')
-      && path.dataset.spdrExtraColorIdx != null;
+  // Whether any region feature is active (so mainGroup exists / region borders
+  // are drawn). Mirrors needFills/needMultiBorders/needCenterBorder + shaded.
+  function regionFeatureActive() {
+    return !!settings.regionColorFillEnabled
+      || (settings.regionBorderEnabled && (settings.regionBorderMultiEnabled || settings.regionBorderCenterEnabled))
+      || !!settings.shadedRegionColorEnabled;
+  }
+  // Shaded "extra regions" (e.g. "grey regions must contain 1-9") render on top
+  // of region borders by default (they live in #cages, above mainGroup). Whenever
+  // a region feature is active we instead draw a clone of each one INSIDE mainGroup
+  // (drawRegionSplitBorders), below the border strips — coloured if shaded mode is
+  // on, otherwise the same grey Object-shaded look. So here we hide the original
+  // #cages path so it doesn't paint over the borders. Re-asserted on DR rewrites.
+  function extraRegionsMovedBelowBorders() {
+    return regionFeatureActive() && puzzleHasShadedRegions();
   }
   function applyExtraRegionFill(path) {
     path.style.setProperty('fill', 'transparent', 'important');
@@ -797,7 +782,7 @@
     path.style.removeProperty('--darkreader-inline-fill');
   }
   function fixCagePath(path) {
-    if (isExtraRegionColored(path)) {
+    if (path.classList.contains('cage-extraregion') && extraRegionsMovedBelowBorders()) {
       applyExtraRegionFill(path);
       applyShapeStroke(path);
       return;
@@ -1500,11 +1485,12 @@
     var needFills        = settings.regionColorFillEnabled;
     var needMultiBorders = settings.regionBorderEnabled && settings.regionBorderMultiEnabled;
     var needCenterBorder = settings.regionBorderEnabled && settings.regionBorderCenterEnabled;
-    // Shaded extra-regions are drawn (as clones) inside mainGroup too, so they
-    // can sit BELOW the region borders. They don't need region geometry, but we
-    // still create mainGroup for them.
-    var needShaded       = settings.shadedRegionColorEnabled && puzzleHasShadedRegions();
-    var geo = (needFills || needMultiBorders || needCenterBorder || needShaded)
+    // Shaded extra-regions are drawn (as clones) inside mainGroup so they sit
+    // BELOW the region borders — coloured when shaded mode is on, otherwise the
+    // same grey. Done whenever any region feature is active (so there are borders
+    // to sit under) and the puzzle actually has shaded regions.
+    var needShadedClones = regionFeatureActive() && puzzleHasShadedRegions();
+    var geo = (needFills || needMultiBorders || needCenterBorder || needShadedClones)
       ? inferRegionsFromSVG() : null;
 
     // Build cell→region map (used by inR() when drawing border strips).
@@ -1531,7 +1517,7 @@
       });
     }
 
-    if (!needFills && !needMultiBorders && !needCenterBorder && !needShaded) return;
+    if (!needFills && !needMultiBorders && !needCenterBorder && !needShadedClones) return;
     if (!geo || geo.regions.length < 2) return;
 
     var regions = geo.regions;
@@ -1768,11 +1754,12 @@
     // inserted as the FIRST children of mainGroup so they render BELOW the region
     // border strips (and the cell-grid clone). The originals are hidden by
     // fixCagePath. Colour index comes from assignExtraRegionColors.
-    if (needShaded) {
+    if (needShadedClones) {
       // Recompute colour indices here so they are fresh regardless of which path
       // triggered this draw (observers call drawRegionSplitBorders independently
       // of applySettings, so we can't rely on a prior assignExtraRegionColors).
       assignExtraRegionColors(svg);
+      var usePalette = !!settings.shadedRegionColorEnabled;
       var shadedGroup = document.createElementNS(NS, 'g');
       shadedGroup.setAttribute('data-spdr-shaded', '1');
       var shOp  = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
@@ -1783,13 +1770,25 @@
         hexToRgba(settings.regionColorPalette3 || '#e8a030', shOp),
       ];
       document.querySelectorAll('#cages path.cage-extraregion').forEach(function (p) {
-        if (p.dataset.spdrExtraColorIdx == null) return; // no colour assigned (e.g. geometry failed)
-        var idx = parseInt(p.dataset.spdrExtraColorIdx, 10) || 0;
         var clone = document.createElementNS(NS, 'path');
         clone.setAttribute('d', p.getAttribute('d') || '');
         clone.setAttribute('pointer-events', 'none');
-        clone.style.setProperty('fill', shPal[idx % 4], 'important');
         clone.style.setProperty('stroke', 'none', 'important');
+        if (usePalette && p.dataset.spdrExtraColorIdx != null) {
+          var idx = parseInt(p.dataset.spdrExtraColorIdx, 10) || 0;
+          clone.style.setProperty('fill', shPal[idx % 4], 'important');
+        } else {
+          // Grey (shaded mode off, or no colour assigned): reproduce the original's
+          // Object-shaded look so it just moves below the borders unchanged.
+          var gc = parseColor(p.getAttribute('fill') || '');
+          if (gc && gc.a !== 0) {
+            var rgb = (settings.underlayEnabled && settings.underlayLightnessEnabled)
+              ? shadingTransform(gc, settings.underlayLightness) : [gc.r, gc.g, gc.b];
+            var fa = (settings.underlayEnabled && settings.underlayOpacityEnabled)
+              ? settings.underlayOpacity : gc.a;
+            clone.style.setProperty('fill', 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fa + ')', 'important');
+          }
+        }
         shadedGroup.appendChild(clone);
       });
       mainGroup.insertBefore(shadedGroup, mainGroup.firstChild);
@@ -4296,14 +4295,37 @@
     });
     lbl.textContent = 'Easy\nShade';
 
+    // Four swatches mirroring the current Multi-color border palette
+    // (regionColorPalette0-3). They are plain coloured <div>s, not icons, so they
+    // always reflect the chosen colours. setProperty !important + stripping DR's
+    // markers keeps DarkReader from darkening them; refreshSwatches re-asserts on
+    // palette change (via applySettings) and on DR rewrites (via the observer).
     var swatches = document.createElement('div');
     Object.assign(swatches.style, { display: 'flex', gap: '2px', pointerEvents: 'none' });
-    [settings.regionColorPalette0, settings.regionColorPalette1,
-     settings.regionColorPalette2, settings.regionColorPalette3].forEach(function (hex) {
+    var swatchEls = [];
+    for (var _si = 0; _si < 4; _si++) {
       var sq = document.createElement('div');
-      Object.assign(sq.style, { width: '8px', height: '8px', borderRadius: '1px', backgroundColor: hex || '#888' });
+      Object.assign(sq.style, { width: '8px', height: '8px', borderRadius: '1px' });
       swatches.appendChild(sq);
-    });
+      swatchEls.push(sq);
+    }
+    function refreshSwatches() {
+      var pal = [settings.regionColorPalette0, settings.regionColorPalette1,
+                 settings.regionColorPalette2, settings.regionColorPalette3];
+      swatchEls.forEach(function (sq, i) {
+        sq.style.setProperty('background-color', pal[i] || '#888', 'important');
+        sq.removeAttribute('data-darkreader-inline-bgcolor');
+        sq.style.removeProperty('--darkreader-inline-bgcolor');
+      });
+    }
+    refreshSwatches();
+    easyShadeSwatchRefresh = refreshSwatches; // let applySettings keep them current
+    // Re-assert swatch colours if DarkReader rewrites them.
+    new MutationObserver(function (muts) {
+      if (muts.some(function (m) { return m.attributeName && m.attributeName.indexOf('darkreader') !== -1; })) {
+        refreshSwatches();
+      }
+    }).observe(swatches, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-bgcolor'] });
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
@@ -4383,6 +4405,29 @@
     card.appendChild(shadedOp.row);
     document.body.appendChild(card);
 
+    // Keep the card's own background/text colours from being inverted by
+    // DarkReader (which otherwise intermittently makes the popup text vanish).
+    // Re-assert our inline colours with !important and strip DR's markers.
+    function refreshCardColors() {
+      card.style.setProperty('background-color', '#1e1e2e', 'important');
+      card.style.setProperty('color', '#cdd6f4', 'important');
+      card.removeAttribute('data-darkreader-inline-bgcolor');
+      card.removeAttribute('data-darkreader-inline-color');
+      card.style.removeProperty('--darkreader-inline-bgcolor');
+      card.style.removeProperty('--darkreader-inline-color');
+      card.querySelectorAll('div, span').forEach(function (el) {
+        if (el.style.color) el.style.setProperty('color', el.style.color, 'important');
+        el.removeAttribute('data-darkreader-inline-color');
+        el.style.removeProperty('--darkreader-inline-color');
+      });
+    }
+    refreshCardColors();
+    new MutationObserver(function (muts) {
+      if (muts.some(function (m) { return m.attributeName && m.attributeName.indexOf('darkreader') !== -1; })) {
+        refreshCardColors();
+      }
+    }).observe(card, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-color', 'data-darkreader-inline-bgcolor'] });
+
     // ── Card positioning ──────────────────────────────────────────────────────
     function positionCard() {
       var r = btn.getBoundingClientRect();
@@ -4396,6 +4441,7 @@
       // Second slider only makes sense when there are shaded regions to recolor.
       shadedOp.row.style.display = puzzleHasShadedRegions() ? 'flex' : 'none';
       regionOp.sync(); shadedOp.sync();
+      refreshCardColors();
       positionCard(); card.style.display = 'block';
     }
     function hideCard() { card.style.display = 'none'; }
@@ -4448,7 +4494,6 @@
     btn.addEventListener('click', function () {
       var reg = !!settings.regionColorFillEnabled;
       var shd = !!settings.shadedRegionColorEnabled;
-      var wasActive = reg || shd;
       if (puzzleHasShadedRegions()) {
         // 4-state cycle: off → Both → Regions → Shaded → off.
         if      (!reg && !shd) { reg = true;  shd = true;  }
@@ -4463,11 +4508,9 @@
       settings.shadedRegionColorEnabled = shd;
       saveSettings(settings); applySettings();
       applyToggleStyle();
-      if (!wasActive && (reg || shd)) {
-        // Just activated from fully off — show the card.
-        setTimeout(showCard, 0);
-      }
-      // If fully deactivated, applyToggleStyle already called hideCard().
+      // Show the card for every active mode (Both / Regions / Shaded); only the
+      // off state leaves it hidden (applyToggleStyle already called hideCard()).
+      if (reg || shd) setTimeout(showCard, 0);
     });
 
     // Sync when the settings panel's reset button fires.

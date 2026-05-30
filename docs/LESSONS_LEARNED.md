@@ -31,7 +31,8 @@ DarkReader overrides SVG fills two ways:
 
 ## Cascade / load-order
 
-- ✅ **Keep our `<style id="sp-darkreader-fix">` LAST in `<head>`** (v2.124, `startStyleTagGuard`). DarkReader injects its own stylesheets during/after load; for equal-specificity rules the later sheet wins, which made the colour swatches **intermittently black on first load** (DR's `--cell-color` sheet sometimes landed after ours; a reload "fixed" it). A `<head>` childList observer re-appends our tag whenever head changes (moving our own node fires it once more → already last → no-op, no loop). Belt-and-suspenders: the `--cell-color` block selector repeats the attribute (`html[data-darkreader-scheme="dark"][data-darkreader-scheme]`, specificity (0,2,1)) to beat DR's (0,1,1) regardless of order.
+- ❌ **Don't try to keep our `<style>` last in `<head>`** (tried v2.124 `startStyleTagGuard`, reverted v2.125). DarkReader inserts a `darkreader--sync` `<style>` immediately **after every** `<style>` it manages — *including ours* — so "be last" is unwinnable: DR just re-syncs after us. A `<head>` observer that re-appends ours fights DR's observer and only causes thrash. The colour-swatch black-on-load is a genuine DR load-timing race (a reload clears it); the `--cell-color` specificity bump (`html[data-darkreader-scheme="dark"][data-darkreader-scheme]`, (0,2,1)) helps but isn't a guaranteed fix.
+- ✅ **For colours on our OWN injected UI, use inline `!important` + a DR-attribute observer, not CSS.** The Easy Shade button swatches and the opacity card were intermittently darkened/blanked by DR. Fix: set `background-color`/`color` via `style.setProperty(..., 'important')`, strip `data-darkreader-inline-*` markers, and re-assert from a small `MutationObserver` filtered on `data-darkreader-inline-*` (swatches/card subtree). The button swatches also re-assert via `applySettings` (so they track palette changes too).
 
 ## Border-strip drawing
 
