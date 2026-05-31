@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.162.0
+// @version      2.163.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.162.0';
+  var SCRIPT_VERSION = '2.163.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2709,16 +2709,15 @@
       positionOverlay();
       var di = 0, screenRects = [], svgUsed = false, cs = getGridCellSize();
       // De-dupe mode (object shading): each shaded cell is a small INSET rect, so
-      // outlining every one draws parallel lines between neighbours. Instead snap
-      // each axis-aligned rect to its GRID CELL and keep only edges that belong to a
-      // single cell (count === 1) → one clean outline around the whole shaded region.
+      // outlining every one draws parallel lines between neighbours. Instead we build
+      // the SET of grid cells that contain a shaded rect, then draw a perimeter edge
+      // only where the neighbouring cell is NOT in the set → one clean outline around
+      // the whole shaded region, with no interior lines. (A cell-set, not edge-count,
+      // so it's robust when a cell holds several shaded elements — underlay + overlay.)
       // Rotated rects (e.g. diamond markers) and non-rects fall through to tracing.
-      var edgeMap = {};
-      function addEdge(p1, p2) {
-        var a = Math.round(p1.x) + ',' + Math.round(p1.y), b = Math.round(p2.x) + ',' + Math.round(p2.y);
-        var k = a < b ? a + '|' + b : b + '|' + a;
-        if (edgeMap[k]) edgeMap[k].n++; else edgeMap[k] = { p1: p1, p2: p2, n: 1 };
-      }
+      var boardEl = document.getElementById('svgrenderer');
+      var boardCTM = (dedupe && cs && boardEl && boardEl.getScreenCTM) ? boardEl.getScreenCTM() : null;
+      var cellSet = {};
       els.forEach(function (el) {
         var r = el.getBoundingClientRect && el.getBoundingClientRect();
         if (r && (r.width || r.height)) screenRects.push(r);
@@ -2728,14 +2727,11 @@
           var m; try { m = el.getScreenCTM(); } catch (e) { m = null; }
           if (!m) return;
           var rotated = Math.abs(m.b) > 0.01 || Math.abs(m.c) > 0.01;
-          if (dedupe && tag === 'rect' && !rotated && cs) {
-            // Snap to the grid cell this rect sits in; collect that cell's 4 edges.
+          if (boardCTM && tag === 'rect' && !rotated) {
+            // Record which grid cell this shaded rect occupies (deduped by cell).
             var x = parseFloat(el.getAttribute('x')) || 0, y = parseFloat(el.getAttribute('y')) || 0,
                 w = parseFloat(el.getAttribute('width')) || 0, h = parseFloat(el.getAttribute('height')) || 0;
-            var sx = Math.floor((x + w / 2) / cs) * cs, sy = Math.floor((y + h / 2) / cs) * cs;
-            function P(ux, uy) { return { x: m.a * ux + m.c * uy + m.e, y: m.b * ux + m.d * uy + m.f }; }
-            addEdge(P(sx, sy), P(sx + cs, sy)); addEdge(P(sx + cs, sy), P(sx + cs, sy + cs));
-            addEdge(P(sx + cs, sy + cs), P(sx, sy + cs)); addEdge(P(sx, sy + cs), P(sx, sy));
+            cellSet[Math.floor((x + w / 2) / cs) + ',' + Math.floor((y + h / 2) / cs)] = 1;
             svgUsed = true;
             return;
           }
@@ -2766,17 +2762,26 @@
           flash(b);
         }
       });
-      // Draw only the region PERIMETER (edges belonging to a single cell); shared
-      // interior edges (count > 1) are dropped, so the block reads as one outline.
-      Object.keys(edgeMap).forEach(function (k) {
-        var e = edgeMap[k]; if (e.n !== 1) return;
-        var ln = document.createElementNS(NS, 'line');
-        ln.setAttribute('x1', e.p1.x); ln.setAttribute('y1', e.p1.y);
-        ln.setAttribute('x2', e.p2.x); ln.setAttribute('y2', e.p2.y);
-        ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', '2.5'); ln.setAttribute('stroke-opacity', '1');
-        ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
-        osvg.appendChild(ln);
-      });
+      // Trace the perimeter of the occupied-cell set: draw an edge only where the
+      // adjacent cell is empty. Contiguous cells merge into one clean outline.
+      if (boardCTM) {
+        function PT(ux, uy) { return { x: boardCTM.a * ux + boardCTM.c * uy + boardCTM.e, y: boardCTM.b * ux + boardCTM.d * uy + boardCTM.f }; }
+        function seg(p1, p2) {
+          var ln = document.createElementNS(NS, 'line');
+          ln.setAttribute('x1', p1.x); ln.setAttribute('y1', p1.y); ln.setAttribute('x2', p2.x); ln.setAttribute('y2', p2.y);
+          ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', '2.5'); ln.setAttribute('stroke-opacity', '1');
+          ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+          osvg.appendChild(ln);
+        }
+        Object.keys(cellSet).forEach(function (k) {
+          var p = k.split(','), cx = +p[0], cy = +p[1];
+          var x0 = cx * cs, y0 = cy * cs, x1 = x0 + cs, y1 = y0 + cs;
+          if (!cellSet[cx + ',' + (cy - 1)]) seg(PT(x0, y0), PT(x1, y0)); // top
+          if (!cellSet[cx + ',' + (cy + 1)]) seg(PT(x0, y1), PT(x1, y1)); // bottom
+          if (!cellSet[(cx - 1) + ',' + cy]) seg(PT(x0, y0), PT(x0, y1)); // left
+          if (!cellSet[(cx + 1) + ',' + cy]) seg(PT(x1, y0), PT(x1, y1)); // right
+        });
+      }
       for (; di < divPool.length; di++) divPool[di].style.display = 'none';
       if (svgUsed) flash(osvg); else osvg.style.display = 'none';
       dimPanel(screenRects);
