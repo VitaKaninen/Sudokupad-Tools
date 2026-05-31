@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.158.0
+// @version      2.159.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.158.0';
+  var SCRIPT_VERSION = '2.159.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2670,18 +2670,9 @@
     function clearSvg() { while (osvg.firstChild) osvg.removeChild(osvg.firstChild); }
     // Restart the one-shot flash-then-hold animation on an element.
     function flash(el) { el.style.animation = 'none'; void el.getBoundingClientRect(); el.style.animation = 'spdrHiFade 430ms ease-out 1 forwards'; }
-    // Per-element paint inference: glow the property the element actually paints —
-    // its FILL if it's a filled shape (so we light up the shape itself, not just
-    // outline it), else its STROKE (so a line/border traces as a glowing line).
-    function inferPaint(el) {
-      var f = el.getAttribute && el.getAttribute('fill'); var fc = f && f !== 'none' ? parseColor(f) : null;
-      if (fc && fc.a !== 0) return 'fill';
-      var s = el.getAttribute && el.getAttribute('stroke'); var sc = s && s !== 'none' ? parseColor(s) : null;
-      if (sc && sc.a !== 0) return 'stroke';
-      return 'stroke';
-    }
     // Style a cloned svg node as a highlight. paint 'fill' glows the filled area;
-    // 'stroke' traces the outline/line. Constant on-screen width via non-scaling.
+    // 'stroke' (the default for every target) traces the outline/line. Constant
+    // on-screen width via non-scaling-stroke.
     function styleNode(node, m, paint) {
       node.removeAttribute('id'); node.removeAttribute('class');
       node.removeAttribute('data-darkreader-inline-stroke'); node.removeAttribute('data-darkreader-inline-fill');
@@ -2719,7 +2710,9 @@
         if (typeof el.getScreenCTM === 'function') {
           var m; try { m = el.getScreenCTM(); } catch (e) { m = null; }
           if (!m) return;
-          var tag = el.tagName.toLowerCase(), node, mode = paint || inferPaint(el);
+          // Default: trace the OUTLINE (a glowing line around the object / along
+          // the line). Only an explicit PAINT[key]='fill' opts into a filled glow.
+          var tag = el.tagName.toLowerCase(), node, mode = paint || 'stroke';
           if (tag === 'text' || tag === 'tspan') {
             var bb; try { bb = el.getBBox(); } catch (e) { bb = null; }
             if (!bb || (!bb.width && !bb.height)) return;
@@ -2943,10 +2936,10 @@
     easyShade:     function () { return firstOf('#sp-easy-shade-btn'); },
   };
 
-  // Paint override per key (default = per-element inference in spdrHi). Only needed
-  // where inference would pick the wrong property: object Borders target filled
-  // shapes but we want their OUTLINE to glow, not the fill.
-  var PAINT = { objBorders: 'stroke' };
+  // Paint override per key. Default for every target is 'stroke' (a glowing line
+  // tracing the object/line outline). Add an entry here ONLY to opt a specific key
+  // into a filled glow (PAINT[key]='fill'); empty for now = everything outlines.
+  var PAINT = {};
 
   // What a click blinks: `force` keys held ON for the preview, `toggle` keys blinked
   // on/off twice. For gated sub-effects we force the parent section ON so the blink
