@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.167.0
+// @version      2.168.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.167.0';
+  var SCRIPT_VERSION = '2.168.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -51,9 +51,15 @@
     regionBorderCellOpacity:       1.0,     // cell grid line opacity
     regionBorderCellWidth:         '1',     // cell grid line width (user units) — matches SudokuPad's native grid line
 
-    givenEnabled:                  false,
+    // "Cell digits" section (large in-cell digits, vs the small pencilmarks).
+    // digitsEnabled is the section master; given/user are the two subsections.
+    digitsEnabled:                 true,    // section master toggle
+    givenEnabled:                  false,   // recolor author given clues (#cell-givens text)
     givenColor:                    '#e8e6e3',
     givenOpacity:                  1.0,
+    userDigitEnabled:              false,   // recolor digits the solver places (#cell-values text)
+    userDigitColor:                '#5b9bd5',
+    userDigitOpacity:              1.0,
 
     labelBgEnabled:                true,
     labelBgColor:                  '#181A1B',   // DarkReader neutral background; white label text stays readable
@@ -112,6 +118,8 @@
     kropkiConsecLabelEnabled:     true,   // show label on consecutive (white) dots
     kropkiConsecLabelText:        '~',    // label text for consecutive (white) dots
     kropkiConsecLabelRotate:      false,  // rotate that label 90° when dot is on a horizontal border
+    kropkiLabelSize:              18,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
+    kropkiLabelWeight:            'bold', // font-weight for both Kropki dot labels — bolder default than the old 'normal'
 
     selectionColorEnabled:        false,
     selectionColor:               '#3399ff',
@@ -353,7 +361,7 @@
     rebuildStyleTag();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -1054,7 +1062,7 @@
   // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
   // they have no cell-given class and DarkReader handles their colour correctly.
   function fixGivenText(t) {
-    if (settings.givenEnabled) {
+    if (settings.digitsEnabled && settings.givenEnabled) {
       var color = hexToRgba(settings.givenColor, settings.givenOpacity);
       t.style.setProperty('fill', color, 'important');
       t.removeAttribute('data-darkreader-inline-color');
@@ -1067,6 +1075,23 @@
   }
   function fixAllGivens(svg) {
     svg.querySelectorAll('#cell-givens text, text.cell-given').forEach(fixGivenText);
+  }
+  // User-entered (placed) digits — the values the solver types into cells
+  // (#cell-values text). Same inline-fill approach as givens so DR can't re-convert.
+  function fixUserText(t) {
+    if (settings.digitsEnabled && settings.userDigitEnabled) {
+      var color = hexToRgba(settings.userDigitColor, settings.userDigitOpacity);
+      t.style.setProperty('fill', color, 'important');
+      t.removeAttribute('data-darkreader-inline-color');
+      t.removeAttribute('data-darkreader-inline-fill');
+      t.style.removeProperty('--darkreader-inline-color');
+      t.style.removeProperty('--darkreader-inline-fill');
+    } else {
+      t.style.removeProperty('fill');
+    }
+  }
+  function fixAllUserDigits(svg) {
+    svg.querySelectorAll('#cell-values text, text.cell-value').forEach(fixUserText);
   }
 
   // ── Kropki dot color fix ──────────────────────────────────────────────────────
@@ -1291,8 +1316,9 @@
       t.setAttribute('y', cy);
       t.setAttribute('text-anchor', 'middle');
       t.setAttribute('dominant-baseline', 'central');
-      t.setAttribute('font-size', '13');
-      t.setAttribute('font-weight', 'normal');
+      var lblSize = parseFloat(settings.kropkiLabelSize); if (!isFinite(lblSize) || lblSize <= 0) lblSize = 18;
+      t.setAttribute('font-size', lblSize);
+      t.setAttribute('font-weight', settings.kropkiLabelWeight || 'bold');
       t.setAttribute('pointer-events', 'none');
       t.setAttribute('data-spdr-kropki-label', labelFill);  // store intended fill colour
       t.textContent = labelText;
@@ -1350,6 +1376,7 @@
     fixAllCagePaths(svg);
     fixAllLines(svg);
     fixAllGivens(svg);
+    fixAllUserDigits(svg);
     fixAllKropkiDots(svg);
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
@@ -1371,12 +1398,14 @@
               if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
+              else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-color') {
             if (el.tagName === 'text') {
               if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
+              else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-stroke') {
             // Lines: DR re-converts the stroke after our scan.
@@ -1394,7 +1423,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
     }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
   }
 
@@ -2724,11 +2753,22 @@
           var m; try { m = el.getScreenCTM(); } catch (e) { m = null; }
           if (!m) return;
           var rotated = Math.abs(m.b) > 0.01 || Math.abs(m.c) > 0.01;
-          if (boardCTM && tag === 'rect' && !rotated) {
-            // Record which grid cell this shaded rect occupies (deduped by cell).
-            var x = parseFloat(el.getAttribute('x')) || 0, y = parseFloat(el.getAttribute('y')) || 0,
-                w = parseFloat(el.getAttribute('width')) || 0, h = parseFloat(el.getAttribute('height')) || 0;
-            cellSet[Math.floor((x + w / 2) / cs) + ',' + Math.floor((y + h / 2) / cs)] = 1;
+          // 'persquare' dedupe (Cell shading) also accepts <path> cell-colors — a
+          // multi-color cell is split into triangular path halves, so we map each
+          // half to its grid cell via getBBox and draw one clean square per cell,
+          // exactly like a single-color cell. Other dedupe keys stay rect-only.
+          if (boardCTM && !rotated && (tag === 'rect' || (dedupe === 'persquare' && tag === 'path'))) {
+            var bx, by, bw, bh;
+            if (dedupe === 'persquare') {
+              var bb; try { bb = el.getBBox(); } catch (e) { bb = null; }
+              if (!bb || (!bb.width && !bb.height)) return;
+              bx = bb.x; by = bb.y; bw = bb.width; bh = bb.height;
+            } else {
+              bx = parseFloat(el.getAttribute('x')) || 0; by = parseFloat(el.getAttribute('y')) || 0;
+              bw = parseFloat(el.getAttribute('width')) || 0; bh = parseFloat(el.getAttribute('height')) || 0;
+            }
+            // Record which grid cell this shaded element occupies (deduped by cell).
+            cellSet[Math.floor((bx + bw / 2) / cs) + ',' + Math.floor((by + bh / 2) / cs)] = 1;
             svgUsed = true;
             return;
           }
@@ -2770,13 +2810,18 @@
           ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
           osvg.appendChild(ln);
         }
+        // 'persquare' (Cell shading) draws a full square around every occupied cell —
+        // one clean box per colored cell (single- or multi-color look identically).
+        // Merge mode (object shading) draws an edge only where the neighbour is empty,
+        // collapsing a contiguous shaded block into one union outline.
+        var drawAll = (dedupe === 'persquare');
         Object.keys(cellSet).forEach(function (k) {
           var p = k.split(','), cx = +p[0], cy = +p[1];
           var x0 = cx * cs, y0 = cy * cs, x1 = x0 + cs, y1 = y0 + cs;
-          if (!cellSet[cx + ',' + (cy - 1)]) seg(PT(x0, y0), PT(x1, y0)); // top
-          if (!cellSet[cx + ',' + (cy + 1)]) seg(PT(x0, y1), PT(x1, y1)); // bottom
-          if (!cellSet[(cx - 1) + ',' + cy]) seg(PT(x0, y0), PT(x0, y1)); // left
-          if (!cellSet[(cx + 1) + ',' + cy]) seg(PT(x1, y0), PT(x1, y1)); // right
+          if (drawAll || !cellSet[cx + ',' + (cy - 1)]) seg(PT(x0, y0), PT(x1, y0)); // top
+          if (drawAll || !cellSet[cx + ',' + (cy + 1)]) seg(PT(x0, y1), PT(x1, y1)); // bottom
+          if (drawAll || !cellSet[(cx - 1) + ',' + cy]) seg(PT(x0, y0), PT(x0, y1)); // left
+          if (drawAll || !cellSet[(cx + 1) + ',' + cy]) seg(PT(x1, y0), PT(x1, y1)); // right
         });
       }
       for (; di < divPool.length; di++) divPool[di].style.display = 'none';
@@ -2993,7 +3038,8 @@
   }
 
   var HT = {
-    given:         function () { return hqa('#cell-givens text, text.cell-given'); },
+    given:         function () { var e = hqa('#cell-givens text, text.cell-given'); return e.length ? e : firstOf('#control-normal'); },
+    userDigit:     function () { var e = hqa('#cell-values text, text.cell-value'); return e.length ? e : firstOf('#control-normal'); },
     // Mirrors fixLabelRect: LABEL_RECT_SEL minus COLOURED (saturated) fills — those are
     // author-coloured cosmetic shapes that fixLabelRect now skips (Object shading owns
     // them). Still overlaps Kropki on the white/black circular textbg dots (accurate).
@@ -3005,9 +3051,12 @@
     selection:     function () { return hqa('#cell-highlights path.cage-selectioncage'); },
     cellColors:    function () { var e = hqa('#cell-colors > *'); return e.length ? e : firstOf('#control-colour'); },
     centerValid:   function () { var e = hqa('#cell-candidates tspan:not(.conflict)'); return e.length ? e : firstOf('#control-centre'); },
-    centerInvalid: function () { return hqa('#cell-candidates tspan.conflict'); },
+    // Invalid getters fall back to the tool button (same as the valid ones) so the
+    // eyeball always highlights *something* — which lets dimPanel fade the panel
+    // when that target sits behind it, even on a puzzle with no conflict marks yet.
+    centerInvalid: function () { var e = hqa('#cell-candidates tspan.conflict'); return e.length ? e : firstOf('#control-centre'); },
     cornerValid:   function () { var e = hqa('#cell-pencilmarks text:not(.conflict)'); return e.length ? e : firstOf('#control-corner'); },
-    cornerInvalid: function () { return hqa('#cell-pencilmarks text.conflict'); },
+    cornerInvalid: function () { var e = hqa('#cell-pencilmarks text.conflict'); return e.length ? e : firstOf('#control-corner'); },
     objColored:    function () { return objShade(false); },
     objGray:       function () { return objShade(true); },
     objBorders:    function () { return objFillSources().filter(hasPaintedStroke); },
@@ -3027,12 +3076,15 @@
   // tracing the object/line outline). 'fill' opts a key into a filled glow — used
   // for the multi-color border STRIPS, which are thin rects: filling each reads as
   // one clean border bar, whereas outlining them draws doubled parallel lines.
-  var PAINT = { regMulti: 'fill', cellColors: 'bbox' };
+  var PAINT = { regMulti: 'fill' };
 
-  // Keys whose RECT targets should be de-duplicated into a clean union outline
-  // (drop shared internal edges) — object-shading fills/borders are blocks of
-  // adjacent cells; outlining each one separately doubled the shared edges.
-  var DEDUPE = { objColored: 1, objGray: 1, objBorders: 1 };
+  // Keys whose targets should be de-duplicated by grid cell. Value '1' = union
+  // outline (object-shading fills/borders are blocks of adjacent cells; outlining
+  // each doubled shared edges, so we draw the merged perimeter). Value 'persquare'
+  // = one full box per occupied cell (Cell shading — a multi-color cell is split
+  // into triangular path halves, both mapping to the same cell, so it highlights as
+  // a single clean square just like a single-color cell, with no interior split line).
+  var DEDUPE = { objColored: 1, objGray: 1, objBorders: 1, cellColors: 'persquare' };
 
   // Optional hover "example": runs when the icon is entered, may add a transient
   // demo so a blank puzzle still shows what the control affects. Receives a
@@ -3060,6 +3112,58 @@
   // changed since build). Each section registers its updater here.
   var spdrEmptyCheckers = [];
   function refreshEmptyHints() { spdrEmptyCheckers.forEach(function (f) { try { f(); } catch (e) {} }); }
+
+  // A collapsible subsection inside a section: a checkbox row whose options are
+  // hidden until its checkbox is on. If `masterEnabledKey` is given, the row also
+  // greys out + its options collapse whenever that section master is off (used with
+  // buildSection's collapseOptionsWhenDisabled). Returns the box element with a
+  // `_spdrUpd()` method so the section can refresh it on master-toggle.
+  //   opts: enabledKey, masterEnabledKey?, labelText, buildOptions(optDiv), hilite?, hiliteTitle?
+  function makeCollapsibleSubsection(opts) {
+    var box = document.createElement('div');
+    var row = document.createElement('label');
+    Object.assign(row.style, { display:'flex', alignItems:'center', gap:'7px', marginTop:'10px', cursor:'pointer', color:'#cdd6f4', fontSize:'12px' });
+    var cb = document.createElement('input');
+    cb.type = 'checkbox'; cb.checked = !!settings[opts.enabledKey];
+    Object.assign(cb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+    var txt = document.createElement('span'); txt.textContent = opts.labelText;
+    row.appendChild(cb); row.appendChild(txt);
+    if (opts.hilite) row.appendChild(makeHiliteIcon(opts.hilite, opts.hiliteTitle));
+    box.appendChild(row);
+
+    // Optional muted description line under the label (always visible, so the user
+    // sees what the subsection does even while its options are collapsed).
+    if (opts.desc) {
+      var dsc = document.createElement('div');
+      dsc.textContent = opts.desc;
+      Object.assign(dsc.style, { color:'#6c7086', fontSize:'11px', marginTop:'2px', paddingLeft:'20px' });
+      box.appendChild(dsc);
+    }
+
+    var opt = document.createElement('div');
+    Object.assign(opt.style, { paddingLeft:'20px' });
+    opts.buildOptions(opt);
+    box.appendChild(opt);
+
+    function masterOn() { return !opts.masterEnabledKey || !!settings[opts.masterEnabledKey]; }
+    function upd() {
+      var on = !!settings[opts.enabledKey], mOn = masterOn();
+      cb.checked = on;
+      opt.style.display = (on && mOn) ? '' : 'none';
+      cb.disabled = !mOn;
+      row.style.opacity = mOn ? '' : '0.5';
+      row.style.cursor = mOn ? 'pointer' : 'default';
+    }
+    upd();
+    cb.addEventListener('change', function () {
+      if (!masterOn()) { cb.checked = !!settings[opts.enabledKey]; return; }
+      settings[opts.enabledKey] = cb.checked;
+      saveSettings(settings); applySettings(); upd();
+    });
+    controlSyncers[opts.enabledKey] = upd;
+    box._spdrUpd = upd;
+    return box;
+  }
 
   // Top-level section. resetKeys = list of every setting key the reset button
   // should restore to DEFAULTS (including the section's enabled key).
@@ -3152,6 +3256,15 @@
       if (opts.collapseWhenDisabled) {
         subWrap.style.display = enabled ? '' : 'none';
         if (headColor) headColor.style.display = enabled ? '' : 'none';
+        return;
+      }
+      // collapseOptionsWhenDisabled: keep the subsection checkbox rows visible when
+      // the section is off — only collapse the options under each (and grey the rows),
+      // exactly as if every subsection were individually unchecked. The subsections
+      // register a hook (set in their subBuilder) that re-evaluates their own state.
+      if (opts.collapseOptionsWhenDisabled) {
+        if (headColor) headColor.style.display = enabled ? '' : 'none';
+        if (subWrap._spdrOnMasterToggle) subWrap._spdrOnMasterToggle(enabled);
         return;
       }
       var op = enabled ? '1' : '0.4';
@@ -4481,7 +4594,7 @@
       label: 'Region borders',
       desc: 'Solid, center-only, or multi-color borders around the puzzle\'s regions (boxes / cages / shape groups).',
       hasColor: false,
-      collapseWhenDisabled: true,   // section off → only the header (checkbox + desc + ↺) shows
+      collapseOptionsWhenDisabled: true,   // section off → subsection checkboxes stay visible (greyed); only their options collapse
       resetKeys: ['regionBorderEnabled',
                   'regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
@@ -4495,34 +4608,18 @@
           Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
           return d;
         }
-        // One collapsible subsection: a checkbox row whose options are hidden until
-        // the checkbox is on (mirrors the section-level collapse behaviour).
+        // Each subsection stays visible (greyed) when the section master is off; only
+        // its options collapse. Track the boxes so the master toggle can refresh them.
+        var subBoxes = [];
         function makeSubsection(enabledKey, labelText, buildOptions, hilite, hiliteTitle) {
-          var box = document.createElement('div');
-          var row = document.createElement('label');
-          Object.assign(row.style, { display:'flex', alignItems:'center', gap:'7px', marginTop:'10px', cursor:'pointer', color:'#cdd6f4', fontSize:'12px' });
-          var cb = document.createElement('input');
-          cb.type = 'checkbox'; cb.checked = !!settings[enabledKey];
-          Object.assign(cb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
-          var txt = document.createElement('span'); txt.textContent = labelText;
-          row.appendChild(cb); row.appendChild(txt);
-          if (hilite) row.appendChild(makeHiliteIcon(hilite, hiliteTitle));
-          box.appendChild(row);
-
-          var opt = document.createElement('div');
-          Object.assign(opt.style, { paddingLeft:'20px' });
-          buildOptions(opt);
-          box.appendChild(opt);
-
-          function upd() { var on = !!settings[enabledKey]; opt.style.display = on ? '' : 'none'; cb.checked = on; }
-          upd();
-          cb.addEventListener('change', function () {
-            settings[enabledKey] = cb.checked;
-            saveSettings(settings); applySettings(); upd();
+          var box = makeCollapsibleSubsection({
+            enabledKey: enabledKey, masterEnabledKey: 'regionBorderEnabled',
+            labelText: labelText, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
           });
-          controlSyncers[enabledKey] = upd;
+          subBoxes.push(box);
           return box;
         }
+        wrap._spdrOnMasterToggle = function () { subBoxes.forEach(function (b) { b._spdrUpd(); }); };
         function colorRow(label, colorKey, opacityKey) {
           var ref = makeColorControl(colorKey, opacityKey);
           var r = document.createElement('div');
@@ -4570,14 +4667,45 @@
     }));
 
     content.appendChild(buildSection({
-      enabledKey: 'givenEnabled',
-      label: 'Given digits',
-      desc: 'Recolors the puzzle\'s pre-filled clue digits (the starting numbers given by the author). Digits you enter yourself, and overlay constraint labels, are left untouched.',
-      hilite: 'given', hiliteTitle: 'Highlight the given clue digits',
-      hasColor: true,
-      colorKey: 'givenColor',
-      opacityKey: 'givenOpacity',
-      resetKeys: ['givenColor','givenOpacity'],
+      // Section name TBD — "Untitled" is a placeholder; change `label` below to rename.
+      enabledKey: 'digitsEnabled',
+      label: 'Untitled',
+      desc: 'Recolors the large solving digits that fill the cells. Set a separate color and opacity for the author\'s given clues and for the digits you place yourself. The small pencilmark candidates and overlay constraint labels are left untouched.',
+      hasColor: false,
+      collapseOptionsWhenDisabled: true,   // section off → both subsection checkboxes stay visible (greyed); only their options collapse
+      resetKeys: ['digitsEnabled',
+                  'givenEnabled', 'givenColor', 'givenOpacity',
+                  'userDigitEnabled', 'userDigitColor', 'userDigitOpacity'],
+      subBuilder: function (wrap) {
+        var subBoxes = [];
+        function sub(enabledKey, labelText, desc, buildOptions, hilite, hiliteTitle) {
+          var box = makeCollapsibleSubsection({
+            enabledKey: enabledKey, masterEnabledKey: 'digitsEnabled',
+            labelText: labelText, desc: desc, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
+          });
+          subBoxes.push(box);
+          return box;
+        }
+        wrap._spdrOnMasterToggle = function () { subBoxes.forEach(function (b) { b._spdrUpd(); }); };
+        function divider() {
+          var d = document.createElement('div');
+          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+          return d;
+        }
+
+        // ── Subsection 1: Given digits (author clues) ─────────────────────
+        wrap.appendChild(sub('givenEnabled', 'Given digits',
+          'The starting clue numbers fixed by the puzzle\'s author.',
+          function (opt) { opt.appendChild(makeColorRow('Color', 'givenColor', 'givenOpacity')); },
+          'given', 'Highlight the author\'s given clue digits'));
+
+        // ── Subsection 2: User-entered digits (placed values) ─────────────
+        wrap.appendChild(divider());
+        wrap.appendChild(sub('userDigitEnabled', 'User-entered digits',
+          'The values you type into cells as you solve.',
+          function (opt) { opt.appendChild(makeColorRow('Color', 'userDigitColor', 'userDigitOpacity')); },
+          'userDigit', 'Highlight the digits you have entered'));
+      },
     }));
 
     content.appendChild(buildSection({
@@ -4740,7 +4868,8 @@
       resetKeys: ['kropkiFixEnabled',
                   'kropkiColonEnabled', 'kropkiBlackLabelText', 'kropkiBlackLabelRotate', 'kropkiOutlineEnabled',
                   'kropkiWhiteOutlineEnabled',
-                  'kropkiConsecLabelEnabled', 'kropkiConsecLabelText', 'kropkiConsecLabelRotate'],
+                  'kropkiConsecLabelEnabled', 'kropkiConsecLabelText', 'kropkiConsecLabelRotate',
+                  'kropkiLabelSize', 'kropkiLabelWeight'],
       subBuilder: function (wrap) {
         // ── 2:1 (black) dot label ─────────────────────────────────────────
         var blackRow = document.createElement('div');
@@ -4794,6 +4923,47 @@
         consecDiv.appendChild(makeSubCheckbox('kropkiConsecLabelRotate', 'Rotate label on horizontal borders'));
         consecDiv.appendChild(makeSubCheckbox('kropkiWhiteOutlineEnabled', 'Black outline on consecutive (white) dots'));
         wrap.appendChild(consecDiv);
+
+        // ── Label size (applies to BOTH dot labels) ───────────────────────
+        // Greyed out unless at least one of the two label checkboxes above is on.
+        var sizeDiv = document.createElement('div');
+        Object.assign(sizeDiv.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+        wrap.appendChild(sizeDiv);
+        var sizeRow = document.createElement('div');
+        Object.assign(sizeRow.style, { display:'flex', alignItems:'center', gap:'8px', marginTop:'10px' });
+        var sizeLbl = document.createElement('span');
+        sizeLbl.textContent = 'Label size:';
+        Object.assign(sizeLbl.style, { color:'#cdd6f4', fontSize:'12px', flexShrink:'0' });
+        var sizeInput = document.createElement('input');
+        sizeInput.type = 'text'; sizeInput.value = settings.kropkiLabelSize;
+        Object.assign(sizeInput.style, {
+          width:'60px', padding:'2px 6px', border:'1px solid #45475a', borderRadius:'4px',
+          background:'#313244', color:'#cdd6f4', fontSize:'12px',
+        });
+        var sizeUnit = document.createElement('span');
+        sizeUnit.textContent = 'px';
+        Object.assign(sizeUnit.style, { color:'#a6adc8', fontSize:'11px' });
+        sizeInput.addEventListener('input', function () {
+          var v = sizeInput.value.trim();
+          if (v === '' || /^\d+(\.\d+)?$/.test(v)) { settings.kropkiLabelSize = v; saveSettings(settings); applySettings(); }
+        });
+        sizeRow.appendChild(sizeLbl); sizeRow.appendChild(sizeInput); sizeRow.appendChild(sizeUnit);
+        wrap.appendChild(sizeRow);
+        function updateSizeDim() {
+          var anyLabel = !!settings.kropkiColonEnabled || !!settings.kropkiConsecLabelEnabled;
+          sizeRow.style.opacity = anyLabel ? '' : '0.4';
+          sizeRow.style.pointerEvents = anyLabel ? 'auto' : 'none';
+          sizeInput.disabled = !anyLabel;
+        }
+        updateSizeDim();
+        controlSyncers['kropkiLabelSize'] = function () { sizeInput.value = settings.kropkiLabelSize; updateSizeDim(); };
+        // Re-evaluate the greyed state whenever either label checkbox flips (incl. reset).
+        var _blSync = controlSyncers['kropkiColonEnabled'];
+        controlSyncers['kropkiColonEnabled'] = function () { if (_blSync) _blSync(); updateSizeDim(); };
+        var _wlSync = controlSyncers['kropkiConsecLabelEnabled'];
+        controlSyncers['kropkiConsecLabelEnabled'] = function () { if (_wlSync) _wlSync(); updateSizeDim(); };
+        blCb.addEventListener('change', updateSizeDim);
+        wlCb.addEventListener('change', updateSizeDim);
       },
     }));
 
