@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.163.0
+// @version      2.164.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.163.0';
+  var SCRIPT_VERSION = '2.164.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1072,11 +1072,14 @@
   // (2:1 ratio) → white. Restore correct colors via inline style so DR can't
   // re-convert them. Optionally overlay a ":" / "~" label on each bare dot.
   //
-  // Two tiers:
+  // Two tiers, both gated on POSITION (isOnCellBorder): a real edge clue
+  // (Kropki / X-V / operator dot) sits ON a cell border. Circles off a border —
+  // quadruples (grid corner), arrow bulbs / cosmetic circles (cell centre), line
+  // endpoints — are never treated as Kropki.
   //   isKropkiCircle — shape test: any feature-kropki or circular textbg rect.
-  //                    Used for color fixing (circle + adjacent text).
+  //                    Color fix applies to on-border circles (+ adjacent text).
   //   isKropkiRect   — isKropkiCircle AND no non-empty text sibling.
-  //                    Used for label injection only (bare dots get our labels).
+  //                    Label injection applies to on-border bare dots only.
   //
   // Labeled Kropki-type circles (Difference/Ratio Sudoku etc.) pass isKropkiCircle
   // but not isKropkiRect. Their circle fill and adjacent text color are DR-proofed,
@@ -1112,22 +1115,6 @@
     return isKropkiCircle(rect) && !getKropkiAdjacentText(rect);
   }
 
-  // True iff the SVG contains at least one black-filled Kropki-shaped circle.
-  // Used to disambiguate real white Kropki dots from non-Kropki labeled white
-  // circles (arrow constraints etc.). Black Kropki circles are unambiguous;
-  // if a puzzle has any, all its circles are Kropki-type. If the puzzle has
-  // only white circles, treat them as non-Kropki and leave DR alone.
-  function svgHasBlackKropkiCircle(svg) {
-    var rects = svg.querySelectorAll('rect.feature-kropki, rect.textbg');
-    for (var i = 0; i < rects.length; i++) {
-      var r = rects[i];
-      if (!isKropkiCircle(r)) continue;
-      var f = r.getAttribute('fill');
-      if (f && f.toUpperCase() === '#000000') return true;
-    }
-    return false;
-  }
-
   // True iff the circle's centre sits on a cell border — a gridline in exactly
   // one axis and mid-cell in the other. That's the defining position of an edge
   // clue (Kropki / X-V / operator dot). Arrow bulbs and other in-cell circles
@@ -1156,14 +1143,13 @@
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
     var isBlack = fill && fill.toUpperCase() === '#000000';
     if (!isWhite && !isBlack) return;
-    // A white circle counts as Kropki if it sits on a cell border (any edge
-    // clue — Kropki / operator dot) OR the puzzle has an unambiguous black dot.
-    // Centre-of-cell white circles (arrow bulbs etc.) match neither, so they're
-    // left to DarkReader.
-    if (isWhite) {
-      var svg = rect.ownerSVGElement;
-      if (!isOnCellBorder(rect, getGridCellSize()) && svg && !svgHasBlackKropkiCircle(svg)) return;
-    }
+    // Real edge clues (Kropki / X-V / operator dots) sit ON a cell border — a
+    // gridline in one axis, mid-cell in the other. Circles elsewhere are NOT
+    // Kropki and are left to DarkReader: a quadruple sits on a grid CORNER
+    // (gridline in both axes), arrow bulbs / cosmetic circles at a cell CENTRE,
+    // line endpoints wherever a path ends. Black dots are gated the same way (a
+    // solid-black circle off a border is cosmetic, not Kropki).
+    if (!isOnCellBorder(rect, getGridCellSize())) return;
     var adjText = getKropkiAdjacentText(rect);
     if (settings.kropkiFixEnabled) {
       if (isWhite) {
@@ -1270,6 +1256,7 @@
     var cs = getGridCellSize();
     svg.querySelectorAll('rect.feature-kropki, rect.textbg').forEach(function (rect) {
       if (!isKropkiRect(rect)) return;
+      if (!isOnCellBorder(rect, cs)) return;  // only label real edge dots — never quadruples/bulbs/endpoints
       var fill = rect.getAttribute('fill');
       if (!fill) return;
       var fillUC = fill.toUpperCase();
@@ -3001,9 +2988,10 @@
     // selector includes the circular Kropki `textbg` rects, so labelBg + kropki
     // overlap on Kropki dots — accurate to the code today (cleanup tracked for later).
     labelBg:       function () { return hqa(LABEL_RECT_SEL); },
-    // Mirrors fixAllKropkiDots: the kropki dots are `rect.feature-kropki, rect.textbg`
-    // filtered by isKropkiCircle — independent of whether our text labels are injected.
-    kropki:        function () { return hqa('rect.feature-kropki, rect.textbg').filter(isKropkiCircle); },
+    // Mirrors fixAllKropkiDots: real Kropki dots are `rect.feature-kropki, rect.textbg`
+    // that are circular (isKropkiCircle) AND sit on a cell border (isOnCellBorder) — the
+    // same gate fixKropkiDot uses, so quadruples / bulbs / line endpoints are excluded.
+    kropki:        function () { var cs = getGridCellSize(); return hqa('rect.feature-kropki, rect.textbg').filter(function (r) { return isKropkiCircle(r) && isOnCellBorder(r, cs); }); },
     selection:     function () { return hqa('#cell-highlights path.cage-selectioncage'); },
     cellColors:    function () { var e = hqa('#cell-colors > *'); return e.length ? e : firstOf('#control-colour'); },
     centerValid:   function () { var e = hqa('#cell-candidates tspan:not(.conflict)'); return e.length ? e : firstOf('#control-centre'); },
