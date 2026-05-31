@@ -1,0 +1,21 @@
+Editable source of the SECOND comprehensive test puzzle.
+Made in f-puzzles, converted to SudokuPad via the marktekfan penpa-import tool
+(https://marktekfan.github.io/sudokupad-penpa-import/).
+
+Unlike test-puzzle.sudokumaker.json (puzzle 1, which is all-cosmetic), this one uses
+NATIVE f-puzzles constraints — Kropki dots, an Arrow, an X-diagonal (sudokuX), cages —
+plus extra cosmetics. Native constraints can render through different DOM paths than the
+cosmetic look-alikes, so this puzzle widens our coverage.
+
+── Play (SudokuPad — what the userscript runs on) ──
+https://sudokupad.app/3x3zm2co6o
+
+── Edit (f-puzzles, self-contained ?load= link) ──
+Open this to edit, then re-export / re-convert. It does NOT depend on f-puzzles storing
+the short id — the whole puzzle is in the URL (LZString-compressed f-puzzles JSON; the
+same bytes SudokuPad stores after its "fpuz" prefix). THIS is the durable editable backup.
+
+https://f-puzzles.com/?load=N4IgzglgXgpiBcBOANCA5gJwgEwQbT2AF9ljSSzKLryBdZQmykANwEMAbAVziVTQgsYAOwQAXDDybS6DKuQXylReo0UzlstZp3VVu9YeL6Np9SaNmqFg7tr0Q2CGzQB7YZwC04yTFQwADwk2DBgBd3xQAGMYDg4wfBAAJQBmAGEADhBUVLTEbOSAFjyCpIBWNIB2UoqsnIr8nIA2EpzKzNL2/NoVVFdsXHhCEBi4hGT2spAKEdiOcaSWpumHGCFRIei5heLC6dJZsfhkipSV1DEACxgMAFtXW5gxG8iQDghhGAShvGTENKmOX+yyBVVK/zqyQyHXsvRAAAdOB9sBgHrxhu9Pt8CEUOvU8ckWllYQ4ANYQOI3KIudFbOLY5IARgBpWZIKZYJ6B1G8USSWZACZWWkzjkBSKQA52NxeCB8jMeQykuLAcl0qrcsspZweONGUK4e8xGIODByZSMGAuLdXjyFgAGNJ7VCKvnM0XJcVCnLpRmS1BOUJRMQQCLHAAiABkCtLdcd9edwGxhNgAO4QKKXK02zaHebHcppRn2mM62UJuFOABmVZuIhitrmSvFfrFaSFXLpvKGnvbpXSHbhGDYIdcjfpfN9pWKfs7eaVxW9uNncKiHHctPnfOhrb+Rf9I3XnzSTb5XVK0O6CtPPdyewca43J4nt+K1R6DhCqNTr0xX3wvz8mCORssKUz2C6N6Acy75wgARk8qYwCIf6/h8/4/FCLI5NC7JJNC1Sgu+H6oLcHwQLc1rjvmWF7HCtxsAEFFUbmdoFu0Zxwp8aAjoI6IgAELAHoJ1FKhUS5JIuB6xrKAAa+xdmJ+74h2qAyeMABqiYAI5cGwKJcPCpqiXyxQasUeEVBqFRampZbYoyyACsgKTIIUJEgM8QQmbeLT3nZMrjAAggUVbuGIaTjAAxPasVxQUkCwAg9oAHRlKuEAYGum6ur5+4OHBbBgDAkXHFFABilVVQUrhcCa6GlSAMVxbFoXhY1zUtQU6bYFcyVpWUqDXBAaCXGI/XpdyUGEn22qBcc7KFcVHUZPaACiZSVTVdV/h1m0pAAQtCbXCBF0WIIyZSFBkzogD1fXwKllRDTAI1jf1TTpQ4QZiMmaDGax03KjCAVxiAu5LSV0VlGta2VFtfQ7Q10UCnDZQpLdYWnR1TQHQKKQCoRd04A9qWDSAw2jeNj0pYghroWhWIAScTo1CyEEgLV9XHtFQUHSkQVlOy92XBNq40j5gHQh6ST/Gcc1g40nNIzzZVXUd4onWdZUZJUZQCqjKxEEAA=
+
+── f-puzzles server short-link (also opens editable; depends on f-puzzles keeping the id) ──
+https://f-puzzles.com/?id=28mrvd59

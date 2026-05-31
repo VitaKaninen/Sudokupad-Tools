@@ -93,6 +93,10 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
   - **Lines** — thermo, arrow (bulb + arrowhead), between/lockout lines with circle & diamond endpoints, whisper (min-difference), region-sum, palindrome/renban-style; varied colours & widths.
   - **Outer clues + diagonal** — little killer (diagonal), sandwich, X-sum, plus a thin diagonal line.
   - **Extras** — quadruple circle, cosmetic circles/squares, cosmetic text (`~`, `:`, digits incl. `456`), and baked-in pencilmarks, a placed value, and conflict highlights.
+- **Second test puzzle — https://sudokupad.app/3x3zm2co6o** (9×9) — built in **f-puzzles**, converted via the marktekfan penpa-import tool. Complements puzzle 1: uses **native** f-puzzles constraints (4 Kropki, 1 Arrow, X-diagonal/`sudokuX`, 33 cages) **plus** cosmetics, where puzzle 1 was all-cosmetic — so it exercises different render paths. Editable f-puzzles `?load=` source + play/short links preserved in [`test-puzzle2.fpuzzles-url.txt`](test-puzzle2.fpuzzles-url.txt). Notable render paths it covers:
+  - **Native Kropki render as `rect.feature-kropki`** (not cosmetic `textbg`), on cell borders → `isKropkiCircle` matches them directly and the v2.164 `isOnCellBorder` gate handles them correctly (validated — the quadruple here even exposes its digits as adjacent text, but the position gate is what protects it).
+  - **X-diagonal (`sudokuX`)** renders as a coloured stroked path in **`#overlay`** (`#34BBE6`), *not* `#arrows` — so `fixAllLines` does **not** shade it (renders fine, left to DR; see LESSONS_LEARNED Lines).
+  - Native **Arrow** (bulb + shaft, shaft shaded as an `#arrows` line), a custom **green-bordered killer cage**, and cosmetic squares/circles/lines/letters.
 - **Workflow:** edit the file on disk → TamperMonkey auto-updates → the user refreshes their own test tab → visual confirm.
 - **Claude in Chrome (MCP):** standing permission to connect (see CLAUDE.md). **Always `location.reload()` before inspecting** — the user refreshes all tabs after edits, so the MCP tab may be stale.
 - **Version check:** `window.spdrVersion === 'X.Y.Z'`.
