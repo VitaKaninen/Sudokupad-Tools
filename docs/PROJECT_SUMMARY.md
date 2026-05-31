@@ -86,6 +86,11 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
 - **DR** — DarkReader.
 
 ## Testing setup
+- **Primary test puzzle — https://sudokupad.app/pbwqsppuho** (9×9, "Untitled"). Purpose-built to pack most rendered feature types into one grid, so test a feature here first. Exercises:
+  - **Translucent cell/region shading** in many colours (grey `#0003`, reds `#e7141433`/`#f9000055`, blue `#0080f955`, purples `#b02bcc33`/`#9e60e3ff`, lavender `#e7e6ff80`, white `#ffffff80`) → Cell shading, object-shading dedupe, multi-colour region fill/border.
+  - **5 killer cages** (dashed + sum labels); **thermos**; **arrows** (arrowhead markers); assorted **cosmetic lines/paths**.
+  - **Cosmetic text glyphs**: cage sums (`9`, `12`), XV letters (`X`, `V`), `~` and `:` marks, in-cell digits incl. a multi-digit `456`.
+  - **Gaps** (don't pick it for these): no Kropki circles (0 `<circle>`); the logic-constraint arrays (kropki/inequality/palindrome/little-killer) are all empty — every constraint here is drawn as a cosmetic.
 - **Workflow:** edit the file on disk → TamperMonkey auto-updates → the user refreshes their own test tab → visual confirm.
 - **Claude in Chrome (MCP):** standing permission to connect (see CLAUDE.md). **Always `location.reload()` before inspecting** — the user refreshes all tabs after edits, so the MCP tab may be stale.
 - **Version check:** `window.spdrVersion === 'X.Y.Z'`.
