@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.164.0
+// @version      2.165.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.164.0';
+  var SCRIPT_VERSION = '2.165.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -872,15 +872,17 @@
   }
   // Broad rule for shading shapes that live in #overlay (drawn above digits) the
   // same way as #underlay shapes — e.g. "lucky charm" puzzles whose coloured
-  // circles/squares/diamonds are overlay rects. Skip the things we must NOT
-  // recolour: label/Kropki backgrounds (rect.textbg), fill-less/transparent
-  // rects, and the white inner-shape rects (#FFFFFF outlines) some puzzles draw
-  // on top of an underlay tint. This is a general predicate, not puzzle-specific.
+  // circles/squares/diamonds are overlay rects. Skip what we must NOT recolour:
+  // fill-less/transparent rects, white/near-white rects (label boxes + white inner
+  // shapes), and GRAYSCALE textbg (black Kropki dots, grey labels). We DO shade
+  // COLOURED textbg though — those are author-decorated cosmetic shapes (e.g. a
+  // light-blue circle behind a digit) that the label-bg fix would otherwise flatten
+  // to the dark label colour. General predicate, not puzzle-specific.
   function shouldShadeOverlayRect(r) {
-    if (r.classList.contains('textbg')) return false;
     var c = parseColor(r.getAttribute('fill') || '');
-    if (!c || c.a === 0) return false;
-    if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false; // white / near-white
+    if (!c || c.a === 0) return false;                          // transparent / no fill
+    if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false;   // white / near-white
+    if (r.classList.contains('textbg') && isGrayColor(c)) return false; // Kropki / grey label bg
     return true;
   }
   function fixAllUnderlays(svg) {
@@ -1319,6 +1321,13 @@
   var LABEL_RECT_SEL = 'rect.cage-label, rect.textbg, rect[fill="#FFFFFF"]:not(#underlay *), rect[fill="#ffffff"]:not(#underlay *), rect[fill="white"]:not(#underlay *)';
 
   function fixLabelRect(rect) {
+    // A label background is white/near-white (cage sums, little-killer clues, XV /
+    // operator boxes). A SATURATED fill means an author-coloured cosmetic shape
+    // (e.g. a light-blue circle/box behind a digit) — leave its colour to Object
+    // shading (shouldShadeOverlayRect now shades coloured textbg); never flatten it
+    // to the label-bg colour here.
+    var fc = parseColor(rect.getAttribute('fill') || '');
+    if (fc && fc.a !== 0 && !isGrayColor(fc)) return;
     if (settings.labelBgEnabled) {
       var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity);
       rect.style.setProperty('fill', bg, 'important');
@@ -2984,10 +2993,10 @@
 
   var HT = {
     given:         function () { return hqa('#cell-givens text, text.cell-given'); },
-    // Mirrors LABEL_RECT_SEL (what fixAllLabelRects actually recolours). NOTE: that
-    // selector includes the circular Kropki `textbg` rects, so labelBg + kropki
-    // overlap on Kropki dots — accurate to the code today (cleanup tracked for later).
-    labelBg:       function () { return hqa(LABEL_RECT_SEL); },
+    // Mirrors fixLabelRect: LABEL_RECT_SEL minus COLOURED (saturated) fills — those are
+    // author-coloured cosmetic shapes that fixLabelRect now skips (Object shading owns
+    // them). Still overlaps Kropki on the white/black circular textbg dots (accurate).
+    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var c = parseColor(r.getAttribute('fill') || ''); return !(c && c.a !== 0 && !isGrayColor(c)); }); },
     // Mirrors fixAllKropkiDots: real Kropki dots are `rect.feature-kropki, rect.textbg`
     // that are circular (isKropkiCircle) AND sit on a cell border (isOnCellBorder) — the
     // same gate fixKropkiDot uses, so quadruples / bulbs / line endpoints are excluded.
