@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.165.0
+// @version      2.166.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.165.0';
+  var SCRIPT_VERSION = '2.166.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1320,6 +1320,26 @@
   // #underlay. Underlay rects are shape backgrounds, not text labels.
   var LABEL_RECT_SEL = 'rect.cage-label, rect.textbg, rect[fill="#FFFFFF"]:not(#underlay *), rect[fill="#ffffff"]:not(#underlay *), rect[fill="white"]:not(#underlay *)';
 
+  // True if `rect` is a between-line ENDPOINT marker: a circle whose centre sits on
+  // (within ~its own radius of) the end of an #arrows line path. Endpoints are drawn
+  // by the line tool (fixed grey, no author colour control), unlike standalone cosmetic
+  // circles — so they must NOT be forced white; they stay dark/grey like the line.
+  function isLineEndpointCircle(rect) {
+    var svg = rect.ownerSVGElement; if (!svg) return false;
+    var w = parseFloat(rect.getAttribute('width') || 0), h = parseFloat(rect.getAttribute('height') || 0);
+    var cx = parseFloat(rect.getAttribute('x') || 0) + w / 2;
+    var cy = parseFloat(rect.getAttribute('y') || 0) + h / 2;
+    var tol = w / 2 + 10;
+    var paths = svg.querySelectorAll('#arrows path');
+    for (var i = 0; i < paths.length; i++) {
+      var n = (paths[i].getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+      if (!n || n.length < 2) continue;
+      if (Math.hypot(cx - (+n[0]), cy - (+n[1])) <= tol) return true;
+      if (n.length >= 4 && Math.hypot(cx - (+n[n.length - 2]), cy - (+n[n.length - 1])) <= tol) return true;
+    }
+    return false;
+  }
+
   function fixLabelRect(rect) {
     // A label background is white/near-white (cage sums, little-killer clues, XV /
     // operator boxes). A SATURATED fill means an author-coloured cosmetic shape
@@ -1328,6 +1348,19 @@
     // to the label-bg colour here.
     var fc = parseColor(rect.getAttribute('fill') || '');
     if (fc && fc.a !== 0 && !isGrayColor(fc)) return;
+    // Bare white cosmetic shapes carry NO class (genuine labels are textbg / cage-label
+    // / feature-*). Keep the author's white — DR would otherwise darken them to near-
+    // black (e.g. the white cosmetic circle on test puzzle 2). EXCEPTION: between-line
+    // endpoint circles are also class-less white but sit on a line end — leave those to
+    // the darkening below (they must read dark/grey, never white/opaque).
+    var isWhite = fc && fc.a !== 0 && fc.r >= 240 && fc.g >= 240 && fc.b >= 240;
+    var noClass = !(rect.getAttribute('class') || '').trim();
+    if (settings.labelBgEnabled && isWhite && noClass && !isLineEndpointCircle(rect)) {
+      rect.style.setProperty('fill', '#ffffff', 'important');
+      rect.removeAttribute('data-darkreader-inline-fill');
+      rect.style.removeProperty('--darkreader-inline-fill');
+      return;
+    }
     if (settings.labelBgEnabled) {
       var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity);
       rect.style.setProperty('fill', bg, 'important');
