@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.156.0
+// @version      2.157.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.156.0';
+  var SCRIPT_VERSION = '2.157.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2631,55 +2631,102 @@
     catch (e) { return []; }
   }
 
-  // The highlight overlay. One fixed-position layer holds a reusable pool of
-  // outline boxes; we position one per target rect. Lives above everything incl.
-  // the settings panel so it shows through when the panel is dimmed. Behaviour:
-  // a hover-icon shows the outlines, which flash once on appearance and then HOLD
-  // bright while the cursor stays on the icon; moving off the icon clears them.
+  // The highlight overlay. Rather than draw a bounding box per target (which is
+  // wrong for line/path elements — a single grid path's bbox is the whole grid,
+  // so it looks like just the outer border), we TRACE the real geometry: clone
+  // each svg target into an overlay <svg> that mirrors the board's viewBox +
+  // on-screen rect, transformed by the element's own CTM so it lands exactly over
+  // the original. Text targets get a box around their glyph bounds; non-svg
+  // targets (e.g. a tool button) get a fixed outline div. The overlay flashes once
+  // on appearance and HOLDS bright until the icon is left. Sits above everything,
+  // incl. the settings panel, which is dimmed when a target lies under it.
   var spdrHi = (function () {
-    var layer = null, pool = [], dimmedPanel = null;
+    var NS = 'http://www.w3.org/2000/svg', STROKE = '#ffd24a';
+    var layer = null, osvg = null, divPool = [], dimmedPanel = null;
     function ensure() {
       if (layer) return;
       var st = document.createElement('style');
-      // One-shot rise that ENDS bright and holds (fill-mode forwards, no loop, no
-      // auto-hide). A small overshoot at 40% reads as a single flash on appearance.
-      st.textContent = '@keyframes spdrHiOn{0%{opacity:.15;box-shadow:0 0 0 1px rgba(249,226,175,.35)}40%{opacity:1;box-shadow:0 0 0 2px #f9e2af,0 0 7px 2px rgba(249,226,175,.6)}100%{opacity:1;box-shadow:0 0 0 2px rgba(249,226,175,.85),0 0 3px 1px rgba(249,226,175,.3)}}';
+      // Flash once on appearance, then hold (fill-mode forwards, no loop).
+      st.textContent = '@keyframes spdrHiFade{0%{opacity:.12}45%{opacity:1}100%{opacity:1}}';
       document.head.appendChild(st);
       layer = document.createElement('div');
       layer.id = 'spdr-highlight-layer';
       Object.assign(layer.style, { position: 'fixed', left: '0', top: '0', width: '0', height: '0', pointerEvents: 'none', zIndex: '2147483646' });
+      osvg = document.createElementNS(NS, 'svg');
+      Object.assign(osvg.style, { position: 'fixed', pointerEvents: 'none', overflow: 'visible', display: 'none', filter: 'drop-shadow(0 0 1.5px ' + STROKE + ')' });
+      layer.appendChild(osvg);
       document.body.appendChild(layer);
     }
-    function box(i) {
-      if (pool[i]) return pool[i];
-      var b = document.createElement('div');
-      Object.assign(b.style, { position: 'fixed', borderRadius: '3px', boxSizing: 'border-box', pointerEvents: 'none', display: 'none' });
-      layer.appendChild(b); pool[i] = b; return b;
+    function div(i) {
+      if (divPool[i]) return divPool[i];
+      var d = document.createElement('div');
+      Object.assign(d.style, { position: 'fixed', borderRadius: '5px', boxSizing: 'border-box', pointerEvents: 'none', display: 'none', border: '2px solid ' + STROKE, boxShadow: '0 0 6px 1px rgba(255,210,74,.55)' });
+      layer.appendChild(d); divPool[i] = d; return d;
+    }
+    function clearSvg() { while (osvg.firstChild) osvg.removeChild(osvg.firstChild); }
+    // Restart the one-shot flash-then-hold animation on an element.
+    function flash(el) { el.style.animation = 'none'; void el.getBoundingClientRect(); el.style.animation = 'spdrHiFade 430ms ease-out 1 forwards'; }
+    // Style a cloned svg node as a highlight: traced outline, constant screen width.
+    function styleNode(node, m) {
+      node.removeAttribute('id'); node.removeAttribute('class');
+      node.removeAttribute('data-darkreader-inline-stroke'); node.removeAttribute('data-darkreader-inline-fill');
+      if (node.querySelectorAll) Array.prototype.forEach.call(node.querySelectorAll('*'), function (d) { d.removeAttribute('id'); d.removeAttribute('class'); });
+      node.setAttribute('transform', 'matrix(' + m.a + ',' + m.b + ',' + m.c + ',' + m.d + ',' + m.e + ',' + m.f + ')');
+      node.setAttribute('fill', 'none');
+      node.setAttribute('stroke', STROKE);
+      node.setAttribute('stroke-width', '2.5');
+      node.setAttribute('stroke-opacity', '1');
+      node.setAttribute('vector-effect', 'non-scaling-stroke');
+      node.style.cssText = 'fill:none !important;stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
     }
     function show(els) {
       ensure();
       els = (els || []).filter(Boolean);
-      if (els.length > 200) els = els.slice(0, 200); // cap: avoid pathological perf
-      var rects = [], pad = 2, k = 0;
-      for (var i = 0; i < els.length; i++) {
-        var r = els[i].getBoundingClientRect();
-        if (r.width < 0.5 && r.height < 0.5) continue;       // not rendered
-        if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue; // off-screen
-        rects.push(r);
-        var b = box(k++);
-        b.style.display = 'block';
-        b.style.left = (r.left - pad) + 'px'; b.style.top = (r.top - pad) + 'px';
-        b.style.width = (r.width + pad * 2) + 'px'; b.style.height = (r.height + pad * 2) + 'px';
-        // Restart the one-shot animation (boxes are pooled, so force a reflow).
-        b.style.animation = 'none'; void b.offsetWidth;
-        b.style.animation = 'spdrHiOn 420ms ease-out 1 forwards';
-      }
-      for (; k < pool.length; k++) pool[k].style.display = 'none';
-      dimPanel(rects);
+      if (els.length > 500) els = els.slice(0, 500); // cap: avoid pathological perf
+      clearSvg();
+      // Full-window overlay with a 1:1 viewBox, so SCREEN-space coordinates map
+      // straight through (1 user unit = 1 CSS px). We then place each clone with
+      // its getScreenCTM() matrix — element-local coords → CSS pixels — so it lands
+      // exactly over the original regardless of the board's viewBox / scale / scroll.
+      var W = window.innerWidth, H = window.innerHeight;
+      Object.assign(osvg.style, { left: '0', top: '0', width: W + 'px', height: H + 'px', display: 'block' });
+      osvg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+      osvg.setAttribute('preserveAspectRatio', 'none');
+      var di = 0, screenRects = [], svgUsed = false;
+      els.forEach(function (el) {
+        var r = el.getBoundingClientRect && el.getBoundingClientRect();
+        if (r && (r.width || r.height)) screenRects.push(r);
+        if (typeof el.getScreenCTM === 'function') {
+          var m; try { m = el.getScreenCTM(); } catch (e) { m = null; }
+          if (!m) return;
+          var tag = el.tagName.toLowerCase(), node;
+          if (tag === 'text' || tag === 'tspan') {
+            var bb; try { bb = el.getBBox(); } catch (e) { bb = null; }
+            if (!bb || (!bb.width && !bb.height)) return;
+            var pad = Math.max(1, bb.height * 0.08);
+            node = document.createElementNS(NS, 'rect');
+            node.setAttribute('x', bb.x - pad); node.setAttribute('y', bb.y - pad);
+            node.setAttribute('width', bb.width + 2 * pad); node.setAttribute('height', bb.height + 2 * pad);
+            node.setAttribute('rx', '2');
+          } else {
+            node = el.cloneNode(true);
+          }
+          styleNode(node, m);
+          osvg.appendChild(node); svgUsed = true;
+        } else if (r) {
+          // Non-svg target (e.g. a SudokuPad tool button) → fixed outline div.
+          var b = div(di++); b.style.display = 'block';
+          b.style.left = (r.left - 3) + 'px'; b.style.top = (r.top - 3) + 'px';
+          b.style.width = (r.width + 6) + 'px'; b.style.height = (r.height + 6) + 'px';
+          flash(b);
+        }
+      });
+      for (; di < divPool.length; di++) divPool[di].style.display = 'none';
+      if (svgUsed) flash(osvg); else osvg.style.display = 'none';
+      dimPanel(screenRects);
     }
-    // Occlusion handling: if any highlighted rect overlaps the settings panel,
-    // fade the panel (while the highlight is showing) so the user can see what's
-    // highlighted beneath it. Restored by hide().
+    // Occlusion handling: if any target overlaps the settings panel, fade the panel
+    // (while the highlight shows) so the user can see what's highlighted beneath it.
     function dimPanel(rects) {
       var panel = document.getElementById('sp-fix-panel');
       if (!panel) return;
@@ -2695,7 +2742,8 @@
       }
     }
     function hide() {
-      for (var i = 0; i < pool.length; i++) pool[i].style.display = 'none';
+      if (osvg) { clearSvg(); osvg.style.display = 'none'; }
+      for (var i = 0; i < divPool.length; i++) divPool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
     return { show: show, hide: hide };
@@ -2705,7 +2753,7 @@
   // outline around getTargets() on the live puzzle (held bright until mouse-out).
   function makeHiliteIcon(getTargets, title) {
     var ic = document.createElement('span');
-    ic.textContent = '👁';   // 👁
+    ic.textContent = '👁';
     ic.title = title || 'Hover to show what this affects on the puzzle';
     Object.assign(ic.style, { fontSize: '11px', lineHeight: '1', cursor: 'help', opacity: '0.5', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)' });
     ic.addEventListener('mouseenter', function () {
@@ -2721,20 +2769,40 @@
   }
 
   // ── Highlight target getters ───────────────────────────────────────────────
-  // Each returns the live elements a specific control affects, or a sensible
-  // fallback when the puzzle/feature hasn't produced them yet (e.g. point at the
-  // tool button when no marks exist, or the live grid lines when our region-border
-  // clones aren't drawn). Kept central so the selectors are easy to audit.
+  // FOOLPROOF PRINCIPLE: a control's highlight must enumerate the SAME elements,
+  // using the SAME predicates, that the control's apply code touches — never a
+  // hand-written parallel selector that can drift. So the object-shading getters
+  // below reuse the very functions the renderer uses (`shouldShadeOverlayRect`,
+  // `isGrayColor`, `isLineStroke`, `CAGE_FILL_SEL`) and mirror fixAllUnderlays /
+  // fixAllCagePaths / fixAllLines exactly. When you change what a control affects,
+  // change it in one predicate and both apply + highlight follow.
   function hqa(sel) { try { return Array.prototype.slice.call(document.querySelectorAll(sel)); } catch (e) { return []; } }
   function firstOf(sel) { var e = document.querySelector(sel); return e ? [e] : []; }
-  // Split shaded fills into colored vs gray (matches computeObjectShade routing).
-  function fillsByGray(wantGray) {
-    return hqa('#underlay rect, #cages path[fill], #overlay rect').filter(function (el) {
-      var c = parseColor(el.getAttribute('fill') || '');
-      if (!c || c.a === 0) return false;
-      return wantGray ? isGrayColor(c) : !isGrayColor(c);
-    });
+
+  // The exact set of fill elements Object-shading governs — mirrors fixAllUnderlays
+  // (#underlay rect + qualifying #overlay rect) and fixAllCagePaths (CAGE_FILL_SEL).
+  function objFillSources() {
+    var out = [];
+    hqa('#underlay rect').forEach(function (e) { out.push(e); });
+    hqa('#overlay rect').forEach(function (e) { if (shouldShadeOverlayRect(e)) out.push(e); });
+    hqa(CAGE_FILL_SEL).forEach(function (e) { out.push(e); });
+    return out;
   }
+  // The exact set of line strokes Object-shading governs — mirrors fixAllLines.
+  function objLineSources() { return hqa('#arrows path[stroke]').filter(isLineStroke); }
+  function fillColorIsGray(el) { var c = parseColor(el.getAttribute('fill') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
+  function strokeColorIsGray(el) { var c = parseColor(el.getAttribute('stroke') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
+  function hasPaintedStroke(el) { var s = el.getAttribute('stroke'); if (!s || s === 'none') return false; var c = parseColor(s); return !!(c && c.a !== 0); }
+  // Colored vs gray routing matches computeObjectShade: fills by fill colour, lines
+  // by stroke colour. Borders = shape OUTLINES only (applyShapeStroke targets), NOT
+  // lines — lines route through the colored/gray sliders, not the Border slider.
+  function objShade(wantGray) {
+    var out = [];
+    objFillSources().forEach(function (e) { var g = fillColorIsGray(e); if (g === wantGray) out.push(e); });
+    objLineSources().forEach(function (e) { var g = strokeColorIsGray(e); if (g === wantGray) out.push(e); });
+    return out;
+  }
+
   var HT = {
     given:         function () { return hqa('#cell-givens text, text.cell-given'); },
     labelBg:       function () { return hqa('rect.textbg'); },
@@ -2745,11 +2813,13 @@
     centerInvalid: function () { return hqa('#cell-candidates tspan.conflict'); },
     cornerValid:   function () { var e = hqa('#cell-pencilmarks text:not(.conflict)'); return e.length ? e : firstOf('#control-corner'); },
     cornerInvalid: function () { return hqa('#cell-pencilmarks text.conflict'); },
-    objColored:    function () { return fillsByGray(false); },
-    objGray:       function () { return fillsByGray(true); },
-    objBorders:    function () { return hqa('#arrows path, #lines path').concat(hqa('#underlay rect').filter(function (r) { var s = r.getAttribute('stroke'); return s && s !== 'none'; })); },
-    // Region borders subsections — prefer our injected elements, else fall back to
-    // the live region-boundary / grid lines so the icon always points somewhere.
+    objColored:    function () { return objShade(false); },
+    objGray:       function () { return objShade(true); },
+    objBorders:    function () { return objFillSources().filter(hasPaintedStroke); },
+    // Region borders subsections — prefer our injected clones (exact geometry when
+    // drawn), else the live SOURCE geometry the draw step clones FROM, so the icon
+    // shows where the borders are / would be. regCenter/regMulti → the region/box
+    // outline paths (#cell-grids path:not(.cell-grid)); regCell → the grid-line path.
     regCenter:     function () { var e = hqa('[data-spdr-region-split] path[data-spdr-kind="center"]'); return e.length ? e : hqa('#cell-grids path:not(.cell-grid)'); },
     regMulti:      function () { var e = hqa('[data-spdr-region-split] [data-spdr-kind="multi"]'); return e.length ? e : hqa('#cell-grids path:not(.cell-grid)'); },
     regCell:       function () { var e = hqa('[data-spdr-region-split] path[data-spdr-kind="cell"]'); return e.length ? e : hqa('#cell-grids path.cell-grid'); },
