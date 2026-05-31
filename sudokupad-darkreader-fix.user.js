@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.161.0
+// @version      2.162.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.161.0';
+  var SCRIPT_VERSION = '2.162.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2701,24 +2701,49 @@
       osvg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
       osvg.setAttribute('preserveAspectRatio', 'none');
     }
-    function show(els, paint) {
+    function show(els, paint, dedupe) {
       ensure();
       els = (els || []).filter(Boolean);
       if (els.length > 500) els = els.slice(0, 500); // cap: avoid pathological perf
       clearSvg();
       positionOverlay();
-      var di = 0, screenRects = [], svgUsed = false;
+      var di = 0, screenRects = [], svgUsed = false, cs = getGridCellSize();
+      // De-dupe mode (object shading): each shaded cell is a small INSET rect, so
+      // outlining every one draws parallel lines between neighbours. Instead snap
+      // each axis-aligned rect to its GRID CELL and keep only edges that belong to a
+      // single cell (count === 1) → one clean outline around the whole shaded region.
+      // Rotated rects (e.g. diamond markers) and non-rects fall through to tracing.
+      var edgeMap = {};
+      function addEdge(p1, p2) {
+        var a = Math.round(p1.x) + ',' + Math.round(p1.y), b = Math.round(p2.x) + ',' + Math.round(p2.y);
+        var k = a < b ? a + '|' + b : b + '|' + a;
+        if (edgeMap[k]) edgeMap[k].n++; else edgeMap[k] = { p1: p1, p2: p2, n: 1 };
+      }
       els.forEach(function (el) {
         var r = el.getBoundingClientRect && el.getBoundingClientRect();
         if (r && (r.width || r.height)) screenRects.push(r);
-        if (typeof el.getScreenCTM === 'function') {
+        var isSvg = typeof el.getScreenCTM === 'function';
+        var tag = el.tagName ? el.tagName.toLowerCase() : '';
+        if (isSvg) {
           var m; try { m = el.getScreenCTM(); } catch (e) { m = null; }
           if (!m) return;
-          // Default: trace the OUTLINE (a glowing line around the object / along
-          // the line). PAINT[key]='fill' opts into a filled glow; 'bbox' outlines the
+          var rotated = Math.abs(m.b) > 0.01 || Math.abs(m.c) > 0.01;
+          if (dedupe && tag === 'rect' && !rotated && cs) {
+            // Snap to the grid cell this rect sits in; collect that cell's 4 edges.
+            var x = parseFloat(el.getAttribute('x')) || 0, y = parseFloat(el.getAttribute('y')) || 0,
+                w = parseFloat(el.getAttribute('width')) || 0, h = parseFloat(el.getAttribute('height')) || 0;
+            var sx = Math.floor((x + w / 2) / cs) * cs, sy = Math.floor((y + h / 2) / cs) * cs;
+            function P(ux, uy) { return { x: m.a * ux + m.c * uy + m.e, y: m.b * ux + m.d * uy + m.f }; }
+            addEdge(P(sx, sy), P(sx + cs, sy)); addEdge(P(sx + cs, sy), P(sx + cs, sy + cs));
+            addEdge(P(sx + cs, sy + cs), P(sx, sy + cs)); addEdge(P(sx, sy + cs), P(sx, sy));
+            svgUsed = true;
+            return;
+          }
+          // Default: trace the OUTLINE (a glowing line around the object / along the
+          // line). PAINT[key]='fill' opts into a filled glow; 'bbox' outlines the
           // element's bounding box instead of its exact path — used for colored cells
           // so we draw a clean square, not the diagonal split between two cell colours.
-          var tag = el.tagName.toLowerCase(), node, mode = paint || 'stroke';
+          var node, mode = paint || 'stroke';
           if (tag === 'text' || tag === 'tspan' || mode === 'bbox') {
             var bb; try { bb = el.getBBox(); } catch (e) { bb = null; }
             if (!bb || (!bb.width && !bb.height)) return;
@@ -2740,6 +2765,17 @@
           b.style.width = (r.width + 6) + 'px'; b.style.height = (r.height + 6) + 'px';
           flash(b);
         }
+      });
+      // Draw only the region PERIMETER (edges belonging to a single cell); shared
+      // interior edges (count > 1) are dropped, so the block reads as one outline.
+      Object.keys(edgeMap).forEach(function (k) {
+        var e = edgeMap[k]; if (e.n !== 1) return;
+        var ln = document.createElementNS(NS, 'line');
+        ln.setAttribute('x1', e.p1.x); ln.setAttribute('y1', e.p1.y);
+        ln.setAttribute('x2', e.p2.x); ln.setAttribute('y2', e.p2.y);
+        ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', '2.5'); ln.setAttribute('stroke-opacity', '1');
+        ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+        osvg.appendChild(ln);
       });
       for (; di < divPool.length; di++) divPool[di].style.display = 'none';
       if (svgUsed) flash(osvg); else osvg.style.display = 'none';
@@ -2897,9 +2933,12 @@
     var ic = document.createElement('span');
     ic.textContent = '👁';
     ic.title = title || 'Hover to show what this affects; click to pulse it';
-    Object.assign(ic.style, { fontSize: '20px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', verticalAlign: 'middle' });
+    // pointerEvents:auto so the icon stays hoverable/clickable even when its section
+    // is disabled (the section dims its sub-content with pointer-events:none; a child
+    // can opt back in). Lets the user preview a section's effect before enabling it.
+    Object.assign(ic.style, { fontSize: '20px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', verticalAlign: 'middle', pointerEvents: 'auto' });
     var cleanup = null;
-    function reshow() { var g = HT[key]; if (g) { try { spdrHi.show(g() || [], PAINT[key] || null); } catch (e) {} } }
+    function reshow() { var g = HT[key]; if (g) { try { spdrHi.show(g() || [], PAINT[key] || null, DEDUPE[key]); } catch (e) {} } }
     ic.addEventListener('mouseenter', function () {
       ic.style.opacity = '1'; ic.style.filter = 'none';
       reshow();
@@ -2986,6 +3025,11 @@
   // for the multi-color border STRIPS, which are thin rects: filling each reads as
   // one clean border bar, whereas outlining them draws doubled parallel lines.
   var PAINT = { regMulti: 'fill', cellColors: 'bbox' };
+
+  // Keys whose RECT targets should be de-duplicated into a clean union outline
+  // (drop shared internal edges) — object-shading fills/borders are blocks of
+  // adjacent cells; outlining each one separately doubled the shared edges.
+  var DEDUPE = { objColored: 1, objGray: 1, objBorders: 1 };
 
   // Optional hover "example": runs when the icon is entered, may add a transient
   // demo so a blank puzzle still shows what the control affects. Receives a
