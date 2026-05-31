@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.160.0
+// @version      2.161.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.160.0';
+  var SCRIPT_VERSION = '2.161.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2682,9 +2682,11 @@
       node.setAttribute('transform', 'matrix(' + m.a + ',' + m.b + ',' + m.c + ',' + m.d + ',' + m.e + ',' + m.f + ')');
       node.setAttribute('vector-effect', 'non-scaling-stroke');
       if (paint === 'fill') {
-        node.setAttribute('fill', STROKE); node.setAttribute('fill-opacity', '0.5');
-        node.setAttribute('stroke', STROKE); node.setAttribute('stroke-width', '1.5'); node.setAttribute('stroke-opacity', '0.9');
-        node.style.cssText = 'fill:' + STROKE + ' !important;fill-opacity:.5 !important;stroke:' + STROKE + ' !important;stroke-opacity:.9 !important;';
+        // Glow the filled area itself — for thin shapes (e.g. multi-color border
+        // strips) this reads as a clean solid bar, not a doubled outline.
+        node.setAttribute('fill', STROKE); node.setAttribute('fill-opacity', '0.8');
+        node.setAttribute('stroke', 'none');
+        node.style.cssText = 'fill:' + STROKE + ' !important;fill-opacity:.8 !important;stroke:none !important;';
       } else {
         node.setAttribute('fill', 'none');
         node.setAttribute('stroke', STROKE); node.setAttribute('stroke-width', '2.5'); node.setAttribute('stroke-opacity', '1');
@@ -2713,17 +2715,19 @@
           var m; try { m = el.getScreenCTM(); } catch (e) { m = null; }
           if (!m) return;
           // Default: trace the OUTLINE (a glowing line around the object / along
-          // the line). Only an explicit PAINT[key]='fill' opts into a filled glow.
+          // the line). PAINT[key]='fill' opts into a filled glow; 'bbox' outlines the
+          // element's bounding box instead of its exact path — used for colored cells
+          // so we draw a clean square, not the diagonal split between two cell colours.
           var tag = el.tagName.toLowerCase(), node, mode = paint || 'stroke';
-          if (tag === 'text' || tag === 'tspan') {
+          if (tag === 'text' || tag === 'tspan' || mode === 'bbox') {
             var bb; try { bb = el.getBBox(); } catch (e) { bb = null; }
             if (!bb || (!bb.width && !bb.height)) return;
-            var pad = Math.max(1, bb.height * 0.08);
+            var pad = (tag === 'text' || tag === 'tspan') ? Math.max(1, bb.height * 0.08) : 0;
             node = document.createElementNS(NS, 'rect');
             node.setAttribute('x', bb.x - pad); node.setAttribute('y', bb.y - pad);
             node.setAttribute('width', bb.width + 2 * pad); node.setAttribute('height', bb.height + 2 * pad);
             node.setAttribute('rx', '2');
-            mode = 'stroke';   // box around a glyph, not a filled blob
+            mode = 'stroke';   // outline the box, don't fill it
           } else {
             node = el.cloneNode(true);
           }
@@ -2978,9 +2982,10 @@
   };
 
   // Paint override per key. Default for every target is 'stroke' (a glowing line
-  // tracing the object/line outline). Add an entry here ONLY to opt a specific key
-  // into a filled glow (PAINT[key]='fill'); empty for now = everything outlines.
-  var PAINT = {};
+  // tracing the object/line outline). 'fill' opts a key into a filled glow — used
+  // for the multi-color border STRIPS, which are thin rects: filling each reads as
+  // one clean border bar, whereas outlining them draws doubled parallel lines.
+  var PAINT = { regMulti: 'fill', cellColors: 'bbox' };
 
   // Optional hover "example": runs when the icon is entered, may add a transient
   // demo so a blank puzzle still shows what the control affects. Receives a
