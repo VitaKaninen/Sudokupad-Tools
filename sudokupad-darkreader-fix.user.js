@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.159.0
+// @version      2.160.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.159.0';
+  var SCRIPT_VERSION = '2.160.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2614,16 +2614,14 @@
   //     current puzzle we show `msg` in the panel so the user knows why a control
   //     appears to do nothing.
   // ═══════════════════════════════════════════════════════════════════════════
+  // Center/Corner/Selection deliberately have NO msg: their eyeball now draws a
+  // live example on hover, so a "doesn't exist yet" warning would be redundant.
   var HILITE = {
-    regionBorderEnabled:      { sel: '#cell-grids path, #cages path' },
     givenEnabled:             { sel: '#cell-givens text, text.cell-given', msg: 'This puzzle has no given clue digits.' },
     labelBgEnabled:           { sel: 'rect.textbg',                        msg: 'This puzzle has no text labels (cage sums etc.).' },
     underlayEnabled:          { sel: '#underlay rect, #cages path[fill], #overlay rect', msg: 'This puzzle has no shaded objects to tint.' },
-    cellColorsOpacityEnabled: { sel: '#cell-colors > *', control: '#control-colour', msg: 'No colored cells yet — use the highlighted Color tool to paint some.' },
-    centerEnabled:            { sel: 'text.cell-candidate', control: '#control-centre', msg: 'No center pencilmarks yet — use the highlighted Centre tool to add some.' },
-    cornerEnabled:            { sel: '#cell-pencilmarks text', control: '#control-corner', msg: 'No corner pencilmarks yet — use the highlighted Corner tool to add some.' },
-    kropkiFixEnabled:         { sel: 'rect.feature-kropki, text[data-spdr-kropki-label]', msg: 'This puzzle has no Kropki dots.' },
-    selectionColorEnabled:    { sel: '#cell-highlights path.cage-selectioncage', msg: 'Select one or more cells on the grid to see the selection border.' },
+    cellColorsOpacityEnabled: { sel: '#cell-colors > *', msg: 'No colored cells yet — use the highlighted Color tool to paint some.' },
+    kropkiFixEnabled:         { sel: 'rect.feature-kropki, rect.textbg', msg: 'This puzzle has no Kropki dots.' },
   };
 
   // Returns the live elements a section currently affects (its `sel` matches), or
@@ -2650,8 +2648,12 @@
     function ensure() {
       if (layer) return;
       var st = document.createElement('style');
-      // Flash once on appearance, then hold (fill-mode forwards, no loop).
-      st.textContent = '@keyframes spdrHiFade{0%{opacity:.12}45%{opacity:1}100%{opacity:1}}';
+      // spdrHiFade: hover flash-in then HOLD (fill-mode forwards, no loop).
+      // spdrHiPulse: the CLICK action — a gentle gradual brighten→dim cycle (twice)
+      // that ends back at full opacity, so it overlays the steady hover-hold without
+      // fighting it (no on/off toggling of the real effect).
+      st.textContent = '@keyframes spdrHiFade{0%{opacity:.12}45%{opacity:1}100%{opacity:1}}'
+        + '@keyframes spdrHiPulse{0%{opacity:1}50%{opacity:.1}100%{opacity:1}}';
       document.head.appendChild(st);
       layer = document.createElement('div');
       layer.id = 'spdr-highlight-layer';
@@ -2754,6 +2756,30 @@
       osvg.appendChild(t);
       flash(osvg);
     }
+    // Draw a straight highlight segment between two USER-space points, mapped to
+    // screen via `m` (the board root's getScreenCTM). Used to trace a clean,
+    // de-duplicated region boundary (one line per edge — no doubled strips).
+    function addLine(x1, y1, x2, y2, m) {
+      ensure();
+      if (osvg.style.display === 'none') positionOverlay();
+      var ln = document.createElementNS(NS, 'line');
+      ln.setAttribute('x1', m.a * x1 + m.c * y1 + m.e); ln.setAttribute('y1', m.b * x1 + m.d * y1 + m.f);
+      ln.setAttribute('x2', m.a * x2 + m.c * y2 + m.e); ln.setAttribute('y2', m.b * x2 + m.d * y2 + m.f);
+      ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', '2.5'); ln.setAttribute('stroke-opacity', '1');
+      ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+      osvg.appendChild(ln);
+      flash(osvg);
+    }
+    // The click action: a gentle gradual brighten→dim pulse of the CURRENT
+    // highlight (overlay svg + any outline divs), ending back at full opacity so it
+    // doesn't disturb the steady hover-hold. Purely visual — no effect toggling.
+    function pulse() {
+      if (osvg && osvg.style.display !== 'none') { osvg.style.animation = 'none'; void osvg.getBoundingClientRect(); osvg.style.animation = 'spdrHiPulse 520ms ease-in-out 2'; }
+      for (var i = 0; i < divPool.length; i++) {
+        var d = divPool[i];
+        if (d.style.display !== 'none') { d.style.animation = 'none'; void d.getBoundingClientRect(); d.style.animation = 'spdrHiPulse 520ms ease-in-out 2'; }
+      }
+    }
     // Occlusion handling: if any target overlaps the settings panel, fade the panel
     // (while the highlight shows) so the user can see what's highlighted beneath it.
     function dimPanel(rects) {
@@ -2775,33 +2801,11 @@
       for (var i = 0; i < divPool.length; i++) divPool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
-    return { show: show, hide: hide, addText: addText };
+    return { show: show, hide: hide, addText: addText, addLine: addLine, pulse: pulse };
   })();
 
-  // Blink a control's real effect on/off twice (then restore) — the "show me what
-  // this does" click action. `force` keys are held ON for the duration (so a
-  // gated sub-effect is actually visible); `toggle` keys blink. No saveSettings:
-  // it's a transient preview that always lands back on the user's saved state.
-  var spdrBlinking = false;
-  function blinkEffect(spec) {
-    if (spdrBlinking || !spec) return;
-    spdrBlinking = true;
-    var force = spec.force || [], toggle = spec.toggle || [];
-    var saved = {};
-    force.concat(toggle).forEach(function (k) { saved[k] = settings[k]; });
-    force.forEach(function (k) { settings[k] = true; });
-    var states = [false, true, false, true], i = 0;
-    (function step() {
-      if (i >= states.length) {
-        Object.keys(saved).forEach(function (k) { settings[k] = saved[k]; });
-        applySettings(); spdrBlinking = false; return;
-      }
-      var on = states[i++];
-      toggle.forEach(function (k) { settings[k] = on; });
-      applySettings();
-      setTimeout(step, 300);
-    })();
-  }
+  // (Old on/off effect-blink removed — clicking an eyeball now pulses the highlight
+  // via spdrHi.pulse(); see makeHiliteIcon.)
 
   // Example helpers (safe — overlay-only, or transient UI selection):
   // Map a grid cell (row,col) centre to screen px via the board root's CTM.
@@ -2823,16 +2827,47 @@
     for (var r = 0; r < N && out.length < n; r++) for (var c = 0; c < N && out.length < n; c++) if (!occ[r + ',' + c]) out.push([r, c]);
     return out;
   }
-  // Draw a few example pencilmark digits (overlay-only) in empty cells, in the
-  // configured colour, so hovering shows what the control styles even on a blank
-  // puzzle. Returns null (the overlay is cleared on mouse-out by hide()).
-  function drawPencilExample(colorKey, layout) {
-    if (document.querySelectorAll('#cell-candidates tspan, #cell-pencilmarks text').length) return null; // real marks exist → highlight handles it
-    var color = settings[colorKey] || '#338fe8';
+  // Draw example pencilmark digits (overlay-only) in empty cells, in the control's
+  // configured colour and at the right place — center cluster vs. cell corners — so
+  // hovering shows what the control styles even on a blank puzzle. Skipped when real
+  // marks of this kind already exist (the highlight outlines those instead). Returns
+  // null; the overlay is cleared on mouse-out by hide().
+  function drawPencilExample(colorKey, layout, realSel) {
+    if (realSel && document.querySelector(realSel)) return null;
+    var color = settings[colorKey] || (colorKey.indexOf('Invalid') >= 0 ? '#cd6666' : '#338fe8');
     emptyExampleCells(3).forEach(function (rc) {
       var p = cellCenterScreen(rc[0], rc[1]); if (!p) return;
-      var size = Math.max(8, p.cs * p.scale * (layout === 'corner' ? 0.16 : 0.2));
-      spdrHi.addText(p.x, p.y, layout === 'corner' ? '1  2' : '1 2 3', color, size);
+      var cellPx = p.cs * p.scale;
+      if (layout === 'corner') {
+        var off = cellPx * 0.30, csz = Math.max(7, cellPx * 0.17);
+        [['1', -off, -off], ['2', off, -off], ['3', -off, off], ['4', off, off]].forEach(function (d) {
+          spdrHi.addText(p.x + d[1], p.y + d[2], d[0], color, csz);
+        });
+      } else {
+        spdrHi.addText(p.x, p.y, '1 2 3', color, Math.max(8, cellPx * 0.2));
+      }
+    });
+    return null;
+  }
+  // Trace a clean, de-duplicated region/box boundary (one line per edge — not the
+  // doubled outlines of every box). Used as the "where the border would be" hover
+  // for Center / Multi-color borders when those subsections aren't currently drawn.
+  function drawRegionBoundaryExample() {
+    var board = document.getElementById('svgrenderer'); if (!board || !board.getScreenCTM) return null;
+    var m = board.getScreenCTM(); if (!m) return null;
+    var boxes = document.querySelectorAll('#cell-grids path:not(.cell-grid)');
+    if (!boxes.length) return null;
+    var seen = {};
+    function edge(x1, y1, x2, y2) {
+      var k = Math.round(x1) + ',' + Math.round(y1) + ',' + Math.round(x2) + ',' + Math.round(y2);
+      if (seen[k]) return; seen[k] = 1; spdrHi.addLine(x1, y1, x2, y2, m);
+    }
+    boxes.forEach(function (p) {
+      var b; try { b = p.getBBox(); } catch (e) { return; }
+      edge(b.x, b.y, b.x + b.width, b.y);
+      edge(b.x, b.y + b.height, b.x + b.width, b.y + b.height);
+      edge(b.x, b.y, b.x, b.y + b.height);
+      edge(b.x + b.width, b.y, b.x + b.width, b.y + b.height);
     });
     return null;
   }
@@ -2849,15 +2884,15 @@
     }).catch(function () {});
   }
 
-  // Small hover-icon (👁) placed right after a control's label. Identified by a
-  // KEY into the central maps below (HT = what to highlight, PAINT = fill/stroke
-  // glow, ONSHOW = optional hover "example", BLINK = what the click blinks). While
-  // hovered it outlines the targets on the live puzzle (held bright until
-  // mouse-out); clicking blinks the real effect on/off twice.
+  // Small hover-icon (👁) placed right after a control's label. Identified by a KEY
+  // into the central maps below (HT = what to highlight, PAINT = fill/stroke glow,
+  // ONSHOW = optional hover "example"). Hovering outlines the targets on the live
+  // puzzle and HOLDS them bright until mouse-out; clicking pulses that highlight
+  // (gradual brighten→dim, twice) without disturbing the steady hold or the puzzle.
   function makeHiliteIcon(key, title) {
     var ic = document.createElement('span');
     ic.textContent = '👁';
-    ic.title = title || 'Hover to show what this affects; click to blink it';
+    ic.title = title || 'Hover to show what this affects; click to pulse it';
     Object.assign(ic.style, { fontSize: '20px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', verticalAlign: 'middle' });
     var cleanup = null;
     function reshow() { var g = HT[key]; if (g) { try { spdrHi.show(g() || [], PAINT[key] || null); } catch (e) {} } }
@@ -2871,8 +2906,9 @@
       spdrHi.hide();
       if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
     });
-    // Click blinks the real effect; never toggles the section it sits in.
-    ic.addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); blinkEffect(BLINK[key]); });
+    // Click pulses the already-shown highlight (the steady hover-hold stays put);
+    // never toggles the section it sits in or the puzzle's settings.
+    ic.addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); spdrHi.pulse(); });
     return ic;
   }
 
@@ -2913,8 +2949,13 @@
 
   var HT = {
     given:         function () { return hqa('#cell-givens text, text.cell-given'); },
-    labelBg:       function () { return hqa('rect.textbg'); },
-    kropki:        function () { return hqa('rect.feature-kropki, text[data-spdr-kropki-label]'); },
+    // Mirrors LABEL_RECT_SEL (what fixAllLabelRects actually recolours). NOTE: that
+    // selector includes the circular Kropki `textbg` rects, so labelBg + kropki
+    // overlap on Kropki dots — accurate to the code today (cleanup tracked for later).
+    labelBg:       function () { return hqa(LABEL_RECT_SEL); },
+    // Mirrors fixAllKropkiDots: the kropki dots are `rect.feature-kropki, rect.textbg`
+    // filtered by isKropkiCircle — independent of whether our text labels are injected.
+    kropki:        function () { return hqa('rect.feature-kropki, rect.textbg').filter(isKropkiCircle); },
     selection:     function () { return hqa('#cell-highlights path.cage-selectioncage'); },
     cellColors:    function () { var e = hqa('#cell-colors > *'); return e.length ? e : firstOf('#control-colour'); },
     centerValid:   function () { var e = hqa('#cell-candidates tspan:not(.conflict)'); return e.length ? e : firstOf('#control-centre'); },
@@ -2924,12 +2965,12 @@
     objColored:    function () { return objShade(false); },
     objGray:       function () { return objShade(true); },
     objBorders:    function () { return objFillSources().filter(hasPaintedStroke); },
-    // Region borders subsections — prefer our injected clones (exact geometry when
-    // drawn), else the live SOURCE geometry the draw step clones FROM, so the icon
-    // shows where the borders are / would be. regCenter/regMulti → the region/box
-    // outline paths (#cell-grids path:not(.cell-grid)); regCell → the grid-line path.
-    regCenter:     function () { var e = hqa('[data-spdr-region-split] path[data-spdr-kind="center"]'); return e.length ? e : hqa('#cell-grids path:not(.cell-grid)'); },
-    regMulti:      function () { var e = hqa('[data-spdr-region-split] [data-spdr-kind="multi"]'); return e.length ? e : hqa('#cell-grids path:not(.cell-grid)'); },
+    // Region borders subsections — trace our injected clones when drawn (exact
+    // geometry). When NOT drawn, regCenter/regMulti return [] and their ONSHOW traces
+    // a clean de-duplicated region boundary instead (drawRegionBoundaryExample) so we
+    // don't double-stroke every box outline. regCell still falls back to the live grid.
+    regCenter:     function () { return hqa('[data-spdr-region-split] path[data-spdr-kind="center"]'); },
+    regMulti:      function () { return hqa('[data-spdr-region-split] [data-spdr-kind="multi"]'); },
     regCell:       function () { var e = hqa('[data-spdr-region-split] path[data-spdr-kind="cell"]'); return e.length ? e : hqa('#cell-grids path.cell-grid'); },
     // Action-section checkboxes → the on-screen elements they show/hide.
     actionBtns:    function () { return hqa('#sp-fill-btn-wrap, #sp-clear-btn-wrap, #sp-clearall-btn-wrap'); },
@@ -2941,38 +2982,21 @@
   // into a filled glow (PAINT[key]='fill'); empty for now = everything outlines.
   var PAINT = {};
 
-  // What a click blinks: `force` keys held ON for the preview, `toggle` keys blinked
-  // on/off twice. For gated sub-effects we force the parent section ON so the blink
-  // is actually visible. Restored to saved state afterwards (no save).
-  var BLINK = {
-    given:        { toggle: ['givenEnabled'] },
-    labelBg:      { toggle: ['labelBgEnabled'] },
-    kropki:       { toggle: ['kropkiFixEnabled'] },
-    selection:    { toggle: ['selectionColorEnabled'] },
-    cellColors:   { toggle: ['cellColorsOpacityEnabled'] },
-    centerValid:  { toggle: ['centerEnabled'] },
-    centerInvalid:{ toggle: ['centerEnabled'] },
-    cornerValid:  { toggle: ['cornerEnabled'] },
-    cornerInvalid:{ toggle: ['cornerEnabled'] },
-    objColored:   { force: ['underlayEnabled'], toggle: ['underlayLightnessEnabled', 'underlayOpacityEnabled'] },
-    objGray:      { force: ['underlayEnabled'], toggle: ['underlayGrayBrightnessEnabled', 'underlayGrayOpacityEnabled'] },
-    objBorders:   { force: ['underlayEnabled'], toggle: ['underlayStrokeLightnessEnabled', 'underlayStrokeOpacityEnabled'] },
-    regCenter:    { force: ['regionBorderEnabled'], toggle: ['regionBorderCenterEnabled'] },
-    regMulti:     { force: ['regionBorderEnabled'], toggle: ['regionBorderMultiEnabled'] },
-    regCell:      { force: ['regionBorderEnabled'], toggle: ['regionBorderCellEnabled'] },
-    actionBtns:   { toggle: ['showActionButtons'] },
-    easyShade:    { toggle: ['showEasyShadeButton'] },
-  };
-
   // Optional hover "example": runs when the icon is entered, may add a transient
   // demo so a blank puzzle still shows what the control affects. Receives a
   // `reshow` callback (re-run the highlight after async state lands) and may return
   // a cleanup fn (run on mouse-out). All overlay-only or transient UI — never edits
   // the puzzle model. Selection is the deliberate exception: it leaves cells picked.
   var ONSHOW = {
-    centerValid: function () { return drawPencilExample('centerValidColor', 'center'); },
-    cornerValid: function () { return drawPencilExample('cornerValidColor', 'corner'); },
-    selection:   function (reshow) {
+    centerValid:   function () { return drawPencilExample('centerValidColor',   'center', '#cell-candidates tspan:not(.conflict)'); },
+    centerInvalid: function () { return drawPencilExample('centerInvalidColor', 'center', '#cell-candidates tspan.conflict'); },
+    cornerValid:   function () { return drawPencilExample('cornerValidColor',   'corner', '#cell-pencilmarks text:not(.conflict)'); },
+    cornerInvalid: function () { return drawPencilExample('cornerInvalidColor', 'corner', '#cell-pencilmarks text.conflict'); },
+    // When the center/multi border subsections aren't drawn, trace a clean region
+    // boundary (one line per edge) so the icon shows where the border would go.
+    regCenter:     function () { if (!document.querySelector('[data-spdr-region-split] path[data-spdr-kind="center"]')) return drawRegionBoundaryExample(); return null; },
+    regMulti:      function () { if (!document.querySelector('[data-spdr-region-split] [data-spdr-kind="multi"]')) return drawRegionBoundaryExample(); return null; },
+    selection:     function (reshow) {
       if (document.querySelector('#cell-highlights path.cage-selectioncage')) return null; // already a selection
       selectExampleCells();
       setTimeout(reshow, 150);   // re-trace once the selection border renders
