@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.170.0
+// @version      2.171.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.170.0';
+  var SCRIPT_VERSION = '2.171.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3263,22 +3263,34 @@
     return box;
   }
 
-  // Brief click feedback on a button so the user sees something happened: a colour
-  // flash, plus an optional 360° spin (for the ↺ reset buttons, whose glyph is an
-  // arrow). The flash assumes the button's resting background is #313244 (all our
-  // panel buttons use it) and returns to it.
-  var spdrBtnStyleInjected = false;
-  function spdrBtnFeedback(btn, spin) {
-    if (!spdrBtnStyleInjected) {
-      var st = document.createElement('style');
-      st.textContent = '@keyframes spdrBtnSpin{from{transform:rotate(0)}to{transform:rotate(-360deg)}}'
-        + '@keyframes spdrBtnFlash{0%,100%{background-color:#313244}45%{background-color:#89b4fa}}';
-      document.head.appendChild(st);
-      spdrBtnStyleInjected = true;
-    }
-    var anims = (spin ? ['spdrBtnSpin 450ms ease'] : []).concat(['spdrBtnFlash 450ms ease']);
-    btn.style.animation = 'none'; void btn.getBoundingClientRect();
-    btn.style.animation = anims.join(', ');
+  // Button click/hover feedback, browser-refresh style. `spdr-fxbtn` gives every
+  // panel button a hover brighten + an :active "depress" (translateY + dim, a 3D
+  // press). `spdrFxButton(btn, spin)` registers it and, on click, runs a brief
+  // dim→bright "work" pulse (so even an instant action reads as "did something");
+  // spin=true also spins the button 360° (for the ↺ arrows, like a refresh button).
+  // Uses filter/transform only (never the inline-set background), so it works on
+  // every panel button regardless of its resting colours.
+  var spdrFxInjected = false;
+  function spdrEnsureFx() {
+    if (spdrFxInjected) return;
+    spdrFxInjected = true;
+    var st = document.createElement('style');
+    st.textContent =
+      '.spdr-fxbtn{transition:filter .12s ease, transform .07s ease;}'
+      + '.spdr-fxbtn:hover{filter:brightness(1.35);}'
+      + '.spdr-fxbtn:active{transform:translateY(1px) scale(.96);filter:brightness(.8);}'
+      + '@keyframes spdrBtnSpin{from{transform:rotate(0)}to{transform:rotate(-360deg)}}'
+      + '@keyframes spdrBtnWork{0%{filter:brightness(1)}30%{filter:brightness(.5)}100%{filter:brightness(1)}}';
+    document.head.appendChild(st);
+  }
+  function spdrFxButton(btn, spin) {
+    spdrEnsureFx();
+    btn.classList.add('spdr-fxbtn');
+    btn.addEventListener('click', function () {
+      var anims = (spin ? ['spdrBtnSpin 500ms ease'] : []).concat(['spdrBtnWork 420ms ease']);
+      btn.style.animation = 'none'; void btn.getBoundingClientRect();
+      btn.style.animation = anims.join(', ');
+    });
   }
 
   // Top-level section. resetKeys = list of every setting key the reset button
@@ -3350,6 +3362,7 @@
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexShrink: '0', marginLeft: '6px', marginTop: '1px',
     });
+    spdrFxButton(sectionReset, true);   // hover/active feedback + spin on click
     head.appendChild(sectionReset);
 
     section.appendChild(head);
@@ -3373,8 +3386,12 @@
       if (headColor) headColor.style.display = enabled ? '' : 'none';
       // "Show only when collapsed" section-label eyeball (Object Shading): visible
       // while off — when the per-control eyeballs are hidden — and hidden when on
-      // (then they're redundant).
-      if (hiliteIcon && opts.hiliteWhenCollapsed) hiliteIcon.style.display = enabled ? 'none' : '';
+      // (then they're redundant). Use VISIBILITY (not display) so the icon keeps its
+      // box either way and the label's height/text position doesn't shift on toggle.
+      if (hiliteIcon && opts.hiliteWhenCollapsed) {
+        hiliteIcon.style.visibility = enabled ? 'hidden' : 'visible';
+        hiliteIcon.style.pointerEvents = enabled ? 'none' : 'auto';
+      }
     }
     updateDim();
 
@@ -3397,7 +3414,6 @@
     (opts.enableKeys || (hasMaster ? [opts.enabledKey] : [])).forEach(function (k) { if (k) preserveSet[k] = 1; });
     sectionReset.addEventListener('click', function (e) {
       e.stopPropagation();
-      spdrBtnFeedback(sectionReset, true);
       (opts.resetKeys || []).forEach(function (k) {
         if (preserveSet[k]) return;
         if (k in DEFAULTS) settings[k] = DEFAULTS[k];
@@ -5135,10 +5151,10 @@
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexShrink: '0',
     });
+    spdrFxButton(actionResetBtn, true);
     var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'suppressStartDialog', 'showToasts', 'toastPersist'];
     actionResetBtn.addEventListener('click', function (e) {
       e.stopPropagation();
-      spdrBtnFeedback(actionResetBtn, true);
       ACTION_RESET_KEYS.forEach(function (k) { if (k in DEFAULTS) settings[k] = DEFAULTS[k]; });
       saveSettings(settings); applySettings();
       ACTION_RESET_KEYS.forEach(function (k) { if (controlSyncers[k]) { try { controlSyncers[k](); } catch (ex) {} } });
@@ -5271,12 +5287,12 @@
     Object.assign(rescanBtn.style, {
       background: '#313244', color: '#a6adc8',
       border: '1px solid #45475a', borderRadius: '4px',
-      padding: '2px 10px', cursor: 'pointer', fontSize: '11px',
+      padding: '3px 11px', cursor: 'pointer', fontSize: '13px',
       fontFamily: 'system-ui, -apple-system, sans-serif',
       flexShrink: '0', marginLeft: '8px',
     });
+    spdrFxButton(rescanBtn, false);
     rescanBtn.addEventListener('click', function () {
-      spdrBtnFeedback(rescanBtn, false);
       settings.digitSetConfirmed = false;
       settings.lastConfirmedUrl = '';
       saveSettings(settings);
@@ -5313,8 +5329,9 @@
     Object.assign(resetBtn.style, {
       background: '#313244', color: '#a6adc8',
       border: '1px solid #45475a', borderRadius: '6px',
-      padding: '5px 10px', cursor: 'pointer', fontSize: '11px', width: '100%',
+      padding: '6px 10px', cursor: 'pointer', fontSize: '13px', width: '100%',
     });
+    spdrFxButton(resetBtn, false);
     resetBtn.addEventListener('click', function () {
       settings = Object.assign({}, DEFAULTS);
       saveSettings(settings); applySettings();
