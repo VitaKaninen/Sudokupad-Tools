@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://sudokupad.app/
-// @version      2.168.0
+// @version      2.169.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -31,7 +31,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.168.0';
+  var SCRIPT_VERSION = '2.169.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -39,7 +39,7 @@
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
   var DEFAULTS = {
-    regionBorderEnabled:           true,
+    // (regionBorderEnabled master removed — the 3 subsections gate independently.)
     regionBorderColor:             '#000000',   // black — center border default
     regionBorderOpacity:           1.0,
     regionBorderWidth:             '3',
@@ -51,9 +51,8 @@
     regionBorderCellOpacity:       1.0,     // cell grid line opacity
     regionBorderCellWidth:         '1',     // cell grid line width (user units) — matches SudokuPad's native grid line
 
-    // "Cell digits" section (large in-cell digits, vs the small pencilmarks).
-    // digitsEnabled is the section master; given/user are the two subsections.
-    digitsEnabled:                 true,    // section master toggle
+    // "Given / Placed digits" section (large in-cell digits, vs the small
+    // pencilmarks). No section master — the two sub-toggles gate independently.
     givenEnabled:                  false,   // recolor author given clues (#cell-givens text)
     givenColor:                    '#e8e6e3',
     givenOpacity:                  1.0,
@@ -118,8 +117,8 @@
     kropkiConsecLabelEnabled:     true,   // show label on consecutive (white) dots
     kropkiConsecLabelText:        '~',    // label text for consecutive (white) dots
     kropkiConsecLabelRotate:      false,  // rotate that label 90° when dot is on a horizontal border
-    kropkiLabelSize:              18,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
-    kropkiLabelWeight:            'bold', // font-weight for both Kropki dot labels — bolder default than the old 'normal'
+    kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
+    kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
     selectionColorEnabled:        false,
     selectionColor:               '#3399ff',
@@ -918,7 +917,7 @@
   // are drawn). Mirrors needFills/needMultiBorders/needCenterBorder + shaded.
   function regionFeatureActive() {
     return !!settings.regionColorFillEnabled
-      || (settings.regionBorderEnabled && (settings.regionBorderMultiEnabled || settings.regionBorderCenterEnabled))
+      || settings.regionBorderMultiEnabled || settings.regionBorderCenterEnabled
       || !!settings.shadedRegionColorEnabled;
   }
   // Shaded "extra regions" (e.g. "grey regions must contain 1-9") render on top
@@ -1062,7 +1061,7 @@
   // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
   // they have no cell-given class and DarkReader handles their colour correctly.
   function fixGivenText(t) {
-    if (settings.digitsEnabled && settings.givenEnabled) {
+    if (settings.givenEnabled) {
       var color = hexToRgba(settings.givenColor, settings.givenOpacity);
       t.style.setProperty('fill', color, 'important');
       t.removeAttribute('data-darkreader-inline-color');
@@ -1079,7 +1078,7 @@
   // User-entered (placed) digits — the values the solver types into cells
   // (#cell-values text). Same inline-fill approach as givens so DR can't re-convert.
   function fixUserText(t) {
-    if (settings.digitsEnabled && settings.userDigitEnabled) {
+    if (settings.userDigitEnabled) {
       var color = hexToRgba(settings.userDigitColor, settings.userDigitOpacity);
       t.style.setProperty('fill', color, 'important');
       t.removeAttribute('data-darkreader-inline-color');
@@ -1316,9 +1315,9 @@
       t.setAttribute('y', cy);
       t.setAttribute('text-anchor', 'middle');
       t.setAttribute('dominant-baseline', 'central');
-      var lblSize = parseFloat(settings.kropkiLabelSize); if (!isFinite(lblSize) || lblSize <= 0) lblSize = 18;
+      var lblSize = parseFloat(settings.kropkiLabelSize); if (!isFinite(lblSize) || lblSize <= 0) lblSize = 16;
       t.setAttribute('font-size', lblSize);
-      t.setAttribute('font-weight', settings.kropkiLabelWeight || 'bold');
+      t.setAttribute('font-weight', settings.kropkiLabelWeight || '600');
       t.setAttribute('pointer-events', 'none');
       t.setAttribute('data-spdr-kropki-label', labelFill);  // store intended fill colour
       t.textContent = labelText;
@@ -1453,8 +1452,8 @@
 
   function fixCageBox(el) {
     var inDR = isDarkReader();
-    var centerActive = settings.regionBorderEnabled && settings.regionBorderCenterEnabled;
-    var multiActive  = settings.regionBorderEnabled && settings.regionBorderMultiEnabled;
+    var centerActive = settings.regionBorderCenterEnabled;
+    var multiActive  = settings.regionBorderMultiEnabled;
 
     if (centerActive || multiActive) {
       // Center border is drawn as SVG clones in mainGroup (z=0), and multi-color
@@ -1678,8 +1677,8 @@
     })();
 
     var needFills        = settings.regionColorFillEnabled;
-    var needMultiBorders = settings.regionBorderEnabled && settings.regionBorderMultiEnabled;
-    var needCenterBorder = settings.regionBorderEnabled && settings.regionBorderCenterEnabled;
+    var needMultiBorders = settings.regionBorderMultiEnabled;
+    var needCenterBorder = settings.regionBorderCenterEnabled;
     // Shaded extra-regions are drawn (as clones) inside mainGroup so they sit
     // BELOW the region borders — coloured when shaded mode is on, otherwise the
     // same grey. Done whenever any region feature is active (so there are borders
@@ -1688,8 +1687,8 @@
     // Cell borders (recolor the thin grid lines) and Suppress-boundary both act on
     // the cell-grid clone, so they keep mainGroup alive on their own (standalone).
     // Suppress also needs region geometry to know which grid edges are boundaries.
-    var needCellColor = settings.regionBorderEnabled && settings.regionBorderCellEnabled;
-    var needSuppress  = settings.regionBorderEnabled && settings.regionBorderSuppressBoundary;
+    var needCellColor = settings.regionBorderCellEnabled;
+    var needSuppress  = settings.regionBorderSuppressBoundary;
     var geo = (needFills || needMultiBorders || needCenterBorder || needShadedClones || needCellColor || needSuppress)
       ? inferRegionsFromSVG() : null;
 
@@ -2629,35 +2628,13 @@
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Settings clarity: per-control hover-highlight icons + empty-state hints
-  //
-  // Two related systems:
-  //  1. Per-control 👁 hover icons (makeHiliteIcon + HT target getters below) —
-  //     placed next to individual controls; hovering one outlines exactly what
-  //     that control affects on the live puzzle.
-  //  2. Section empty-state hints — HILITE[enabledKey] declares a `sel` (board
-  //     selector) and `msg`; when the section's `sel` matches nothing in the
-  //     current puzzle we show `msg` in the panel so the user knows why a control
-  //     appears to do nothing.
+  // Settings clarity: per-control 👁 hover icons (makeHiliteIcon + HT getters
+  // below). Hovering one outlines exactly what that control affects on the live
+  // puzzle; if the element type isn't present, a small "nothing here" tooltip
+  // appears beside the pointer (EMPTY_HINT). Element types that can simulate an
+  // example on hover (digits, pencilmarks, region borders, selection) show that
+  // instead of a tooltip.
   // ═══════════════════════════════════════════════════════════════════════════
-  // Center/Corner/Selection deliberately have NO msg: their eyeball now draws a
-  // live example on hover, so a "doesn't exist yet" warning would be redundant.
-  var HILITE = {
-    givenEnabled:             { sel: '#cell-givens text, text.cell-given', msg: 'This puzzle has no given clue digits.' },
-    labelBgEnabled:           { sel: 'rect.textbg',                        msg: 'This puzzle has no text labels (cage sums etc.).' },
-    underlayEnabled:          { sel: '#underlay rect, #cages path[fill], #overlay rect', msg: 'This puzzle has no shaded objects to tint.' },
-    cellColorsOpacityEnabled: { sel: '#cell-colors > *', msg: 'No colored cells yet — use the highlighted Color tool to paint some.' },
-    kropkiFixEnabled:         { sel: 'rect.feature-kropki, rect.textbg', msg: 'This puzzle has no Kropki dots.' },
-  };
-
-  // Returns the live elements a section currently affects (its `sel` matches), or
-  // [] if none. Pure DOM read — safe to call on hover/open.
-  function hiliteTargets(enabledKey) {
-    var spec = HILITE[enabledKey];
-    if (!spec) return [];
-    try { return Array.prototype.slice.call(document.querySelectorAll(spec.sel)); }
-    catch (e) { return []; }
-  }
 
   // The highlight overlay. Rather than draw a bounding box per target (which is
   // wrong for line/path elements — a single grid path's bbox is the whole grid,
@@ -2670,7 +2647,7 @@
   // incl. the settings panel, which is dimmed when a target lies under it.
   var spdrHi = (function () {
     var NS = 'http://www.w3.org/2000/svg', STROKE = '#ffd24a';
-    var layer = null, osvg = null, divPool = [], dimmedPanel = null;
+    var layer = null, osvg = null, oexsvg = null, divPool = [], dimmedPanel = null;
     function ensure() {
       if (layer) return;
       var st = document.createElement('style');
@@ -2687,6 +2664,11 @@
       osvg = document.createElementNS(NS, 'svg');
       Object.assign(osvg.style, { position: 'fixed', pointerEvents: 'none', overflow: 'visible', display: 'none', filter: 'drop-shadow(0 0 1.5px ' + STROKE + ')' });
       layer.appendChild(osvg);
+      // Separate overlay for "example" content (simulated digits) — NO drop-shadow
+      // filter, so example digits render crisp instead of hazy. addText draws here.
+      oexsvg = document.createElementNS(NS, 'svg');
+      Object.assign(oexsvg.style, { position: 'fixed', pointerEvents: 'none', overflow: 'visible', display: 'none' });
+      layer.appendChild(oexsvg);
       document.body.appendChild(layer);
     }
     function div(i) {
@@ -2695,7 +2677,10 @@
       Object.assign(d.style, { position: 'fixed', borderRadius: '5px', boxSizing: 'border-box', pointerEvents: 'none', display: 'none', border: '2px solid ' + STROKE, boxShadow: '0 0 6px 1px rgba(255,210,74,.55)' });
       layer.appendChild(d); divPool[i] = d; return d;
     }
-    function clearSvg() { while (osvg.firstChild) osvg.removeChild(osvg.firstChild); }
+    function clearSvg() {
+      while (osvg.firstChild) osvg.removeChild(osvg.firstChild);
+      if (oexsvg) while (oexsvg.firstChild) oexsvg.removeChild(oexsvg.firstChild);
+    }
     // Restart the one-shot flash-then-hold animation on an element.
     function flash(el) { el.style.animation = 'none'; void el.getBoundingClientRect(); el.style.animation = 'spdrHiFade 430ms ease-out 1 forwards'; }
     // Style a cloned svg node as a highlight. paint 'fill' glows the filled area;
@@ -2723,9 +2708,12 @@
     // getScreenCTM matrices and raw screen coordinates both map straight through.
     function positionOverlay() {
       var W = window.innerWidth, H = window.innerHeight;
-      Object.assign(osvg.style, { left: '0', top: '0', width: W + 'px', height: H + 'px', display: 'block' });
-      osvg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
-      osvg.setAttribute('preserveAspectRatio', 'none');
+      [osvg, oexsvg].forEach(function (s) {
+        if (!s) return;
+        Object.assign(s.style, { left: '0', top: '0', width: W + 'px', height: H + 'px', display: 'block' });
+        s.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+        s.setAttribute('preserveAspectRatio', 'none');
+      });
     }
     function show(els, paint, dedupe) {
       ensure();
@@ -2830,18 +2818,20 @@
     }
     // Append an illustrative digit to the overlay at SCREEN coords (used by the
     // pencilmark "example" hover). Purely visual — never touches the puzzle model.
-    function addText(sx, sy, text, color, sizePx) {
+    function addText(sx, sy, text, color, sizePx, weight) {
       ensure();
-      if (osvg.style.display === 'none') positionOverlay();
+      if (oexsvg.style.display === 'none') positionOverlay();
       var t = document.createElementNS(NS, 'text');
       t.setAttribute('x', sx); t.setAttribute('y', sy);
       t.setAttribute('text-anchor', 'middle'); t.setAttribute('dominant-baseline', 'central');
-      t.setAttribute('font-size', sizePx); t.setAttribute('font-family', 'sans-serif'); t.setAttribute('font-weight', '600');
+      t.setAttribute('font-size', sizePx);
+      t.setAttribute('font-family', '"Open Sans", Roboto, Arial, sans-serif');  // SudokuPad's digit font
+      t.setAttribute('font-weight', weight || '400');
       t.setAttribute('fill', color);
       t.style.cssText = 'fill:' + color + ' !important;';
       t.textContent = text;
-      osvg.appendChild(t);
-      flash(osvg);
+      oexsvg.appendChild(t);   // crisp (non-filtered) example layer — no haze
+      flash(oexsvg);
     }
     // Draw a straight highlight segment between two USER-space points, mapped to
     // screen via `m` (the board root's getScreenCTM). Used to trace a clean,
@@ -2861,7 +2851,9 @@
     // highlight (overlay svg + any outline divs), ending back at full opacity so it
     // doesn't disturb the steady hover-hold. Purely visual — no effect toggling.
     function pulse() {
-      if (osvg && osvg.style.display !== 'none') { osvg.style.animation = 'none'; void osvg.getBoundingClientRect(); osvg.style.animation = 'spdrHiPulse 520ms ease-in-out 2'; }
+      [osvg, oexsvg].forEach(function (s) {
+        if (s && s.style.display !== 'none' && s.firstChild) { s.style.animation = 'none'; void s.getBoundingClientRect(); s.style.animation = 'spdrHiPulse 520ms ease-in-out 2'; }
+      });
       for (var i = 0; i < divPool.length; i++) {
         var d = divPool[i];
         if (d.style.display !== 'none') { d.style.animation = 'none'; void d.getBoundingClientRect(); d.style.animation = 'spdrHiPulse 520ms ease-in-out 2'; }
@@ -2885,14 +2877,41 @@
     }
     function hide() {
       if (osvg) { clearSvg(); osvg.style.display = 'none'; }
+      if (oexsvg) oexsvg.style.display = 'none';
       for (var i = 0; i < divPool.length; i++) divPool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
     return { show: show, hide: hide, addText: addText, addLine: addLine, pulse: pulse };
   })();
 
-  // (Old on/off effect-blink removed — clicking an eyeball now pulses the highlight
-  // via spdrHi.pulse(); see makeHiliteIcon.)
+  // Tiny tooltip beside the mouse pointer — used on eyeball hover to say "nothing to
+  // highlight here" when the section's element type isn't present in this puzzle.
+  // (Replaces the old persistent in-panel ⚠ warning lines.)
+  var spdrTip = (function () {
+    var el = null;
+    function ensure() {
+      if (el) return;
+      el = document.createElement('div');
+      Object.assign(el.style, {
+        position: 'fixed', zIndex: '2147483647', pointerEvents: 'none', display: 'none',
+        background: '#1e1e2e', color: '#f9a85a', border: '1px solid #45475a',
+        borderRadius: '6px', padding: '4px 8px', fontSize: '11px',
+        fontFamily: 'system-ui, -apple-system, sans-serif', maxWidth: '210px',
+        boxShadow: '0 4px 14px rgba(0,0,0,0.55)', whiteSpace: 'normal', lineHeight: '1.3',
+      });
+      document.body.appendChild(el);
+    }
+    function move(x, y) {
+      if (!el || el.style.display === 'none') return;
+      var w = el.offsetWidth || 160, h = el.offsetHeight || 24;
+      var left = x - w - 14; if (left < 6) left = x + 16;      // prefer left of pointer (panel is on the right)
+      var top = y - h - 6;   if (top < 6) top = y + 16;
+      el.style.left = left + 'px'; el.style.top = top + 'px';
+    }
+    function show(x, y, text) { ensure(); el.textContent = text; el.style.display = 'block'; move(x, y); }
+    function hide() { if (el) el.style.display = 'none'; }
+    return { show: show, move: move, hide: hide };
+  })();
 
   // Example helpers (safe — overlay-only, or transient UI selection):
   // Map a grid cell (row,col) centre to screen px via the board root's CTM.
@@ -2914,25 +2933,49 @@
     for (var r = 0; r < N && out.length < n; r++) for (var c = 0; c < N && out.length < n; c++) if (!occ[r + ',' + c]) out.push([r, c]);
     return out;
   }
-  // Draw example pencilmark digits (overlay-only) in empty cells, in the control's
-  // configured colour and at the right place — center cluster vs. cell corners — so
-  // hovering shows what the control styles even on a blank puzzle. Skipped when real
-  // marks of this kind already exist (the highlight outlines those instead). Returns
-  // null; the overlay is cleared on mouse-out by hide().
-  function drawPencilExample(colorKey, layout, realSel) {
-    if (realSel && document.querySelector(realSel)) return null;
-    var color = settings[colorKey] || (colorKey.indexOf('Invalid') >= 0 ? '#cd6666' : '#338fe8');
-    emptyExampleCells(3).forEach(function (rc) {
+  function numOr(v, d) { var n = parseFloat(v); return isFinite(n) ? n : d; }
+
+  // Draw example pencilmarks (overlay-only) across 3 empty cells, matching the
+  // section's chosen colours + opacity so the user can tune them on a blank puzzle:
+  //   cell 1 = valid digits (1 2 3),  cell 2 = invalid digits (4 5 6),
+  //   cell 3 = a mix of both. `kind` is 'center' or 'corner'. Skipped when real
+  // marks of that kind already exist (the highlight outlines those instead).
+  function drawPencilExample(kind) {
+    var realSel = kind === 'corner' ? '#cell-pencilmarks text' : '#cell-candidates tspan';
+    if (document.querySelector(realSel)) return null;
+    var vC = hexToRgba(settings[kind + 'ValidColor']   || '#338fe8', numOr(settings[kind + 'ValidOpacity'],   1));
+    var iC = hexToRgba(settings[kind + 'InvalidColor'] || '#cd6666', numOr(settings[kind + 'InvalidOpacity'], 1));
+    var plans = [
+      [['1', vC], ['2', vC], ['3', vC]],                              // valid
+      [['4', iC], ['5', iC], ['6', iC]],                              // invalid
+      [['1', vC], ['2', vC], ['3', vC], ['4', iC], ['5', iC], ['6', iC]], // mixed
+    ];
+    emptyExampleCells(3).forEach(function (rc, idx) {
+      var plan = plans[idx]; if (!plan) return;
       var p = cellCenterScreen(rc[0], rc[1]); if (!p) return;
       var cellPx = p.cs * p.scale;
-      if (layout === 'corner') {
-        var off = cellPx * 0.30, csz = Math.max(7, cellPx * 0.17);
-        [['1', -off, -off], ['2', off, -off], ['3', -off, off], ['4', off, off]].forEach(function (d) {
-          spdrHi.addText(p.x + d[1], p.y + d[2], d[0], color, csz);
-        });
+      if (kind === 'corner') {
+        var size = cellPx * 0.17, o = cellPx * 0.30;
+        // valid → TL/TR/BL ; invalid → TC/BC/BR (so a mixed cell reads clearly)
+        var pos = [[-o, -o], [o, -o], [-o, o], [0, -o], [0, o], [o, o]];
+        plan.forEach(function (d, i) { var q = pos[i] || [0, 0]; spdrHi.addText(p.x + q[0], p.y + q[1], d[0], d[1], size); });
       } else {
-        spdrHi.addText(p.x, p.y, '1 2 3', color, Math.max(8, cellPx * 0.2));
+        var n = plan.length, sz = cellPx * (n > 4 ? 0.18 : 0.20), step = sz * 0.80;
+        var startX = p.x - (n - 1) / 2 * step;
+        plan.forEach(function (d, i) { spdrHi.addText(startX + i * step, p.y, d[0], d[1], sz); });
       }
+    });
+    return null;
+  }
+  // Draw example full-sized digits (given / placed) across 3 empty cells, matching
+  // the chosen colour + opacity. Skipped when real digits of that kind exist.
+  function drawDigitExample(colorKey, opacityKey, realSel) {
+    if (realSel && document.querySelector(realSel)) return null;
+    var rgba = hexToRgba(settings[colorKey] || '#e8e6e3', numOr(settings[opacityKey], 1));
+    emptyExampleCells(3).forEach(function (rc, idx) {
+      var p = cellCenterScreen(rc[0], rc[1]); if (!p) return;
+      var cellPx = p.cs * p.scale;
+      spdrHi.addText(p.x, p.y, String(idx * 3 + 1), rgba, cellPx * 0.62);
     });
     return null;
   }
@@ -2986,14 +3029,20 @@
     Object.assign(ic.style, { fontSize: '20px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', verticalAlign: 'middle', pointerEvents: 'auto' });
     var cleanup = null;
     function reshow() { var g = HT[key]; if (g) { try { spdrHi.show(g() || [], PAINT[key] || null, DEDUPE[key]); } catch (e) {} } }
-    ic.addEventListener('mouseenter', function () {
+    ic.addEventListener('mouseenter', function (e) {
       ic.style.opacity = '1'; ic.style.filter = 'none';
       reshow();
-      if (ONSHOW[key]) { try { cleanup = ONSHOW[key](reshow) || null; } catch (e) {} }
+      if (ONSHOW[key]) { try { cleanup = ONSHOW[key](reshow) || null; } catch (e2) {} }
+      // "Nothing here to highlight" tooltip beside the pointer (only for element
+      // types that have no simulated example — see EMPTY_HINT).
+      var eh = EMPTY_HINT[key];
+      if (eh) { try { if (eh.test()) spdrTip.show(e.clientX, e.clientY, eh.msg); } catch (e2) {} }
     });
+    ic.addEventListener('mousemove', function (e) { spdrTip.move(e.clientX, e.clientY); });
     ic.addEventListener('mouseleave', function () {
       ic.style.opacity = '0.55'; ic.style.filter = 'grayscale(1)';
       spdrHi.hide();
+      spdrTip.hide();
       if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
     });
     // Click pulses the already-shown highlight (the steady hover-hold stays put);
@@ -3038,8 +3087,12 @@
   }
 
   var HT = {
-    given:         function () { var e = hqa('#cell-givens text, text.cell-given'); return e.length ? e : firstOf('#control-normal'); },
-    userDigit:     function () { var e = hqa('#cell-values text, text.cell-value'); return e.length ? e : firstOf('#control-normal'); },
+    // Given digits highlight ONLY the real givens (no tool-button fallback) — when
+    // none exist, ONSHOW.given simulates one in the chosen colour/opacity instead.
+    given:         function () { return hqa('#cell-givens text, text.cell-given'); },
+    // Placed digits highlight the real placed values AND always the digit-entry tool
+    // button (#control-normal), even when values exist; ONSHOW simulates if none.
+    userDigit:     function () { return hqa('#cell-values text, text.cell-value').concat(firstOf('#control-normal')); },
     // Mirrors fixLabelRect: LABEL_RECT_SEL minus COLOURED (saturated) fills — those are
     // author-coloured cosmetic shapes that fixLabelRect now skips (Object shading owns
     // them). Still overlaps Kropki on the white/black circular textbg dots (accurate).
@@ -3050,13 +3103,10 @@
     kropki:        function () { var cs = getGridCellSize(); return hqa('rect.feature-kropki, rect.textbg').filter(function (r) { return isKropkiCircle(r) && isOnCellBorder(r, cs); }); },
     selection:     function () { return hqa('#cell-highlights path.cage-selectioncage'); },
     cellColors:    function () { var e = hqa('#cell-colors > *'); return e.length ? e : firstOf('#control-colour'); },
-    centerValid:   function () { var e = hqa('#cell-candidates tspan:not(.conflict)'); return e.length ? e : firstOf('#control-centre'); },
-    // Invalid getters fall back to the tool button (same as the valid ones) so the
-    // eyeball always highlights *something* — which lets dimPanel fade the panel
-    // when that target sits behind it, even on a puzzle with no conflict marks yet.
-    centerInvalid: function () { var e = hqa('#cell-candidates tspan.conflict'); return e.length ? e : firstOf('#control-centre'); },
-    cornerValid:   function () { var e = hqa('#cell-pencilmarks text:not(.conflict)'); return e.length ? e : firstOf('#control-corner'); },
-    cornerInvalid: function () { var e = hqa('#cell-pencilmarks text.conflict'); return e.length ? e : firstOf('#control-corner'); },
+    // One eyeball per pencilmark kind (combined valid+invalid). When none exist,
+    // ONSHOW draws a valid/invalid/mixed example in the chosen colours/opacity.
+    centerMarks:   function () { return hqa('#cell-candidates tspan'); },
+    cornerMarks:   function () { return hqa('#cell-pencilmarks text'); },
     objColored:    function () { return objShade(false); },
     objGray:       function () { return objShade(true); },
     objBorders:    function () { return objFillSources().filter(hasPaintedStroke); },
@@ -3092,10 +3142,11 @@
   // a cleanup fn (run on mouse-out). All overlay-only or transient UI — never edits
   // the puzzle model. Selection is the deliberate exception: it leaves cells picked.
   var ONSHOW = {
-    centerValid:   function () { return drawPencilExample('centerValidColor',   'center', '#cell-candidates tspan:not(.conflict)'); },
-    centerInvalid: function () { return drawPencilExample('centerInvalidColor', 'center', '#cell-candidates tspan.conflict'); },
-    cornerValid:   function () { return drawPencilExample('cornerValidColor',   'corner', '#cell-pencilmarks text:not(.conflict)'); },
-    cornerInvalid: function () { return drawPencilExample('cornerInvalidColor', 'corner', '#cell-pencilmarks text.conflict'); },
+    // Full-sized digits: simulate in the chosen colour/opacity when none exist.
+    given:         function () { return drawDigitExample('givenColor',     'givenOpacity',     '#cell-givens text, text.cell-given'); },
+    userDigit:     function () { return drawDigitExample('userDigitColor', 'userDigitOpacity', '#cell-values text, text.cell-value'); },
+    centerMarks:   function () { return drawPencilExample('center'); },
+    cornerMarks:   function () { return drawPencilExample('corner'); },
     // When the center/multi border subsections aren't drawn, trace a clean region
     // boundary (one line per edge) so the icon shows where the border would go.
     regCenter:     function () { if (!document.querySelector('[data-spdr-region-split] path[data-spdr-kind="center"]')) return drawRegionBoundaryExample(); return null; },
@@ -3108,10 +3159,19 @@
     },
   };
 
-  // Empty-state hints recompute when the panel opens (puzzle state may have
-  // changed since build). Each section registers its updater here.
-  var spdrEmptyCheckers = [];
-  function refreshEmptyHints() { spdrEmptyCheckers.forEach(function (f) { try { f(); } catch (e) {} }); }
+  // "Nothing to highlight" tooltip content, keyed by eyeball key. Only element types
+  // that have NO simulated example need one (given/placed/center/corner/region/
+  // selection all draw an example instead, so they're omitted). `test()` returns
+  // true when the puzzle currently has none of that element. Shown beside the pointer
+  // on hover (see makeHiliteIcon) — replaces the old in-panel ⚠ warning lines.
+  var EMPTY_HINT = {
+    labelBg:    { test: function () { return HT.labelBg().length === 0; },                          msg: 'No text labels in this puzzle.' },
+    cellColors: { test: function () { return hqa('#cell-colors > *').length === 0; },               msg: 'No shaded cells yet.' },
+    kropki:     { test: function () { return HT.kropki().length === 0; },                            msg: 'No Kropki dots in this puzzle.' },
+    objColored: { test: function () { return objShade(false).length === 0; },                       msg: 'No colored objects to shade.' },
+    objGray:    { test: function () { return objShade(true).length === 0; },                        msg: 'No gray objects to shade.' },
+    objBorders: { test: function () { return objFillSources().filter(hasPaintedStroke).length === 0; }, msg: 'No object outlines to shade.' },
+  };
 
   // A collapsible subsection inside a section: a checkbox row whose options are
   // hidden until its checkbox is on. If `masterEnabledKey` is given, the row also
@@ -3174,16 +3234,21 @@
     var head = document.createElement('div');
     Object.assign(head.style, { display: 'flex', alignItems: 'flex-start', gap: '10px' });
 
+    // noMasterCheckbox: a header with no on/off checkbox — the section is always
+    // "active" and its subsections each manage their own collapse (used by Region
+    // borders, Given/Placed digits, Pencilmarks).
+    var hasMaster = !opts.noMasterCheckbox;
+
     var checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
-    checkbox.checked = !!settings[opts.enabledKey];
+    checkbox.checked = hasMaster ? !!settings[opts.enabledKey] : true;
     Object.assign(checkbox.style, {
       marginTop: '2px', flexShrink: '0', cursor: 'pointer',
       accentColor: '#89b4fa', width: '14px', height: '14px',
     });
 
     var textBlock = document.createElement('div');
-    Object.assign(textBlock.style, { flex: '1', minWidth: '0', cursor: 'pointer' });
+    Object.assign(textBlock.style, { flex: '1', minWidth: '0', cursor: hasMaster ? 'pointer' : 'default' });
     var lbl = document.createElement('div');
     lbl.textContent = opts.label;
     Object.assign(lbl.style, { color: '#cdd6f4', fontWeight: '500', marginBottom: '2px' });
@@ -3200,23 +3265,11 @@
       textBlock.appendChild(desc);
     }
 
-    // Empty-state hint — shown when this section has nothing to act on in the
-    // current puzzle (its HILITE.sel matches no elements). Recomputed on panel open.
-    var emptyHint = null;
-    if (HILITE[opts.enabledKey] && HILITE[opts.enabledKey].msg) {
-      emptyHint = document.createElement('div');
-      Object.assign(emptyHint.style, { color: '#f9a85a', fontSize: '11px', marginTop: '3px', display: 'none' });
-      textBlock.appendChild(emptyHint);
-      var updateEmpty = function () {
-        var empty = hiliteTargets(opts.enabledKey).length === 0;
-        emptyHint.textContent = empty ? '⚠ ' + HILITE[opts.enabledKey].msg : '';
-        emptyHint.style.display = empty ? 'block' : 'none';
-      };
-      updateEmpty();
-      spdrEmptyCheckers.push(updateEmpty);
-    }
+    // (Empty-state is now a hover tooltip beside the pointer on the eyeball icon —
+    // see makeHiliteIcon / EMPTY_HINT — not a persistent in-panel warning.)
 
-    head.appendChild(checkbox); head.appendChild(textBlock);
+    if (hasMaster) head.appendChild(checkbox);
+    head.appendChild(textBlock);
 
     var headColor = null;
     if (opts.hasColor) {
@@ -3250,7 +3303,12 @@
     if (subWrap.childNodes.length > 0) section.appendChild(subWrap);
 
     function updateDim() {
-      var enabled = checkbox.checked;
+      var enabled = hasMaster ? checkbox.checked : true;
+      // Master-less section: always active; subsections manage their own collapse.
+      if (!hasMaster) {
+        if (subWrap._spdrOnMasterToggle) subWrap._spdrOnMasterToggle(true);
+        return;
+      }
       // collapseWhenDisabled: fully hide the sub-content when off (only the header —
       // checkbox, description, reset — stays). Otherwise just dim it (legacy look).
       if (opts.collapseWhenDisabled) {
@@ -3274,28 +3332,33 @@
     }
     updateDim();
 
-    controlSyncers[opts.enabledKey] = function () { checkbox.checked = !!settings[opts.enabledKey]; updateDim(); };
+    if (hasMaster) {
+      controlSyncers[opts.enabledKey] = function () { checkbox.checked = !!settings[opts.enabledKey]; updateDim(); };
+      checkbox.addEventListener('change', function () {
+        settings[opts.enabledKey] = checkbox.checked;
+        saveSettings(settings); applySettings(); updateDim();
+      });
+      textBlock.addEventListener('click', function () {
+        checkbox.checked = !checkbox.checked;
+        checkbox.dispatchEvent(new Event('change'));
+      });
+    }
 
-    checkbox.addEventListener('change', function () {
-      settings[opts.enabledKey] = checkbox.checked;
-      saveSettings(settings); applySettings(); updateDim();
-    });
-    textBlock.addEventListener('click', function () {
-      checkbox.checked = !checkbox.checked;
-      checkbox.dispatchEvent(new Event('change'));
-    });
+    // Reset preserves the section's on/off checkboxes — its master (enabledKey) AND
+    // any subsection toggles (opts.enableKeys) — and restores every OTHER option to
+    // its default. The bottom "Reset all" button is what restores the toggles too.
+    var preserveSet = {};
+    (opts.enableKeys || (hasMaster ? [opts.enabledKey] : [])).forEach(function (k) { if (k) preserveSet[k] = 1; });
     sectionReset.addEventListener('click', function (e) {
       e.stopPropagation();
-      // The section's own on/off toggle (enabledKey) is NOT reset here — only the
-      // sub-settings are. The global "Reset all" button at the bottom resets everything.
       (opts.resetKeys || []).forEach(function (k) {
-        if (k === opts.enabledKey) return;
+        if (preserveSet[k]) return;
         if (k in DEFAULTS) settings[k] = DEFAULTS[k];
       });
       saveSettings(settings); applySettings();
       // Re-sync any registered controls (checkbox, swatches, sliders, etc.)
       (opts.resetKeys || []).forEach(function (k) {
-        if (k === opts.enabledKey) return;
+        if (preserveSet[k]) return;
         if (controlSyncers[k]) { try { controlSyncers[k](); } catch (e) {} }
       });
       updateDim();
@@ -4590,13 +4653,12 @@
     panel.appendChild(content);
 
     content.appendChild(buildSection({
-      enabledKey: 'regionBorderEnabled',
       label: 'Region borders',
-      desc: 'Solid, center-only, or multi-color borders around the puzzle\'s regions (boxes / cages / shape groups).',
+      desc: 'Borders around the puzzle\'s regions (boxes, cages, shape groups) and its cell gridlines.',
       hasColor: false,
-      collapseOptionsWhenDisabled: true,   // section off → subsection checkboxes stay visible (greyed); only their options collapse
-      resetKeys: ['regionBorderEnabled',
-                  'regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
+      noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone
+      enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
+      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
                   'regionColorStripeWidth', 'regionColorOpacity',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
@@ -4608,12 +4670,11 @@
           Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
           return d;
         }
-        // Each subsection stays visible (greyed) when the section master is off; only
-        // its options collapse. Track the boxes so the master toggle can refresh them.
+        // Each subsection collapses its own options independently (no section master).
         var subBoxes = [];
         function makeSubsection(enabledKey, labelText, buildOptions, hilite, hiliteTitle) {
           var box = makeCollapsibleSubsection({
-            enabledKey: enabledKey, masterEnabledKey: 'regionBorderEnabled',
+            enabledKey: enabledKey,
             labelText: labelText, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
           });
           subBoxes.push(box);
@@ -4655,9 +4716,9 @@
           opt.appendChild(makeOpacityRow('regionColorOpacity', null));
         }, 'regMulti', 'Highlight the multi-color region borders (or where they\'d be drawn)'));
 
-        // ── Subsection 3: Cell borders (recolor the thin built-in grid lines) ──
+        // ── Subsection 3: Cell gridlines (recolor the thin built-in grid lines) ──
         wrap.appendChild(divider());
-        wrap.appendChild(makeSubsection('regionBorderCellEnabled', 'Cell borders', function (opt) {
+        wrap.appendChild(makeSubsection('regionBorderCellEnabled', 'Cell gridlines', function (opt) {
           var c = colorRow('Color:', 'regionBorderCellColor', 'regionBorderCellOpacity');
           opt.appendChild(c.row);
           opt.appendChild(makeOpacityRow('regionBorderCellOpacity', c.ref));
@@ -4667,21 +4728,19 @@
     }));
 
     content.appendChild(buildSection({
-      // Section name TBD — "Untitled" is a placeholder; change `label` below to rename.
-      enabledKey: 'digitsEnabled',
-      label: 'Untitled',
-      desc: 'Recolors the large solving digits that fill the cells. Set a separate color and opacity for the author\'s given clues and for the digits you place yourself. The small pencilmark candidates and overlay constraint labels are left untouched.',
+      label: 'Given / Placed digits',
+      desc: 'The puzzle\'s given clue digits and the full-sized digits you place.',
       hasColor: false,
-      collapseOptionsWhenDisabled: true,   // section off → both subsection checkboxes stay visible (greyed); only their options collapse
-      resetKeys: ['digitsEnabled',
-                  'givenEnabled', 'givenColor', 'givenOpacity',
+      noMasterCheckbox: true,
+      enableKeys: ['givenEnabled', 'userDigitEnabled'],
+      resetKeys: ['givenEnabled', 'givenColor', 'givenOpacity',
                   'userDigitEnabled', 'userDigitColor', 'userDigitOpacity'],
       subBuilder: function (wrap) {
         var subBoxes = [];
-        function sub(enabledKey, labelText, desc, buildOptions, hilite, hiliteTitle) {
+        function sub(enabledKey, labelText, buildOptions, hilite, hiliteTitle) {
           var box = makeCollapsibleSubsection({
-            enabledKey: enabledKey, masterEnabledKey: 'digitsEnabled',
-            labelText: labelText, desc: desc, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
+            enabledKey: enabledKey,
+            labelText: labelText, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
           });
           subBoxes.push(box);
           return box;
@@ -4695,23 +4754,21 @@
 
         // ── Subsection 1: Given digits (author clues) ─────────────────────
         wrap.appendChild(sub('givenEnabled', 'Given digits',
-          'The starting clue numbers fixed by the puzzle\'s author.',
           function (opt) { opt.appendChild(makeColorRow('Color', 'givenColor', 'givenOpacity')); },
-          'given', 'Highlight the author\'s given clue digits'));
+          'given', 'Highlight the given clue digits'));
 
-        // ── Subsection 2: User-entered digits (placed values) ─────────────
+        // ── Subsection 2: Placed digits (the solver's values) ─────────────
         wrap.appendChild(divider());
-        wrap.appendChild(sub('userDigitEnabled', 'User-entered digits',
-          'The values you type into cells as you solve.',
+        wrap.appendChild(sub('userDigitEnabled', 'Placed digits',
           function (opt) { opt.appendChild(makeColorRow('Color', 'userDigitColor', 'userDigitOpacity')); },
-          'userDigit', 'Highlight the digits you have entered'));
+          'userDigit', 'Highlight the digits you have placed'));
       },
     }));
 
     content.appendChild(buildSection({
       enabledKey: 'labelBgEnabled',
       label: 'Label background',
-      desc: 'Recolors the small background box behind text labels — cage sums, little-killer clues, and similar. Only puzzles that have such labels are affected.',
+      desc: 'The background box behind text labels (cage sums, little-killer clues, etc.).',
       hilite: 'labelBg', hiliteTitle: 'Highlight the label background boxes',
       hasColor: true,
       colorKey: 'labelBgColor',
@@ -4722,7 +4779,7 @@
     content.appendChild(buildSection({
       enabledKey: 'underlayEnabled',
       label: 'Object Shading',
-      desc: 'Tint and outline puzzle objects — shape backgrounds, cage fills, lines (thermos, palindromes, etc.), and their borders.',
+      desc: 'Shape backgrounds, cage fills, lines (thermos, palindromes, etc.), and their outlines.',
       hasColor: false,
       // NOTE: underlaySeparateBrightnessOpacity is intentionally NOT in resetKeys —
       // the section ↺ leaves the combined/separate checkbox in whatever state it's
@@ -4819,50 +4876,63 @@
     content.appendChild(buildSection({
       enabledKey: 'cellColorsOpacityEnabled',
       label: 'Cell shading',
-      desc: 'Sets the opacity of cells that have a background color — either ones the puzzle author filled in, or cells you paint with the color tool — so borders, pencilmarks, and digits stay visible beneath them. No effect on a puzzle with no colored cells.',
+      desc: 'Cells with a background color (author-filled, or painted with the color tool).',
+      hilite: 'cellColors', hiliteTitle: 'Highlight the colored cells',
       hasColor: false,
       resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
       subBuilder: function (wrap) {
-        wrap.appendChild(makeRangeRow({ key: 'cellColorsOpacity', label: 'Opacity', min: 0, max: 1, step: 0.05, hilite: 'cellColors', hiliteTitle: 'Highlight colored cells (or the Color tool if none yet)' }));
+        wrap.appendChild(makeRangeRow({ key: 'cellColorsOpacity', label: 'Opacity', min: 0, max: 1, step: 0.05 }));
       },
     }));
 
     content.appendChild(buildSection({
-      enabledKey: 'centerEnabled',
-      label: 'Center pencilmarks',
-      desc: 'Recolors the small digits you enter as center pencilmarks (the candidates clustered in the middle of a cell). No effect until you place some.',
+      label: 'Pencilmarks',
+      desc: 'The small candidate digits you pencil into cells — center marks and corner marks.',
       hasColor: false,
-      resetKeys: ['centerValidColor','centerValidOpacity',
-                  'centerInvalidColor','centerInvalidOpacity',
-                  'centerHideInvalid','centerMoveInvalidRight'],
+      noMasterCheckbox: true,
+      enableKeys: ['centerEnabled', 'cornerEnabled'],
+      resetKeys: ['centerEnabled', 'centerValidColor', 'centerValidOpacity', 'centerInvalidColor', 'centerInvalidOpacity', 'centerHideInvalid', 'centerMoveInvalidRight',
+                  'cornerEnabled', 'cornerValidColor', 'cornerValidOpacity', 'cornerInvalidColor', 'cornerInvalidOpacity', 'cornerHideInvalid', 'cornerMoveInvalidEnd'],
       subBuilder: function (wrap) {
-        wrap.appendChild(makeColorRow('Valid digits',   'centerValidColor',   'centerValidOpacity', 'centerValid',   'Highlight valid center marks (or the Centre tool if none yet)'));
-        wrap.appendChild(makeColorRow('Invalid digits', 'centerInvalidColor', 'centerInvalidOpacity', 'centerInvalid', 'Highlight invalid (conflicting) center marks'));
-        wrap.appendChild(makeSubCheckbox('centerHideInvalid',      'Hide invalid digits'));
-        wrap.appendChild(makeSubCheckbox('centerMoveInvalidRight', 'Move invalid digits to the right'));
-      },
-    }));
+        var subBoxes = [];
+        function sub(enabledKey, labelText, buildOptions, hilite, hiliteTitle) {
+          var box = makeCollapsibleSubsection({
+            enabledKey: enabledKey,
+            labelText: labelText, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
+          });
+          subBoxes.push(box);
+          return box;
+        }
+        wrap._spdrOnMasterToggle = function () { subBoxes.forEach(function (b) { b._spdrUpd(); }); };
+        function divider() {
+          var d = document.createElement('div');
+          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+          return d;
+        }
 
-    content.appendChild(buildSection({
-      enabledKey: 'cornerEnabled',
-      label: 'Corner pencilmarks',
-      desc: 'Recolors the small digits you enter as corner pencilmarks (the candidates tucked into a cell\'s corners). No effect until you place some.',
-      hasColor: false,
-      resetKeys: ['cornerValidColor','cornerValidOpacity',
-                  'cornerInvalidColor','cornerInvalidOpacity',
-                  'cornerHideInvalid','cornerMoveInvalidEnd'],
-      subBuilder: function (wrap) {
-        wrap.appendChild(makeColorRow('Valid digits',   'cornerValidColor',   'cornerValidOpacity', 'cornerValid',   'Highlight valid corner marks (or the Corner tool if none yet)'));
-        wrap.appendChild(makeColorRow('Invalid digits', 'cornerInvalidColor', 'cornerInvalidOpacity', 'cornerInvalid', 'Highlight invalid (conflicting) corner marks'));
-        wrap.appendChild(makeSubCheckbox('cornerHideInvalid',    'Hide invalid digits'));
-        wrap.appendChild(makeSubCheckbox('cornerMoveInvalidEnd', 'Move invalid digits to the end'));
+        // ── Center marks ──────────────────────────────────────────────────
+        wrap.appendChild(sub('centerEnabled', 'Center marks', function (opt) {
+          opt.appendChild(makeColorRow('Valid digits',   'centerValidColor',   'centerValidOpacity'));
+          opt.appendChild(makeColorRow('Invalid digits', 'centerInvalidColor', 'centerInvalidOpacity'));
+          opt.appendChild(makeSubCheckbox('centerHideInvalid',      'Hide invalid digits'));
+          opt.appendChild(makeSubCheckbox('centerMoveInvalidRight', 'Move invalid digits to the right'));
+        }, 'centerMarks', 'Highlight the center pencilmarks'));
+
+        // ── Corner marks ──────────────────────────────────────────────────
+        wrap.appendChild(divider());
+        wrap.appendChild(sub('cornerEnabled', 'Corner marks', function (opt) {
+          opt.appendChild(makeColorRow('Valid digits',   'cornerValidColor',   'cornerValidOpacity'));
+          opt.appendChild(makeColorRow('Invalid digits', 'cornerInvalidColor', 'cornerInvalidOpacity'));
+          opt.appendChild(makeSubCheckbox('cornerHideInvalid',    'Hide invalid digits'));
+          opt.appendChild(makeSubCheckbox('cornerMoveInvalidEnd', 'Move invalid digits to the end'));
+        }, 'cornerMarks', 'Highlight the corner pencilmarks'));
       },
     }));
 
     content.appendChild(buildSection({
       enabledKey: 'kropkiFixEnabled',
       label: 'Kropki dots',
-      desc: 'Fixes DarkReader inverting the white/black Kropki dots that sit between cells. Only affects puzzles that have Kropki dots.',
+      desc: 'The white/black Kropki dots between cells.',
       hilite: 'kropki', hiliteTitle: 'Highlight the Kropki dots',
       hasColor: false,
       resetKeys: ['kropkiFixEnabled',
@@ -4970,7 +5040,7 @@
     content.appendChild(buildSection({
       enabledKey: 'selectionColorEnabled',
       label: 'Cell selection border',
-      desc: 'Override the color, opacity, width, and growth direction of the selection-perimeter border.',
+      desc: 'The outline drawn around the cells you currently have selected.',
       hilite: 'selection', hiliteTitle: 'Highlight the selection border (select cells first)',
       hasColor: false,
       resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth',
@@ -5242,7 +5312,6 @@
       e.stopPropagation();
       if (panel.style.display === 'none') {
         panel.style.display = 'flex';
-        refreshEmptyHints();
         var toast = document.getElementById('sp-remove-invalid-toast');
         if (toast) toast.style.bottom = getToastBottom();
       } else {
