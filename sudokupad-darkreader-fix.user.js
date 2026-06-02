@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.171.0
+// @version      2.172.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.171.0';
+  var SCRIPT_VERSION = '2.172.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4942,7 +4942,7 @@
     content.appendChild(buildSection({
       enabledKey: 'cellColorsOpacityEnabled',
       label: 'Cell shading',
-      desc: 'Cells with a background color — set by the puzzle author, or painted with the Color tool.',
+      desc: 'Cells with a background color (e.g. ones you shade with the Color tool).',
       hilite: 'cellColors', hiliteTitle: 'Highlight the colored cells',
       hasColor: false,
       resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
