@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.173.0
+// @version      2.174.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.173.0';
+  var SCRIPT_VERSION = '2.174.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1332,20 +1332,45 @@
     });
   }
 
-  // Center a Kropki label's *ink* on (cx, cy). text-anchor/dominant-baseline only
-  // center the font line box, but a glyph's visible ink isn't centered in that box
-  // (a colon's dots sit low, a tilde sits high), so the symbol looks offset — and
-  // any vertical offset becomes a horizontal one once the label is rotated 90°. We
-  // measure the rendered geometry (getBBox ignores the element's own rotate(), so
-  // this works in both orientations) and nudge x/y so the ink center lands on the
-  // circle center, which the rotation also pivots around.
+  // Center a Kropki label's *ink* on the circle center (cx, cy). text-anchor +
+  // dominant-baseline (and SVG getBBox/getBoundingClientRect) only center the
+  // glyph's line/cell box — but the visible ink isn't centered in that box (a
+  // colon's dots sit low, a tilde sits high), so the symbol still looks offset, and
+  // any vertical offset turns into a horizontal one once the label is rotated 90°.
+  // The only reliable ink extents come from Canvas measureText's actualBoundingBox*
+  // metrics, so we measure those (in the element's computed font) and position the
+  // text on the default alphabetic baseline so the ink — not the box — lands on
+  // (cx, cy). The rotate(90,cx,cy) transform pivots around that same point, so a
+  // centered ink stays centered in both orientations.
+  var _spdrInkCtx = null;
   function centerKropkiLabel(t, cx, cy) {
-    var bb; try { bb = t.getBBox(); } catch (e) { return; }
-    if (!bb || !bb.width) return;
-    var curX = parseFloat(t.getAttribute('x')) || 0;
-    var curY = parseFloat(t.getAttribute('y')) || 0;
-    t.setAttribute('x', curX + (cx - (bb.x + bb.width / 2)));
-    t.setAttribute('y', curY + (cy - (bb.y + bb.height / 2)));
+    if (!_spdrInkCtx) { var c = document.createElement('canvas'); _spdrInkCtx = c && c.getContext && c.getContext('2d'); }
+    if (!_spdrInkCtx) return;
+    var cs = getComputedStyle(t);
+    var fSize = parseFloat(cs.fontSize) || parseFloat(t.getAttribute('font-size')) || 16;
+    var fWeight = cs.fontWeight || t.getAttribute('font-weight') || '600';
+    var fFamily = cs.fontFamily || 'sans-serif';
+    var m;
+    try {
+      _spdrInkCtx.font = fWeight + ' ' + fSize + 'px ' + fFamily;
+      _spdrInkCtx.textAlign = 'left';
+      _spdrInkCtx.textBaseline = 'alphabetic';
+      m = _spdrInkCtx.measureText(t.textContent);
+    } catch (e) { return; }
+    var asc = m.actualBoundingBoxAscent, desc = m.actualBoundingBoxDescent;
+    var left = m.actualBoundingBoxLeft, right = m.actualBoundingBoxRight;
+    if (!isFinite(asc) || !isFinite(desc)) return;  // metrics unavailable — leave box-centering
+    // Vertical: place the alphabetic baseline so the ink's vertical midpoint = cy.
+    t.removeAttribute('dominant-baseline');
+    t.setAttribute('y', cy + (asc - desc) / 2);
+    // Horizontal: text-anchor=middle centers the advance; nudge by the ink's
+    // asymmetry within that advance (negligible for symmetric :/~, matters for
+    // custom labels). x is the advance midpoint; shift so the ink midpoint = cx.
+    if (isFinite(left) && isFinite(right)) {
+      t.setAttribute('x', cx + m.width / 2 - (right - left) / 2);
+    } else {
+      t.setAttribute('x', cx);
+    }
   }
 
   function fixCornerText(el) {
@@ -4856,14 +4881,47 @@
     }));
 
     content.appendChild(buildSection({
-      enabledKey: 'labelBgEnabled',
-      label: 'Label background',
-      desc: 'The background box behind text labels (cage sums, little-killer clues, etc.).',
-      hilite: 'labelBg', hiliteTitle: 'Highlight the label background boxes',
-      hasColor: true,
-      colorKey: 'labelBgColor',
-      opacityKey: 'labelBgOpacity',
-      resetKeys: ['labelBgColor','labelBgOpacity'],
+      label: 'Pencilmarks',
+      desc: 'The small candidate digits you pencil into cells — center marks and corner marks.',
+      hasColor: false,
+      noMasterCheckbox: true,
+      enableKeys: ['centerEnabled', 'cornerEnabled'],
+      resetKeys: ['centerEnabled', 'centerValidColor', 'centerValidOpacity', 'centerInvalidColor', 'centerInvalidOpacity', 'centerHideInvalid', 'centerMoveInvalidRight',
+                  'cornerEnabled', 'cornerValidColor', 'cornerValidOpacity', 'cornerInvalidColor', 'cornerInvalidOpacity', 'cornerHideInvalid', 'cornerMoveInvalidEnd'],
+      subBuilder: function (wrap) {
+        var subBoxes = [];
+        function sub(enabledKey, labelText, buildOptions, hilite, hiliteTitle) {
+          var box = makeCollapsibleSubsection({
+            enabledKey: enabledKey,
+            labelText: labelText, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
+          });
+          subBoxes.push(box);
+          return box;
+        }
+        wrap._spdrOnMasterToggle = function () { subBoxes.forEach(function (b) { b._spdrUpd(); }); };
+        function divider() {
+          var d = document.createElement('div');
+          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+          return d;
+        }
+
+        // ── Center marks ──────────────────────────────────────────────────
+        wrap.appendChild(sub('centerEnabled', 'Center marks', function (opt) {
+          opt.appendChild(makeColorRow('Valid digits',   'centerValidColor',   'centerValidOpacity'));
+          opt.appendChild(makeColorRow('Invalid digits', 'centerInvalidColor', 'centerInvalidOpacity'));
+          opt.appendChild(makeSubCheckbox('centerHideInvalid',      'Hide invalid digits'));
+          opt.appendChild(makeSubCheckbox('centerMoveInvalidRight', 'Move invalid digits to the right'));
+        }, 'centerMarks', 'Highlight the center pencilmarks'));
+
+        // ── Corner marks ──────────────────────────────────────────────────
+        wrap.appendChild(divider());
+        wrap.appendChild(sub('cornerEnabled', 'Corner marks', function (opt) {
+          opt.appendChild(makeColorRow('Valid digits',   'cornerValidColor',   'cornerValidOpacity'));
+          opt.appendChild(makeColorRow('Invalid digits', 'cornerInvalidColor', 'cornerInvalidOpacity'));
+          opt.appendChild(makeSubCheckbox('cornerHideInvalid',    'Hide invalid digits'));
+          opt.appendChild(makeSubCheckbox('cornerMoveInvalidEnd', 'Move invalid digits to the end'));
+        }, 'cornerMarks', 'Highlight the corner pencilmarks'));
+      },
     }));
 
     content.appendChild(buildSection({
@@ -4963,62 +5021,6 @@
         ].forEach(function (k) { controlSyncers[k] = refreshAll; });
 
         updateMode();
-      },
-    }));
-
-    content.appendChild(buildSection({
-      enabledKey: 'cellColorsOpacityEnabled',
-      label: 'Cell shading',
-      desc: 'Cells with a background color (e.g. ones you shade with the Color tool).',
-      hilite: 'cellColors', hiliteTitle: 'Highlight the colored cells',
-      hasColor: false,
-      resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
-      subBuilder: function (wrap) {
-        wrap.appendChild(makeRangeRow({ key: 'cellColorsOpacity', label: 'Opacity', min: 0, max: 1, step: 0.05 }));
-      },
-    }));
-
-    content.appendChild(buildSection({
-      label: 'Pencilmarks',
-      desc: 'The small candidate digits you pencil into cells — center marks and corner marks.',
-      hasColor: false,
-      noMasterCheckbox: true,
-      enableKeys: ['centerEnabled', 'cornerEnabled'],
-      resetKeys: ['centerEnabled', 'centerValidColor', 'centerValidOpacity', 'centerInvalidColor', 'centerInvalidOpacity', 'centerHideInvalid', 'centerMoveInvalidRight',
-                  'cornerEnabled', 'cornerValidColor', 'cornerValidOpacity', 'cornerInvalidColor', 'cornerInvalidOpacity', 'cornerHideInvalid', 'cornerMoveInvalidEnd'],
-      subBuilder: function (wrap) {
-        var subBoxes = [];
-        function sub(enabledKey, labelText, buildOptions, hilite, hiliteTitle) {
-          var box = makeCollapsibleSubsection({
-            enabledKey: enabledKey,
-            labelText: labelText, buildOptions: buildOptions, hilite: hilite, hiliteTitle: hiliteTitle,
-          });
-          subBoxes.push(box);
-          return box;
-        }
-        wrap._spdrOnMasterToggle = function () { subBoxes.forEach(function (b) { b._spdrUpd(); }); };
-        function divider() {
-          var d = document.createElement('div');
-          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
-          return d;
-        }
-
-        // ── Center marks ──────────────────────────────────────────────────
-        wrap.appendChild(sub('centerEnabled', 'Center marks', function (opt) {
-          opt.appendChild(makeColorRow('Valid digits',   'centerValidColor',   'centerValidOpacity'));
-          opt.appendChild(makeColorRow('Invalid digits', 'centerInvalidColor', 'centerInvalidOpacity'));
-          opt.appendChild(makeSubCheckbox('centerHideInvalid',      'Hide invalid digits'));
-          opt.appendChild(makeSubCheckbox('centerMoveInvalidRight', 'Move invalid digits to the right'));
-        }, 'centerMarks', 'Highlight the center pencilmarks'));
-
-        // ── Corner marks ──────────────────────────────────────────────────
-        wrap.appendChild(divider());
-        wrap.appendChild(sub('cornerEnabled', 'Corner marks', function (opt) {
-          opt.appendChild(makeColorRow('Valid digits',   'cornerValidColor',   'cornerValidOpacity'));
-          opt.appendChild(makeColorRow('Invalid digits', 'cornerInvalidColor', 'cornerInvalidOpacity'));
-          opt.appendChild(makeSubCheckbox('cornerHideInvalid',    'Hide invalid digits'));
-          opt.appendChild(makeSubCheckbox('cornerMoveInvalidEnd', 'Move invalid digits to the end'));
-        }, 'cornerMarks', 'Highlight the corner pencilmarks'));
       },
     }));
 
@@ -5127,6 +5129,29 @@
         controlSyncers['kropkiConsecLabelEnabled'] = function () { if (_wlSync) _wlSync(); updateSizeDim(); };
         blCb.addEventListener('change', updateSizeDim);
         wlCb.addEventListener('change', updateSizeDim);
+      },
+    }));
+
+    content.appendChild(buildSection({
+      enabledKey: 'labelBgEnabled',
+      label: 'Label background',
+      desc: 'The background box behind text labels (cage sums, little-killer clues, etc.).',
+      hilite: 'labelBg', hiliteTitle: 'Highlight the label background boxes',
+      hasColor: true,
+      colorKey: 'labelBgColor',
+      opacityKey: 'labelBgOpacity',
+      resetKeys: ['labelBgColor','labelBgOpacity'],
+    }));
+
+    content.appendChild(buildSection({
+      enabledKey: 'cellColorsOpacityEnabled',
+      label: 'Cell shading',
+      desc: 'Cells with a background color (e.g. ones you shade with the Color tool).',
+      hilite: 'cellColors', hiliteTitle: 'Highlight the colored cells',
+      hasColor: false,
+      resetKeys: ['cellColorsOpacity', 'cellColorsOpacityEnabled'],
+      subBuilder: function (wrap) {
+        wrap.appendChild(makeRangeRow({ key: 'cellColorsOpacity', label: 'Opacity', min: 0, max: 1, step: 0.05 }));
       },
     }));
 
