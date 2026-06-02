@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.176.0
+// @version      2.177.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.176.0';
+  var SCRIPT_VERSION = '2.177.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -250,11 +250,11 @@
       var bg = hexToRgba(s.labelBgColor, s.labelBgOpacity);
       css += `
       html[data-darkreader-scheme="dark"] #svgrenderer rect.cage-label,
-      html[data-darkreader-scheme="dark"] #svgrenderer rect.textbg,
+      html[data-darkreader-scheme="dark"] #svgrenderer rect.textbg:not([fill="none"]),
       html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
       html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
       html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="white"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.textbg,
+      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.textbg:not([fill="none"]),
       html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.cage-label,
       html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
       html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
