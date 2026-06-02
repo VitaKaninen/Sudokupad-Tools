@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.177.0
+// @version      2.181.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.177.0';
+  var SCRIPT_VERSION = '2.181.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1332,97 +1332,33 @@
     });
   }
 
-  // Center a Kropki label's *ink* on the circle center (cx, cy). The font baseline
-  // plus SudokuPad's `dominant-baseline:middle` rule center the glyph's line box,
-  // not its visible ink — so a colon rides low and a tilde/circle rides high, and
-  // any vertical offset becomes a horizontal one once the label is rotated 90°.
-  // Metric APIs lie here: getBBox/getBoundingClientRect return the line box, and
-  // Canvas measureText's font metrics don't match SudokuPad's SVG rasterizer (it
-  // renders the same glyph a couple px taller). So we measure the *actual* render:
-  // rasterize the glyph through an <img> of an isolated SVG that copies the label's
-  // computed font + baseline + anchor (so it matches the live render exactly), find
-  // the ink's bounding-box center on a canvas, and shift the label by that offset.
-  // Rasterizing is async, so results are cached per font signature and re-applied
-  // when ready; the rotate(90,cx,cy) pivot keeps centered ink centered when rotated.
-  var spdrKropkiInkCache = {};
-  function kropkiInkSig(cs, text) {
-    return [text, cs.fontSize, cs.fontWeight, cs.fontFamily, cs.dominantBaseline, cs.textAnchor].join('|');
-  }
+  // Center a Kropki label's *ink* on the circle center (cx, cy). text-anchor:middle
+  // plus the effective `dominant-baseline:middle` center the glyph's LINE BOX, not its
+  // visible INK, and the two differ per glyph. There is no reliable RUNTIME way to
+  // measure ink here: getBBox/getBoundingClientRect return the line box (constant ~19px
+  // regardless of glyph), Canvas measureText's metrics render ~2px off SudokuPad's SVG
+  // rasterizer, and an <img>-isolated SVG falls back to a different font. The previous
+  // async raster approach (v2.175) chased this and was both unstable across label
+  // rebuilds and prone to flinging a glyph clean out of its circle (the colon went 12px
+  // off in v2.180). So instead we apply a FIXED per-glyph nudge, calibrated once against
+  // the live render (a rebuild-immune probe drawn in the real Tahoma font, measured on a
+  // pixel ruler): at the middle baseline a colon is already centered, while a tilde's
+  // wavy stroke rides ~6% of the font-size high. The nudge is a fraction of font-size —
+  // the font is identical on every puzzle, so one value per glyph works everywhere. It
+  // is applied in the UNROTATED frame, so the rotate(90,cx,cy) pivot (horizontal-border
+  // dots) keeps the ink centered in both orientations. Synchronous: every label rebuild
+  // re-centers correctly with no cache and no async race. dy > 0 = downward (SVG y+).
+  // Tweak a value here if a glyph ever looks off-center; unknown glyphs default to dead
+  // center (no nudge).
+  var KROPKI_INK_NUDGE = {
+    ':': { dx: 0, dy: 0    },   // colon: already centred at the middle baseline
+    '~': { dx: 0, dy: 0.06 }    // tilde: ink rides high → nudge down ~0.06·fontSize
+  };
   function centerKropkiLabel(t, cx, cy) {
-    var cs = getComputedStyle(t);
-    var sig = kropkiInkSig(cs, t.textContent);
-    var c = spdrKropkiInkCache[sig];
-    if (c && c !== 'pending') {                 // measured already — apply instantly
-      t.setAttribute('x', cx + c.dx);
-      t.setAttribute('y', cy + c.dy);
-      return;
-    }
-    t.setAttribute('x', cx);                    // rough placement until measure resolves
-    t.setAttribute('y', cy);
-    if (c !== 'pending') measureKropkiInk(t, cs, sig);
-  }
-  function measureKropkiInk(t, cs, sig) {
-    spdrKropkiInkCache[sig] = 'pending';
-    var fs = parseFloat(cs.fontSize) || 16;
-    var text = t.textContent || '';
-    var scale = 10;
-    var W = Math.ceil(fs * Math.max(4, text.length * 2 + 2));
-    var H = Math.ceil(fs * 4);
-    var ax = W / 2, ay = H / 2;                 // place the anchor at the area centre
-    function fail() { spdrKropkiInkCache[sig] = { dx: 0, dy: 0 }; }
-    // Clone the real label (so its exact glyph/attributes are reproduced) and pin
-    // the font + baseline + anchor inline so it renders identically in isolation,
-    // where the page's stylesheet (which supplies dominant-baseline) doesn't reach.
-    var clone = t.cloneNode(true);
-    clone.removeAttribute('transform');
-    clone.setAttribute('x', ax); clone.setAttribute('y', ay);
-    clone.style.setProperty('fill', '#000', 'important');
-    clone.style.fontFamily = cs.fontFamily;
-    clone.style.fontSize = fs + 'px';
-    clone.style.fontWeight = cs.fontWeight;
-    clone.style.dominantBaseline = cs.dominantBaseline;
-    clone.style.textAnchor = cs.textAnchor;
-    var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + (W * scale) + '" height="' + (H * scale) + '" viewBox="0 0 ' + W + ' ' + H + '">'
-      + '<rect width="' + W + '" height="' + H + '" fill="#fff"/>'
-      + new XMLSerializer().serializeToString(clone) + '</svg>';
-    var img = new Image();
-    img.onload = function () {
-      try {
-        var cw = W * scale, ch = H * scale;
-        var cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
-        var ctx = cv.getContext('2d'); if (!ctx) return fail();
-        ctx.drawImage(img, 0, 0, cw, ch);
-        var data = ctx.getImageData(0, 0, cw, ch).data;
-        var minX = 1e9, maxX = -1e9, minY = 1e9, maxY = -1e9, found = false;
-        for (var y = 0; y < ch; y++) for (var x = 0; x < cw; x++) {
-          var o = (y * cw + x) * 4;
-          if (data[o + 3] > 40 && (data[o] + data[o + 1] + data[o + 2]) / 3 < 160) {
-            found = true;
-            if (x < minX) minX = x; if (x > maxX) maxX = x;
-            if (y < minY) minY = y; if (y > maxY) maxY = y;
-          }
-        }
-        if (!found) return fail();
-        var inkCx = ((minX + maxX) / 2) / scale, inkCy = ((minY + maxY) / 2) / scale;
-        spdrKropkiInkCache[sig] = { dx: -(inkCx - ax), dy: -(inkCy - ay) };
-        applyKropkiInkCenter(sig);
-      } catch (e) { fail(); }
-    };
-    img.onerror = fail;
-    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-  }
-  // Re-center any live labels whose font signature just finished measuring.
-  function applyKropkiInkCenter(sig) {
-    var c = spdrKropkiInkCache[sig]; if (!c || c === 'pending') return;
-    var svg = document.getElementById('svgrenderer'); if (!svg) return;
-    svg.querySelectorAll('text[data-spdr-kropki-label]').forEach(function (t) {
-      var prev = t.previousElementSibling; if (!prev || prev.tagName !== 'rect') return;
-      if (kropkiInkSig(getComputedStyle(t), t.textContent) !== sig) return;
-      var x = parseFloat(prev.getAttribute('x')) || 0, y = parseFloat(prev.getAttribute('y')) || 0;
-      var w = parseFloat(prev.getAttribute('width')) || 0, h = parseFloat(prev.getAttribute('height')) || 0;
-      t.setAttribute('x', (x + w / 2) + c.dx);
-      t.setAttribute('y', (y + h / 2) + c.dy);
-    });
+    var fs = parseFloat(t.getAttribute('font-size')) || 16;
+    var n = KROPKI_INK_NUDGE[(t.textContent || '').trim()] || { dx: 0, dy: 0 };
+    t.setAttribute('x', cx + n.dx * fs);
+    t.setAttribute('y', cy + n.dy * fs);
   }
 
   function fixCornerText(el) {
