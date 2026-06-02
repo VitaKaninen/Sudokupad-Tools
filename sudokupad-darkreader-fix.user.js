@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.175.0
+// @version      2.176.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.175.0';
+  var SCRIPT_VERSION = '2.176.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1448,7 +1448,16 @@
     // shading (shouldShadeOverlayRect now shades coloured textbg); never flatten it
     // to the label-bg colour here. (We deliberately do NOT try to keep bare white
     // cosmetic shapes white — see LESSONS "Don't force-keep author white".)
-    var fc = parseColor(rect.getAttribute('fill') || '');
+    // fill="none" (or a transparent fill) is a deliberately INVISIBLE box — authors
+    // use a textbg rect purely to position a label (e.g. a little-killer "12" sitting
+    // over an arrow outside the grid). There is no background to darken; painting it
+    // our label-bg colour turns an invisible anchor into an opaque box that covers the
+    // arrow beneath it. DR leaves these alone too (no data-darkreader-inline-fill), so
+    // skip them entirely. (Distinct from the white/grey label boxes below, which DO
+    // need darkening.)
+    var fillAttr = (rect.getAttribute('fill') || '').trim().toLowerCase();
+    var fc = parseColor(fillAttr);
+    if (fillAttr === 'none' || (fc && fc.a === 0)) return;
     if (fc && fc.a !== 0 && !isGrayColor(fc)) return;
     if (settings.labelBgEnabled) {
       var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity);
@@ -3214,10 +3223,11 @@
     // Placed digits highlight the real placed values AND always the digit-entry tool
     // button (#control-normal), even when values exist; ONSHOW simulates if none.
     userDigit:     function () { return hqa('#cell-values text, text.cell-value').concat(firstOf('#control-normal')); },
-    // Mirrors fixLabelRect: LABEL_RECT_SEL minus COLOURED (saturated) fills — those are
-    // author-coloured cosmetic shapes that fixLabelRect now skips (Object shading owns
-    // them). Still overlaps Kropki on the white/black circular textbg dots (accurate).
-    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var c = parseColor(r.getAttribute('fill') || ''); return !(c && c.a !== 0 && !isGrayColor(c)); }); },
+    // Mirrors fixLabelRect: LABEL_RECT_SEL minus COLOURED (saturated) fills (author
+    // cosmetic shapes Object shading owns) and minus fill="none"/transparent boxes
+    // (invisible label anchors we now leave alone). Still overlaps Kropki on the
+    // white/black circular textbg dots (accurate).
+    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
     // Mirrors fixAllKropkiDots: real Kropki dots are `rect.feature-kropki, rect.textbg`
     // that are circular (isKropkiCircle) AND sit on a cell border (isOnCellBorder) — the
     // same gate fixKropkiDot uses, so quadruples / bulbs / line endpoints are excluded.
