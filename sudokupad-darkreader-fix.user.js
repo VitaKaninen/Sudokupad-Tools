@@ -1,17 +1,17 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.172.0
+// @version      2.173.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
-// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
-// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
 // @match        https://sudokupad.app/*
 // @match        https://beta.sudokupad.app/*
 // @match        https://app.crackingthecryptic.com/*
 // @match        https://crackingthecryptic.com/*
 // @grant        none
 // @run-at       document-start
+// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
+// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
 // ==/UserScript==
 
 (function () {
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.172.0';
+  var SCRIPT_VERSION = '2.173.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1328,7 +1328,24 @@
       }
       fixKropkiLabel(t);
       rect.parentNode.insertBefore(t, rect.nextSibling);
+      centerKropkiLabel(t, cx, cy);
     });
+  }
+
+  // Center a Kropki label's *ink* on (cx, cy). text-anchor/dominant-baseline only
+  // center the font line box, but a glyph's visible ink isn't centered in that box
+  // (a colon's dots sit low, a tilde sits high), so the symbol looks offset — and
+  // any vertical offset becomes a horizontal one once the label is rotated 90°. We
+  // measure the rendered geometry (getBBox ignores the element's own rotate(), so
+  // this works in both orientations) and nudge x/y so the ink center lands on the
+  // circle center, which the rotation also pivots around.
+  function centerKropkiLabel(t, cx, cy) {
+    var bb; try { bb = t.getBBox(); } catch (e) { return; }
+    if (!bb || !bb.width) return;
+    var curX = parseFloat(t.getAttribute('x')) || 0;
+    var curY = parseFloat(t.getAttribute('y')) || 0;
+    t.setAttribute('x', curX + (cx - (bb.x + bb.width / 2)));
+    t.setAttribute('y', curY + (cy - (bb.y + bb.height / 2)));
   }
 
   function fixCornerText(el) {
@@ -2980,8 +2997,9 @@
       if (kind === 'corner') {
         // Corner marks measure ~0.275 × cell in SudokuPad.
         var size = cellPx * 0.275, o = cellPx * 0.30;
-        // valid → TL/TR/BL ; invalid → TC/BC/BR (so a mixed cell reads clearly)
-        var pos = [[-o, -o], [o, -o], [-o, o], [0, -o], [0, o], [o, o]];
+        // SudokuPad fills corner marks in this typing order: TL, TR, BL, BR, then
+        // TC, BC. So 6 digits typed 1-6 read (TL→BR) as 1,5,2,3,6,4 — match that.
+        var pos = [[-o, -o], [o, -o], [-o, o], [o, o], [0, -o], [0, o]];
         plan.forEach(function (d, i) { var q = pos[i] || [0, 0]; spdrHi.addText(p.x + q[0], p.y + q[1], d[0], d[1], size); });
       } else {
         // Center marks measure ~0.30 × cell; shrink a touch when many so they fit.
@@ -3265,9 +3283,19 @@
 
   // Button click/hover feedback, browser-refresh style. `spdr-fxbtn` gives every
   // panel button a hover brighten + an :active "depress" (translateY + dim, a 3D
-  // press). `spdrFxButton(btn, spin)` registers it and, on click, runs a brief
-  // dim→bright "work" pulse (so even an instant action reads as "did something");
-  // spin=true also spins the button 360° (for the ↺ arrows, like a refresh button).
+  // press). `spdrFxButton(btn)` registers it and, on click, runs a brief dim→bright
+  // "work" pulse (so even an instant action reads as "did something").
+  //
+  // The pulse is done with an inline filter + the class's transition (not a CSS
+  // @keyframes animation) for two reasons:
+  //   • Smoothness — a keyframe pulse hard-codes its own brightness(1) start, so on
+  //     a hovered button (brightness 1.35) it snaps down before easing, which reads
+  //     as a flash. Transitioning the inline filter eases from whatever the current
+  //     brightness is (hover or rest) down to dim and back, both directions smooth.
+  //   • No replay on reopen — an inline `animation` lingers on the element and a CSS
+  //     animation restarts whenever the panel goes display:none→block, so every
+  //     reset button re-pulsed each time the menu reopened. The inline filter is
+  //     cleared after the pulse, leaving nothing to replay.
   // Uses filter/transform only (never the inline-set background), so it works on
   // every panel button regardless of its resting colours.
   var spdrFxInjected = false;
@@ -3276,20 +3304,19 @@
     spdrFxInjected = true;
     var st = document.createElement('style');
     st.textContent =
-      '.spdr-fxbtn{transition:filter .12s ease, transform .07s ease;}'
+      '.spdr-fxbtn{transition:filter .18s ease, transform .07s ease;}'
       + '.spdr-fxbtn:hover{filter:brightness(1.35);}'
-      + '.spdr-fxbtn:active{transform:translateY(1px) scale(.96);filter:brightness(.8);}'
-      + '@keyframes spdrBtnSpin{from{transform:rotate(0)}to{transform:rotate(-360deg)}}'
-      + '@keyframes spdrBtnWork{0%{filter:brightness(1)}30%{filter:brightness(.5)}100%{filter:brightness(1)}}';
+      + '.spdr-fxbtn:active{transform:translateY(1px) scale(.96);filter:brightness(.8);}';
     document.head.appendChild(st);
   }
-  function spdrFxButton(btn, spin) {
+  function spdrFxButton(btn) {
     spdrEnsureFx();
     btn.classList.add('spdr-fxbtn');
     btn.addEventListener('click', function () {
-      var anims = (spin ? ['spdrBtnSpin 500ms ease'] : []).concat(['spdrBtnWork 420ms ease']);
-      btn.style.animation = 'none'; void btn.getBoundingClientRect();
-      btn.style.animation = anims.join(', ');
+      // Smooth dim, then clear so it eases back to hover/rest brightness.
+      btn.style.filter = 'brightness(.5)';
+      clearTimeout(btn._spdrFxTimer);
+      btn._spdrFxTimer = setTimeout(function () { btn.style.filter = ''; }, 200);
     });
   }
 
@@ -3362,7 +3389,7 @@
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexShrink: '0', marginLeft: '6px', marginTop: '1px',
     });
-    spdrFxButton(sectionReset, true);   // hover/active feedback + spin on click
+    spdrFxButton(sectionReset);   // hover/active feedback + work pulse on click
     head.appendChild(sectionReset);
 
     section.appendChild(head);
@@ -5151,7 +5178,7 @@
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       flexShrink: '0',
     });
-    spdrFxButton(actionResetBtn, true);
+    spdrFxButton(actionResetBtn);
     var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'suppressStartDialog', 'showToasts', 'toastPersist'];
     actionResetBtn.addEventListener('click', function (e) {
       e.stopPropagation();
@@ -5291,7 +5318,7 @@
       fontFamily: 'system-ui, -apple-system, sans-serif',
       flexShrink: '0', marginLeft: '8px',
     });
-    spdrFxButton(rescanBtn, false);
+    spdrFxButton(rescanBtn);
     rescanBtn.addEventListener('click', function () {
       settings.digitSetConfirmed = false;
       settings.lastConfirmedUrl = '';
@@ -5331,7 +5358,7 @@
       border: '1px solid #45475a', borderRadius: '6px',
       padding: '6px 10px', cursor: 'pointer', fontSize: '13px', width: '100%',
     });
-    spdrFxButton(resetBtn, false);
+    spdrFxButton(resetBtn);
     resetBtn.addEventListener('click', function () {
       settings = Object.assign({}, DEFAULTS);
       saveSettings(settings); applySettings();
