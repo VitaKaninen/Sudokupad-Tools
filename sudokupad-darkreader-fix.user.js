@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.191.0
+// @version      2.192.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.191.0';
+  var SCRIPT_VERSION = '2.192.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1556,6 +1556,26 @@
     var inDR = isDarkReader();
     var centerActive = settings.regionBorderCenterEnabled;
     var multiActive  = settings.regionBorderMultiEnabled;
+
+    // White-stroked cell-grid paths are author "grid-line erasers": a 3px white
+    // stroke laid over a grid line to HIDE it (invisible white-on-white in light
+    // mode — used for irregular outer shapes / merged cells, e.g. Gattai puzzles).
+    // They are NOT the dark 3x3 box outlines this function was written for, so the
+    // normal logic is wrong both ways (suppressing reveals the line the author hid;
+    // restoring DR's text colour paints a BRIGHT line). Under DR, repaint them the
+    // dark background so they keep erasing the now-light grid line beneath — the
+    // same thing SudokuPad's own dark mode does ([stroke="#FFFFFF"]->var(--dm-black)).
+    var sc = parseColor(el.getAttribute('stroke'));
+    if (sc && sc.a !== 0 && sc.r >= 240 && sc.g >= 240 && sc.b >= 240) {
+      if (inDR) {
+        el.style.setProperty('stroke', 'var(--darkreader-background-ffffff, #181a1b)', 'important');
+      } else {
+        el.style.removeProperty('stroke');
+      }
+      el.style.removeProperty('stroke-width');          // keep the author's native width
+      el.style.removeProperty('--darkreader-inline-stroke');
+      return;
+    }
 
     if (centerActive || multiActive) {
       // Center border is drawn as SVG clones in mainGroup (z=0), and multi-color
