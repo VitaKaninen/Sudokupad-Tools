@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.185.0
+// @version      2.186.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.185.0';
+  var SCRIPT_VERSION = '2.186.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -918,31 +918,29 @@
 
   var CAGE_FILL_SEL = '#cages path[fill]:not([fill="none"])';
 
-  // Whether any region feature is active (so mainGroup exists / region borders
-  // are drawn). Mirrors needFills/needMultiBorders/needCenterBorder + shaded.
-  function regionFeatureActive() {
-    return !!settings.regionColorFillEnabled
-      || settings.regionBorderMultiEnabled || settings.regionBorderCenterEnabled
-      || !!settings.shadedRegionColorEnabled;
-  }
-  // Shaded "extra regions" (e.g. "grey regions must contain 1-9") render on top
-  // of region borders by default (they live in #cages, above mainGroup). Whenever
-  // a region feature is active we instead draw a clone of each one INSIDE mainGroup
-  // (drawRegionSplitBorders), below the border strips — coloured if shaded mode is
-  // on, otherwise the same grey Object-shaded look. So here we hide the original
-  // #cages path so it doesn't paint over the borders. Re-asserted on DR rewrites.
-  function extraRegionsMovedBelowBorders() {
-    return regionFeatureActive() && puzzleHasShadedRegions();
-  }
-  function applyExtraRegionFill(path) {
-    path.style.setProperty('fill', 'transparent', 'important');
-    path.style.removeProperty('fill-opacity');
-    path.removeAttribute('data-darkreader-inline-fill');
-    path.style.removeProperty('--darkreader-inline-fill');
-  }
+  // Easy Shade recolours the puzzle's grey "extra regions" (cage-extraregion)
+  // with the 4-colour palette. As of v2.186 our region borders render BELOW all
+  // puzzle shading (mainGroup is inserted before #underlay), so the extra-region
+  // shading naturally sits above the borders: we recolour the ORIGINAL #cages
+  // path IN PLACE rather than cloning it. (Earlier, borders sat on top, so the
+  // shading had to be cloned into mainGroup below the strips and the original
+  // hidden — that hack is gone.) Re-asserted on DR rewrites by the cage observer.
   function fixCagePath(path) {
-    if (path.classList.contains('cage-extraregion') && extraRegionsMovedBelowBorders()) {
-      applyExtraRegionFill(path);
+    if (path.classList.contains('cage-extraregion')
+        && settings.shadedRegionColorEnabled
+        && path.dataset.spdrExtraColorIdx != null) {
+      var idx  = parseInt(path.dataset.spdrExtraColorIdx, 10) || 0;
+      var shOp = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+      var pal  = [
+        settings.regionColorPalette0 || '#e05252',
+        settings.regionColorPalette1 || '#5294e0',
+        settings.regionColorPalette2 || '#52a84e',
+        settings.regionColorPalette3 || '#e8a030',
+      ];
+      path.style.setProperty('fill', hexToRgba(pal[idx % 4], shOp), 'important');
+      path.style.removeProperty('fill-opacity');
+      path.removeAttribute('data-darkreader-inline-fill');
+      path.style.removeProperty('--darkreader-inline-fill');
       applyShapeStroke(path);
       return;
     }
@@ -1781,17 +1779,15 @@
     var needFills        = settings.regionColorFillEnabled;
     var needMultiBorders = settings.regionBorderMultiEnabled;
     var needCenterBorder = settings.regionBorderCenterEnabled;
-    // Shaded extra-regions are drawn (as clones) inside mainGroup so they sit
-    // BELOW the region borders — coloured when shaded mode is on, otherwise the
-    // same grey. Done whenever any region feature is active (so there are borders
-    // to sit under) and the puzzle actually has shaded regions.
-    var needShadedClones = regionFeatureActive() && puzzleHasShadedRegions();
+    // (Easy-Shade extra-region recolouring is no longer done here — borders now
+    // render below all shading, so the grey/recoloured extra-regions sit above
+    // them naturally and are handled in place by fixCagePath.)
     // Cell borders (recolor the thin grid lines) and Suppress-boundary both act on
     // the cell-grid clone, so they keep mainGroup alive on their own (standalone).
     // Suppress also needs region geometry to know which grid edges are boundaries.
     var needCellColor = settings.regionBorderCellEnabled;
     var needSuppress  = settings.regionBorderSuppressBoundary;
-    var geo = (needFills || needMultiBorders || needCenterBorder || needShadedClones || needCellColor || needSuppress)
+    var geo = (needFills || needMultiBorders || needCenterBorder || needCellColor || needSuppress)
       ? inferRegionsFromSVG() : null;
 
     // Build cell→region map (used by inR() when drawing border strips).
@@ -1818,7 +1814,7 @@
       });
     }
 
-    if (!needFills && !needMultiBorders && !needCenterBorder && !needShadedClones && !needCellColor && !needSuppress) return;
+    if (!needFills && !needMultiBorders && !needCenterBorder && !needCellColor && !needSuppress) return;
     if (!geo || geo.regions.length < 2) return;
 
     var regions = geo.regions;
@@ -2101,67 +2097,29 @@
       cgp.setAttribute('d', '');
     })();
 
-    // Shaded extra-regions: recoloured clones of each #cages path.cage-extraregion,
-    // inserted as the FIRST children of mainGroup so they render BELOW the region
-    // border strips (and the cell-grid clone). The originals are hidden by
-    // fixCagePath. Colour index comes from assignExtraRegionColors.
-    if (needShadedClones) {
-      // Recompute colour indices here so they are fresh regardless of which path
-      // triggered this draw (observers call drawRegionSplitBorders independently
-      // of applySettings, so we can't rely on a prior assignExtraRegionColors).
-      assignExtraRegionColors(svg);
-      var usePalette = !!settings.shadedRegionColorEnabled;
-      var shadedGroup = document.createElementNS(NS, 'g');
-      shadedGroup.setAttribute('data-spdr-shaded', '1');
-      var shOp  = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
-      var shPal = [
-        hexToRgba(settings.regionColorPalette0 || '#e05252', shOp),
-        hexToRgba(settings.regionColorPalette1 || '#5294e0', shOp),
-        hexToRgba(settings.regionColorPalette2 || '#52a84e', shOp),
-        hexToRgba(settings.regionColorPalette3 || '#e8a030', shOp),
-      ];
-      document.querySelectorAll('#cages path.cage-extraregion').forEach(function (p) {
-        var clone = document.createElementNS(NS, 'path');
-        clone.setAttribute('d', p.getAttribute('d') || '');
-        clone.setAttribute('pointer-events', 'none');
-        clone.style.setProperty('stroke', 'none', 'important');
-        if (usePalette && p.dataset.spdrExtraColorIdx != null) {
-          var idx = parseInt(p.dataset.spdrExtraColorIdx, 10) || 0;
-          clone.style.setProperty('fill', shPal[idx % 4], 'important');
-        } else {
-          // Grey (shaded mode off, or no colour assigned): reproduce the original's
-          // Object-shaded look so it just moves below the borders unchanged.
-          var gc = parseColor(p.getAttribute('fill') || '');
-          if (gc && gc.a !== 0) {
-            var sh = settings.underlayEnabled ? computeObjectShade(gc) : null;
-            var rgb = sh ? sh.rgb : [gc.r, gc.g, gc.b];
-            var fa  = sh ? sh.a   : gc.a;
-            clone.style.setProperty('fill', 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fa + ')', 'important');
-          }
-        }
-        shadedGroup.appendChild(clone);
-      });
-      mainGroup.insertBefore(shadedGroup, mainGroup.firstChild);
-    }
-
-    // Insert mainGroup immediately after #cell-colors so our borders render above
-    // puzzle-defined colored cell fills but below arrows, cages, overlay (Kropki
-    // dots, constraint labels), and digits.
-    // Z-order: background → underlay → cell-colors → [mainGroup] → arrows →
+    // Insert mainGroup BEFORE #underlay so everything we draw (border strips,
+    // center border, full-cell fills, cell-grid clone) renders beneath EVERY
+    // SudokuPad-drawn layer: underlay + cell-colors shading, arrows, cages,
+    // cell-grids, overlay, digits. Anchoring just before #underlay (the first
+    // real puzzle layer after #background) puts us under all of it — including
+    // future layer types we haven't encountered, since they all live after
+    // #background. (Easy-Shade extra-region shading is recoloured in place in
+    // #cages, which is above us, so it correctly paints over the borders.)
+    // Z-order: background → [mainGroup] → underlay → cell-colors → arrows →
     //          cages → cell-grids → overlay → digits.
     var svgEl = document.getElementById('svgrenderer');
     if (svgEl) {
-      (function insertMainGroup() {
-        var anchor = document.getElementById('cell-colors');
-        if (anchor && anchor.parentElement === svgEl) {
-          svgEl.insertBefore(mainGroup, anchor.nextSibling);
-        } else {
-          svgEl.insertBefore(mainGroup, svgEl.firstChild); // fallback
-        }
-      })();
+      var placeMainGroupBelowShading = function (g) {
+        var underlay = document.getElementById('underlay');
+        if (underlay && underlay.parentElement === svgEl) { svgEl.insertBefore(g, underlay); return; }
+        var bg = document.getElementById('background');
+        if (bg && bg.parentElement === svgEl) { svgEl.insertBefore(g, bg.nextSibling); return; }
+        svgEl.insertBefore(g, svgEl.firstChild); // fallback
+      };
+      placeMainGroupBelowShading(mainGroup);
 
-      // If SudokuPad re-renders and displaces our group, restore its position
-      // immediately after #cell-colors.
+      // If SudokuPad re-renders and displaces our group, restore it to just
+      // before #underlay.
       if (!svgEl.dataset.spdrPositionObs) {
         svgEl.dataset.spdrPositionObs = '1';
         new MutationObserver(function (mutations) {
@@ -2172,19 +2130,15 @@
               var node = m.addedNodes[ni];
               if (node.nodeType !== 1) continue;
               if (node.getAttribute && node.getAttribute('data-spdr-region-split')) continue;
-              // A foreign element was added. Check if our group is still correctly
-              // positioned immediately after #cell-colors.
+              // A foreign element was added. Check our group still sits right
+              // before #underlay.
               var grp = svgEl.querySelector('[data-spdr-region-split]');
               if (!grp) break;
-              var cc = document.getElementById('cell-colors');
-              var expectedPrev = (cc && cc.parentElement === svgEl) ? cc : null;
-              if (grp.previousElementSibling !== expectedPrev) {
-                if (expectedPrev) {
-                  svgEl.insertBefore(grp, expectedPrev.nextSibling);
-                } else {
-                  svgEl.insertBefore(grp, svgEl.firstChild);
-                }
-              }
+              var underlay = document.getElementById('underlay');
+              var ok = (underlay && underlay.parentElement === svgEl)
+                ? (grp.nextElementSibling === underlay)
+                : (grp === svgEl.firstChild);
+              if (!ok) placeMainGroupBelowShading(grp);
               break;
             }
           }
