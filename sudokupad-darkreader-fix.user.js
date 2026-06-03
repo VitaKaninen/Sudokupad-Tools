@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.187.0
+// @version      2.188.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.187.0';
+  var SCRIPT_VERSION = '2.188.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -140,8 +140,7 @@
     regionColorPalette3:          '#e8a030',  // orange
     regionColorStripeWidth:       4,          // px per side stripe
     regionColorOpacity:           1.0,        // opacity of border stripes
-    regionBorderMultiFadeEnabled: false,      // fade multi-color borders where ONE shaded region spans the boundary
-    regionBorderMultiFadeOpacity: 0.3,        // opacity of the faded border segments (lower = more see-through)
+    regionBorderMultiLiftEnabled: false,      // lift a shaded shape above the multi-color border where the SAME shape spans the boundary (so the wide border doesn't hide whether it ends at the line or crosses it)
     regionColorFillEnabled:       false,      // fill entire cell backgrounds with region colors
     regionColorFillOpacity:       0.3,        // opacity of cell-fill backgrounds (independent of border opacity)
 
@@ -1026,14 +1025,13 @@
     paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
-  // Map each grid cell to the id of the connected SHADED REGION it belongs to.
-  // "r,c" -> component id (undefined where the cell isn't shaded). A shaded region
-  // is a maximal orthogonally-connected run of cells that share the same shade
-  // colour. Used by the border-fade feature: a border segment fades only when the
-  // SAME region sits on both sides (same id) — so a single shaded shape that a
-  // region border cuts through fades, while two separate shaded shapes meeting at
-  // a border (different ids, e.g. 3isnzti76g), a shaded/blank boundary, and the
-  // puzzle's outer edge (off-grid → undefined) all stay opaque.
+  // Identify the puzzle's SHADED REGIONS as connected components of shaded cells.
+  // A shaded region is a maximal orthogonally-connected run of cells that share the
+  // same shade colour. Used by the "lift spanning objects" border feature to tell a
+  // single shaded shape that a region border cuts through (same component on both
+  // sides → lift it above the border) from two separate shapes meeting at a border
+  // (different components, e.g. 3isnzti76g), a shaded/blank boundary, or the puzzle
+  // edge (off-grid → no component) — those leave the border untouched.
   //
   // Sources of "shaded cells" (gray AND coloured alike, full-cell backgrounds only —
   // not small shapes/dots/lines):
@@ -1042,12 +1040,16 @@
   // Grouping is by the cell's raw author fill, so two touching cells of different
   // colours are different regions; identical-colour touching cells are one region
   // (which is also what they look like — one continuous shape).
-  function buildShadedRegionMap(svg, cs, rows, cols) {
-    var map = {};
-    if (!svg || !cs || cs < 4) return map;
+  //
+  // Returns { cellComp: {"r,c": id}, compEls: {id: [sourceElements]} } — compEls
+  // lets the caller clone the source shapes of a given region to lift them.
+  function buildShadedRegions(svg, cs, rows, cols) {
+    var cellComp = {}, compEls = {};
+    if (!svg || !cs || cs < 4) return { cellComp: cellComp, compEls: compEls };
     var colorAt = {};  // "r,c" -> token (string)
-    function setCell(r, c, tok) {
-      if (r >= 0 && r < rows && c >= 0 && c < cols) colorAt[r + ',' + c] = tok;
+    var cellEl  = {};  // "r,c" -> source Element
+    function setCell(r, c, tok, el) {
+      if (r >= 0 && r < rows && c >= 0 && c < cols) { colorAt[r + ',' + c] = tok; cellEl[r + ',' + c] = el; }
     }
     // Full-cell shaded rects in #underlay / #cell-colors.
     ['#underlay', '#cell-colors'].forEach(function (sel) {
@@ -1065,7 +1067,7 @@
         if (!col || col.a === 0) return;
         var x = parseFloat(rect.getAttribute('x')) || 0;
         var y = parseFloat(rect.getAttribute('y')) || 0;
-        setCell(Math.round(y / cs), Math.round(x / cs), 'f:' + f.toLowerCase());
+        setCell(Math.round(y / cs), Math.round(x / cs), 'f:' + f.toLowerCase(), rect);
       });
     });
     // Checked "extra regions" (#cages path.cage-extraregion): each path is its own
@@ -1075,26 +1077,50 @@
       svg.querySelectorAll('#cages path.cage-extraregion').forEach(function (p, i) {
         for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
           pt.x = c * cs + cs / 2; pt.y = r * cs + cs / 2;
-          try { if (p.isPointInFill(pt)) colorAt[r + ',' + c] = 'xr:' + i; } catch (e) {}
+          try { if (p.isPointInFill(pt)) setCell(r, c, 'xr:' + i, p); } catch (e) {}
         }
       });
     }
-    // Flood-fill connected components sharing the same token.
+    // Flood-fill connected components sharing the same token; collect source els.
     var id = 0;
     Object.keys(colorAt).forEach(function (k) {
-      if (map[k] !== undefined) return;
+      if (cellComp[k] !== undefined) return;
       var tok = colorAt[k], q = [k];
-      map[k] = id;
+      cellComp[k] = id; compEls[id] = [];
       while (q.length) {
         var cur = q.shift(), p = cur.split(','), r = +p[0], c = +p[1];
+        var el = cellEl[cur];
+        if (el && compEls[id].indexOf(el) < 0) compEls[id].push(el);
         [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
           var nk = nb[0] + ',' + nb[1];
-          if (map[nk] === undefined && colorAt[nk] === tok) { map[nk] = id; q.push(nk); }
+          if (cellComp[nk] === undefined && colorAt[nk] === tok) { cellComp[nk] = id; q.push(nk); }
         });
       }
       id++;
     });
-    return map;
+    return { cellComp: cellComp, compEls: compEls };
+  }
+
+  // The on-screen display fill for a shaded source element (used when cloning it to
+  // lift above the border). Mirrors how the element is actually painted: a
+  // cage-extraregion in shaded-COLOUR mode uses its assigned palette colour; any
+  // other shaded shape (grey extra-region, #underlay / #cell-colors rect) uses its
+  // author fill run through Object shading (so the lifted clone matches the board).
+  function shadedDisplayFill(el) {
+    if (el.classList && el.classList.contains('cage-extraregion') &&
+        settings.shadedRegionColorEnabled && el.dataset.spdrExtraColorIdx != null) {
+      var shOp = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+      var idx  = parseInt(el.dataset.spdrExtraColorIdx, 10) || 0;
+      var pal  = [settings.regionColorPalette0 || '#e05252', settings.regionColorPalette1 || '#5294e0',
+                  settings.regionColorPalette2 || '#52a84e', settings.regionColorPalette3 || '#e8a030'];
+      return hexToRgba(pal[idx % 4], shOp);
+    }
+    var gc = parseColor(el.getAttribute('fill') || '');
+    if (!gc || gc.a === 0) return null;
+    var sh  = settings.underlayEnabled ? computeObjectShade(gc) : null;
+    var rgb = sh ? sh.rgb : [gc.r, gc.g, gc.b];
+    var fa  = sh ? sh.a   : gc.a;
+    return 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',' + fa + ')';
   }
 
   // Line constraints. Every line-type clue — thermo shafts, palindromes, renban,
@@ -1918,29 +1944,31 @@
     var SW = parseFloat(settings.regionColorStripeWidth) || 3;
     // cellRegion already built above.
 
-    // Border-fade: where ONE shaded region spans a region boundary, draw the
-    // multi-color border strips at a lower opacity so the continuous shading shows
-    // through (instead of the border visually cutting the shape in two). The
-    // per-edge check (spansSameShaded) leaves puzzle edges, two-separate-region
-    // boundaries, and non-shaded boundaries fully opaque on its own. An empty map
-    // (no shaded cells) means no edge ever fades.
-    var fadeSpan = needMultiBorders && settings.regionBorderMultiFadeEnabled;
-    var shadedCellReg = fadeSpan ? buildShadedRegionMap(svg, cs, rows, cols) : null;
-    var fadeOp = (settings.regionBorderMultiFadeOpacity != null) ? settings.regionBorderMultiFadeOpacity : 0.3;
-    var fadePalette = [
-      hexToRgba(settings.regionColorPalette0 || '#e05252', fadeOp),
-      hexToRgba(settings.regionColorPalette1 || '#5294e0', fadeOp),
-      hexToRgba(settings.regionColorPalette2 || '#52a84e', fadeOp),
-      hexToRgba(settings.regionColorPalette3 || '#e8a030', fadeOp),
-    ];
-    // True iff the cell at (r,c) and its neighbour (nr,nc) are covered by the SAME
-    // shaded extra-region (so the boundary between them sits inside one continuous
-    // shaded shape). An off-grid neighbour reads undefined → false (puzzle edge).
-    function spansSameShaded(r, c, nr, nc) {
-      if (!shadedCellReg) return false;
-      var a = shadedCellReg[r + ',' + c];
-      if (a === undefined) return false;
-      return a === shadedCellReg[nr + ',' + nc];
+    // Lift-spanning-objects: the colored border is wider than the stock grid line,
+    // so where a shaded shape crosses a region boundary the border can obscure
+    // whether the shape ends at the line or continues across. When enabled, we
+    // detect which shaded regions (connected components of same-colour cells) span a
+    // region boundary — same component on both sides of an inferred-region edge —
+    // and later clone those shapes ABOVE the border so their true extent stays
+    // visible. Components that merely end at a boundary (or two separate components
+    // meeting, or the puzzle edge) are left untouched, so the border stays intact
+    // there.
+    var liftEnabled = needMultiBorders && settings.regionBorderMultiLiftEnabled;
+    var shadedReg   = liftEnabled ? buildShadedRegions(svg, cs, rows, cols) : null;
+    var spanningComp = {};
+    if (shadedReg) {
+      Object.keys(shadedReg.cellComp).forEach(function (k) {
+        var comp = shadedReg.cellComp[k];
+        if (spanningComp[comp]) return;
+        var p = k.split(','), r = +p[0], c = +p[1];
+        var nbs = [[r-1,c],[r+1,c],[r,c-1],[r,c+1]];
+        for (var ii = 0; ii < 4; ii++) {
+          var nk = nbs[ii][0] + ',' + nbs[ii][1];
+          if (shadedReg.cellComp[nk] === comp &&
+              cellRegion[k] !== undefined && cellRegion[nk] !== undefined &&
+              cellRegion[k] !== cellRegion[nk]) { spanningComp[comp] = true; break; }
+        }
+      });
     }
 
     var NS = 'http://www.w3.org/2000/svg';
@@ -1962,16 +1990,16 @@
       if (ci < 0) return;
       var g = document.createElementNS(NS, 'g');
       mainGroup.appendChild(g);
-      rGroups[ri] = { g: g, color: palette[ci], fadeColor: fadePalette[ci] };
+      rGroups[ri] = { g: g, color: palette[ci] };
     });
 
-    function addRect(ri, x, y, w, h, color, faded) {
+    function addRect(ri, x, y, w, h, color) {
       if (!rGroups[ri] || w <= 0 || h <= 0) return;
       var rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('x', x);  rect.setAttribute('y', y);
       rect.setAttribute('width', w); rect.setAttribute('height', h);
       rect.setAttribute('data-spdr-kind', 'multi');  // highlight target (Multi-color borders)
-      rect.style.setProperty('fill', color || (faded ? rGroups[ri].fadeColor : rGroups[ri].color), 'important');
+      rect.style.setProperty('fill', color || rGroups[ri].color, 'important');
       rGroups[ri].g.appendChild(rect);
     }
 
@@ -2005,11 +2033,10 @@
         var hasBottom = !inR(ri, r + 1, c);
         var hasLeft   = !inR(ri, r, c - 1);
         var hasRight  = !inR(ri, r, c + 1);
-        // Fade this edge's strip when a single shaded region spans the boundary.
-        if (hasTop)    { if (!topEdges[r])    topEdges[r]    = []; topEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight, span:spansSameShaded(r,c,r-1,c)}); }
-        if (hasBottom) { if (!bottomEdges[r]) bottomEdges[r] = []; bottomEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight, span:spansSameShaded(r,c,r+1,c)}); }
-        if (hasLeft)   { if (!leftEdges[c])   leftEdges[c]   = []; leftEdges[c].push({r:r, span:spansSameShaded(r,c,r,c-1)}); }
-        if (hasRight)  { if (!rightEdges[c])  rightEdges[c]  = []; rightEdges[c].push({r:r, span:spansSameShaded(r,c,r,c+1)}); }
+        if (hasTop)    { if (!topEdges[r])    topEdges[r]    = []; topEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight}); }
+        if (hasBottom) { if (!bottomEdges[r]) bottomEdges[r] = []; bottomEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight}); }
+        if (hasLeft)   { if (!leftEdges[c])   leftEdges[c]   = []; leftEdges[c].push(r); }
+        if (hasRight)  { if (!rightEdges[c])  rightEdges[c]  = []; rightEdges[c].push(r); }
       });
 
       // Merge and draw horizontal (top/bottom) edge runs.
@@ -2021,14 +2048,11 @@
           var i = 0;
           while (i < arr.length) {
             var start = arr[i], j = i;
-            // Merge contiguous cells only while the fade state matches, so a run
-            // splits at the point where the border starts/stops crossing one
-            // shaded region.
-            while (j + 1 < arr.length && arr[j + 1].c === arr[j].c + 1 && arr[j + 1].span === arr[j].span) j++;
+            while (j + 1 < arr.length && arr[j + 1].c === arr[j].c + 1) j++;
             var end = arr[j];
             var tL = start.hasLeft  ? SW : 0;
             var tR = end.hasRight   ? SW : 0;
-            addRect(ri, start.c * cs + tL, r * cs + yOff, (end.c - start.c + 1) * cs - tL - tR, SW, null, start.span);
+            addRect(ri, start.c * cs + tL, r * cs + yOff, (end.c - start.c + 1) * cs - tL - tR, SW);
             i = j + 1;
           }
         });
@@ -2039,13 +2063,13 @@
       function drawVertRuns(edgeMap, xOff) {
         Object.keys(edgeMap).forEach(function (colStr) {
           var c = +colStr;
-          var arr = edgeMap[colStr].sort(function (a, b) { return a.r - b.r; });
+          var arr = edgeMap[colStr].sort(function (a, b) { return a - b; });
           var i = 0;
           while (i < arr.length) {
-            var startR = arr[i].r, j = i;
-            while (j + 1 < arr.length && arr[j + 1].r === arr[j].r + 1 && arr[j + 1].span === arr[j].span) j++;
-            var endR = arr[j].r;
-            addRect(ri, c * cs + xOff, startR * cs, SW, (endR - startR + 1) * cs, null, arr[i].span);
+            var startR = arr[i], j = i;
+            while (j + 1 < arr.length && arr[j + 1] === arr[j] + 1) j++;
+            var endR = arr[j];
+            addRect(ri, c * cs + xOff, startR * cs, SW, (endR - startR + 1) * cs);
             i = j + 1;
           }
         });
@@ -2088,13 +2112,10 @@
           var D = inR(ri, gr,     gc);
           var n = (A ? 1 : 0) + (B ? 1 : 0) + (C ? 1 : 0) + (D ? 1 : 0);
           if (n !== 3) return;
-          // Fade the patch when the in-region cell it sits in and the diagonally-
-          // opposite missing cell are the same shaded region (the corner is then
-          // interior to one shape, like its neighbouring strips).
-          if (!A) addRect(ri, cx,      cy,      SW, SW, null, spansSameShaded(gr, gc,     gr - 1, gc - 1));
-          if (!B) addRect(ri, cx - SW, cy,      SW, SW, null, spansSameShaded(gr, gc - 1, gr - 1, gc));
-          if (!C) addRect(ri, cx,      cy - SW, SW, SW, null, spansSameShaded(gr - 1, gc, gr,     gc - 1));
-          if (!D) addRect(ri, cx - SW, cy - SW, SW, SW, null, spansSameShaded(gr - 1, gc - 1, gr, gc));
+          if (!A) addRect(ri, cx,      cy,      SW, SW);
+          if (!B) addRect(ri, cx - SW, cy,      SW, SW);
+          if (!C) addRect(ri, cx,      cy - SW, SW, SW);
+          if (!D) addRect(ri, cx - SW, cy - SW, SW, SW);
         });
       });
     });
@@ -2119,6 +2140,38 @@
           addRect(ri, c * cs, r * cs, cs, cs, fillColor);
         });
       });
+    }
+
+    // Lift spanning shaded objects ABOVE the multi-color border strips. The colored
+    // border is wider than the stock grid line, so where a shaded shape crosses a
+    // region boundary the border would obscure whether the shape ends at the line or
+    // continues across. Cloning each spanning shape on top of the strips keeps its
+    // true extent visible (it visibly continues over the border) — the on/off visual
+    // indicator. Appended here (after the strip/fill groups, before the center-border
+    // clones) so it sits above the multi-color border but below the black center
+    // border. assignExtraRegionColors is (re)run first so palette indices are fresh
+    // for shaded-colour mode (the needShadedClones block below also calls it).
+    if (liftEnabled && shadedReg) {
+      assignExtraRegionColors(svg);
+      var liftGroup = document.createElementNS(NS, 'g');
+      liftGroup.setAttribute('data-spdr-lift', '1');
+      Object.keys(spanningComp).forEach(function (compId) {
+        (shadedReg.compEls[compId] || []).forEach(function (el) {
+          var fill = shadedDisplayFill(el);
+          if (!fill) return;
+          var clone = el.cloneNode(false);
+          clone.removeAttribute('class');
+          clone.removeAttribute('id');
+          clone.removeAttribute('data-darkreader-inline-fill');
+          clone.style.removeProperty('--darkreader-inline-fill');
+          clone.style.removeProperty('fill-opacity');
+          clone.setAttribute('pointer-events', 'none');
+          clone.style.setProperty('stroke', 'none', 'important');
+          clone.style.setProperty('fill', fill, 'important');
+          liftGroup.appendChild(clone);
+        });
+      });
+      if (liftGroup.childNodes.length) mainGroup.appendChild(liftGroup);
     }
 
     // Center border: clone cage-box paths from #cell-grids into mainGroup (z=0).
@@ -4940,7 +4993,7 @@
       enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
       resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
-                  'regionColorStripeWidth', 'regionColorOpacity', 'regionBorderMultiFadeEnabled', 'regionBorderMultiFadeOpacity',
+                  'regionColorStripeWidth', 'regionColorOpacity', 'regionBorderMultiLiftEnabled',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
       subBuilder: function (wrap) {
         // Inset divider between the three subsections (doesn't reach the panel edges,
@@ -4994,11 +5047,10 @@
           opt.appendChild(swatchRow);
           opt.appendChild(makeWidthRow('regionColorStripeWidth'));
           opt.appendChild(makeOpacityRow('regionColorOpacity', null));
-          // Fade the border where a single shaded region spans the boundary.
-          opt.appendChild(makeRangeRow({
-            key: 'regionBorderMultiFadeOpacity', label: 'Fade where shaded region spans',
-            min: 0, max: 1, step: 0.05, enabledKey: 'regionBorderMultiFadeEnabled',
-          }));
+          // Lift a shaded shape above the border where the same shape spans it, so
+          // the wide colored border doesn't hide whether the shape ends at the line
+          // or crosses it.
+          opt.appendChild(makeSubCheckbox('regionBorderMultiLiftEnabled', 'Show shaded objects above border where they span it'));
         }, 'regMulti', 'Highlight the multi-color region borders (or where they\'d be drawn)'));
 
         // ── Subsection 3: Cell gridlines (recolor the thin built-in grid lines) ──
