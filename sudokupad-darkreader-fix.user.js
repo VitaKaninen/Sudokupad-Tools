@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.185.0
+// @version      2.186.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.185.0';
+  var SCRIPT_VERSION = '2.186.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -140,6 +140,8 @@
     regionColorPalette3:          '#e8a030',  // orange
     regionColorStripeWidth:       4,          // px per side stripe
     regionColorOpacity:           1.0,        // opacity of border stripes
+    regionBorderMultiFadeEnabled: false,      // fade multi-color borders where ONE shaded region spans the boundary
+    regionBorderMultiFadeOpacity: 0.3,        // opacity of the faded border segments (lower = more see-through)
     regionColorFillEnabled:       false,      // fill entire cell backgrounds with region colors
     regionColorFillOpacity:       0.3,        // opacity of cell-fill backgrounds (independent of border opacity)
 
@@ -1024,6 +1026,28 @@
     paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
+  // Map each grid cell to the index of the shaded extra-region that covers it.
+  // "r,c" -> path index (undefined where no extra-region covers the cell). Used by
+  // the border-fade feature to tell whether a single shaded region spans a region
+  // boundary (same index on both sides) vs two separate regions meeting / a puzzle
+  // edge (different index / undefined). Independent of shaded-COLOUR mode: the grey
+  // extra-regions exist whether or not we recolour them. Same isPointInFill
+  // cell-centre sampling as assignExtraRegionColors.
+  function buildShadedCellRegionMap(svg, cs, rows, cols) {
+    var map = {};
+    if (!svg || !svg.createSVGPoint || !cs || cs < 4) return map;
+    var paths = svg.querySelectorAll('#cages path.cage-extraregion');
+    if (!paths.length) return map;
+    var pt = svg.createSVGPoint();
+    paths.forEach(function (p, i) {
+      for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+        pt.x = c * cs + cs / 2; pt.y = r * cs + cs / 2;
+        try { if (p.isPointInFill(pt)) map[r + ',' + c] = i; } catch (e) {}
+      }
+    });
+    return map;
+  }
+
   // Line constraints. Every line-type clue — thermo shafts, palindromes, renban,
   // whispers, region-sum lines, arrow-sudoku arrow lines — renders as a stroked
   // <path> in #arrows (fill=none). DR leaves these near-white in dark mode while
@@ -1845,6 +1869,31 @@
     var SW = parseFloat(settings.regionColorStripeWidth) || 3;
     // cellRegion already built above.
 
+    // Border-fade: where ONE shaded extra-region spans a region boundary, draw the
+    // multi-color border strips at a lower opacity so the continuous shading shows
+    // through (instead of the border visually cutting the shape in two). Only when
+    // the puzzle has shaded regions; the per-edge check (spansSameShaded) leaves
+    // puzzle edges, two-separate-regions boundaries, and non-shaded boundaries
+    // fully opaque on its own.
+    var fadeSpan = needMultiBorders && settings.regionBorderMultiFadeEnabled && needShadedClones;
+    var shadedCellReg = fadeSpan ? buildShadedCellRegionMap(svg, cs, rows, cols) : null;
+    var fadeOp = (settings.regionBorderMultiFadeOpacity != null) ? settings.regionBorderMultiFadeOpacity : 0.3;
+    var fadePalette = [
+      hexToRgba(settings.regionColorPalette0 || '#e05252', fadeOp),
+      hexToRgba(settings.regionColorPalette1 || '#5294e0', fadeOp),
+      hexToRgba(settings.regionColorPalette2 || '#52a84e', fadeOp),
+      hexToRgba(settings.regionColorPalette3 || '#e8a030', fadeOp),
+    ];
+    // True iff the cell at (r,c) and its neighbour (nr,nc) are covered by the SAME
+    // shaded extra-region (so the boundary between them sits inside one continuous
+    // shaded shape). An off-grid neighbour reads undefined → false (puzzle edge).
+    function spansSameShaded(r, c, nr, nc) {
+      if (!shadedCellReg) return false;
+      var a = shadedCellReg[r + ',' + c];
+      if (a === undefined) return false;
+      return a === shadedCellReg[nr + ',' + nc];
+    }
+
     var NS = 'http://www.w3.org/2000/svg';
 
     var mainGroup = document.createElementNS(NS, 'g');
@@ -1864,16 +1913,16 @@
       if (ci < 0) return;
       var g = document.createElementNS(NS, 'g');
       mainGroup.appendChild(g);
-      rGroups[ri] = { g: g, color: palette[ci] };
+      rGroups[ri] = { g: g, color: palette[ci], fadeColor: fadePalette[ci] };
     });
 
-    function addRect(ri, x, y, w, h, color) {
+    function addRect(ri, x, y, w, h, color, faded) {
       if (!rGroups[ri] || w <= 0 || h <= 0) return;
       var rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('x', x);  rect.setAttribute('y', y);
       rect.setAttribute('width', w); rect.setAttribute('height', h);
       rect.setAttribute('data-spdr-kind', 'multi');  // highlight target (Multi-color borders)
-      rect.style.setProperty('fill', color || rGroups[ri].color, 'important');
+      rect.style.setProperty('fill', color || (faded ? rGroups[ri].fadeColor : rGroups[ri].color), 'important');
       rGroups[ri].g.appendChild(rect);
     }
 
@@ -1907,10 +1956,11 @@
         var hasBottom = !inR(ri, r + 1, c);
         var hasLeft   = !inR(ri, r, c - 1);
         var hasRight  = !inR(ri, r, c + 1);
-        if (hasTop)    { if (!topEdges[r])    topEdges[r]    = []; topEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight}); }
-        if (hasBottom) { if (!bottomEdges[r]) bottomEdges[r] = []; bottomEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight}); }
-        if (hasLeft)   { if (!leftEdges[c])   leftEdges[c]   = []; leftEdges[c].push(r); }
-        if (hasRight)  { if (!rightEdges[c])  rightEdges[c]  = []; rightEdges[c].push(r); }
+        // Fade this edge's strip when a single shaded region spans the boundary.
+        if (hasTop)    { if (!topEdges[r])    topEdges[r]    = []; topEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight, span:spansSameShaded(r,c,r-1,c)}); }
+        if (hasBottom) { if (!bottomEdges[r]) bottomEdges[r] = []; bottomEdges[r].push({c:c, hasLeft:hasLeft, hasRight:hasRight, span:spansSameShaded(r,c,r+1,c)}); }
+        if (hasLeft)   { if (!leftEdges[c])   leftEdges[c]   = []; leftEdges[c].push({r:r, span:spansSameShaded(r,c,r,c-1)}); }
+        if (hasRight)  { if (!rightEdges[c])  rightEdges[c]  = []; rightEdges[c].push({r:r, span:spansSameShaded(r,c,r,c+1)}); }
       });
 
       // Merge and draw horizontal (top/bottom) edge runs.
@@ -1922,11 +1972,14 @@
           var i = 0;
           while (i < arr.length) {
             var start = arr[i], j = i;
-            while (j + 1 < arr.length && arr[j + 1].c === arr[j].c + 1) j++;
+            // Merge contiguous cells only while the fade state matches, so a run
+            // splits at the point where the border starts/stops crossing one
+            // shaded region.
+            while (j + 1 < arr.length && arr[j + 1].c === arr[j].c + 1 && arr[j + 1].span === arr[j].span) j++;
             var end = arr[j];
             var tL = start.hasLeft  ? SW : 0;
             var tR = end.hasRight   ? SW : 0;
-            addRect(ri, start.c * cs + tL, r * cs + yOff, (end.c - start.c + 1) * cs - tL - tR, SW);
+            addRect(ri, start.c * cs + tL, r * cs + yOff, (end.c - start.c + 1) * cs - tL - tR, SW, null, start.span);
             i = j + 1;
           }
         });
@@ -1937,13 +1990,13 @@
       function drawVertRuns(edgeMap, xOff) {
         Object.keys(edgeMap).forEach(function (colStr) {
           var c = +colStr;
-          var arr = edgeMap[colStr].sort(function (a, b) { return a - b; });
+          var arr = edgeMap[colStr].sort(function (a, b) { return a.r - b.r; });
           var i = 0;
           while (i < arr.length) {
-            var startR = arr[i], j = i;
-            while (j + 1 < arr.length && arr[j + 1] === arr[j] + 1) j++;
-            var endR = arr[j];
-            addRect(ri, c * cs + xOff, startR * cs, SW, (endR - startR + 1) * cs);
+            var startR = arr[i].r, j = i;
+            while (j + 1 < arr.length && arr[j + 1].r === arr[j].r + 1 && arr[j + 1].span === arr[j].span) j++;
+            var endR = arr[j].r;
+            addRect(ri, c * cs + xOff, startR * cs, SW, (endR - startR + 1) * cs, null, arr[i].span);
             i = j + 1;
           }
         });
@@ -1986,10 +2039,13 @@
           var D = inR(ri, gr,     gc);
           var n = (A ? 1 : 0) + (B ? 1 : 0) + (C ? 1 : 0) + (D ? 1 : 0);
           if (n !== 3) return;
-          if (!A) addRect(ri, cx,      cy,      SW, SW);
-          if (!B) addRect(ri, cx - SW, cy,      SW, SW);
-          if (!C) addRect(ri, cx,      cy - SW, SW, SW);
-          if (!D) addRect(ri, cx - SW, cy - SW, SW, SW);
+          // Fade the patch when the in-region cell it sits in and the diagonally-
+          // opposite missing cell are the same shaded region (the corner is then
+          // interior to one shape, like its neighbouring strips).
+          if (!A) addRect(ri, cx,      cy,      SW, SW, null, spansSameShaded(gr, gc,     gr - 1, gc - 1));
+          if (!B) addRect(ri, cx - SW, cy,      SW, SW, null, spansSameShaded(gr, gc - 1, gr - 1, gc));
+          if (!C) addRect(ri, cx,      cy - SW, SW, SW, null, spansSameShaded(gr - 1, gc, gr,     gc - 1));
+          if (!D) addRect(ri, cx - SW, cy - SW, SW, SW, null, spansSameShaded(gr - 1, gc - 1, gr, gc));
         });
       });
     });
@@ -4835,7 +4891,7 @@
       enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
       resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
-                  'regionColorStripeWidth', 'regionColorOpacity',
+                  'regionColorStripeWidth', 'regionColorOpacity', 'regionBorderMultiFadeEnabled', 'regionBorderMultiFadeOpacity',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
       subBuilder: function (wrap) {
         // Inset divider between the three subsections (doesn't reach the panel edges,
@@ -4889,6 +4945,11 @@
           opt.appendChild(swatchRow);
           opt.appendChild(makeWidthRow('regionColorStripeWidth'));
           opt.appendChild(makeOpacityRow('regionColorOpacity', null));
+          // Fade the border where a single shaded region spans the boundary.
+          opt.appendChild(makeRangeRow({
+            key: 'regionBorderMultiFadeOpacity', label: 'Fade where shaded region spans',
+            min: 0, max: 1, step: 0.05, enabledKey: 'regionBorderMultiFadeEnabled',
+          }));
         }, 'regMulti', 'Highlight the multi-color region borders (or where they\'d be drawn)'));
 
         // ── Subsection 3: Cell gridlines (recolor the thin built-in grid lines) ──
