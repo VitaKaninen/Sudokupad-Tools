@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.183.0
+// @version      2.184.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.183.0';
+  var SCRIPT_VERSION = '2.184.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -890,12 +890,15 @@
   function shouldShadeOverlayRect(r) {
     var c = parseColor(r.getAttribute('fill') || '');
     if (!c || c.a === 0) return false;                          // transparent / no fill
+    if (isKropkiDotRect(r)) return false;                       // owned by the Kropki fix (any class, black or white)
     if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false;   // white / near-white
-    if (r.classList.contains('textbg') && isGrayColor(c)) return false; // Kropki / grey label bg
+    if (r.classList.contains('textbg') && isGrayColor(c)) return false; // grey label bg
     return true;
   }
   function fixAllUnderlays(svg) {
-    svg.querySelectorAll('#underlay rect').forEach(fixUnderlayRect);
+    // Skip Kropki dots that live in #underlay — the Kropki fix owns them (else a
+    // black border dot reads as a "gray object"); mirrors the #overlay skip above.
+    svg.querySelectorAll('#underlay rect').forEach(function (r) { if (!isKropkiDotRect(r)) fixUnderlayRect(r); });
     // Overlay shapes (opt-in): shade the coloured ones, clear ours from any we
     // previously touched but no longer should (e.g. toggle off, or it changed).
     // Overlay shapes are always shaded alongside underlay shapes when Object
@@ -1100,14 +1103,23 @@
   // (2:1 ratio) → white. Restore correct colors via inline style so DR can't
   // re-convert them. Optionally overlay a ":" / "~" label on each bare dot.
   //
-  // Two tiers, both gated on POSITION (isOnCellBorder): a real edge clue
-  // (Kropki / X-V / operator dot) sits ON a cell border. Circles off a border —
-  // quadruples (grid corner), arrow bulbs / cosmetic circles (cell centre), line
-  // endpoints — are never treated as Kropki.
-  //   isKropkiCircle — shape test: any feature-kropki or circular textbg rect.
-  //                    Color fix applies to on-border circles (+ adjacent text).
-  //   isKropkiRect   — isKropkiCircle AND no non-empty text sibling.
-  //                    Label injection applies to on-border bare dots only.
+  // Robust detection rule (3 independent signals, ALL required):
+  //   1. SHAPE  — a true circle: feature-kropki class (authoritative), OR a square
+  //               rounded rect (w ≈ h AND rx ≈ w/2) whose class is textbg or absent.
+  //               The w ≈ h test rejects PILLS (double-arrow bulbs): a vertical pill's
+  //               rx equals w/2 of its short side, so rx ≈ w/2 alone would pass it.
+  //   2. FILL   — pure black (#000000) or pure white (#FFFFFF). Coloured circles are
+  //               left to Object shading; this also bounds which class-less circles
+  //               we claim. (Checked in fixKropkiDot / isKropkiDotRect, not isKropkiCircle.)
+  //   3. POSITION (isOnCellBorder) — centre on a cell border (gridline in one axis,
+  //               mid-cell in the other). Excludes quadruples (grid corner), arrow
+  //               bulbs / cosmetic circles (cell centre), line endpoints (path ends).
+  //   isKropkiCircle — signal 1 only (shape). isKropkiDotRect = 1 ∧ 2 ∧ 3 (the exact
+  //               set the colour fix owns; object shading + label-bg skip it).
+  //   isKropkiRect   — isKropkiCircle AND no non-empty text sibling → label injection
+  //                    (still gated on isOnCellBorder in rebuildKropkiLabels).
+  // Scans include class-less #overlay/#underlay circles (some authors draw edge dots
+  // as bare <rect> circles), filtered down by the fill + position gates.
   //
   // Labeled Kropki-type circles (Difference/Ratio Sudoku etc.) pass isKropkiCircle
   // but not isKropkiRect. Their circle fill and adjacent text color are DR-proofed,
@@ -1124,18 +1136,25 @@
     return (next && next.tagName === 'text' && next.textContent.trim() !== '') ? next : null;
   }
 
-  // Any Kropki-shaped circle — used for color fixing.
+  // Any Kropki-shaped circle — used for color fixing. SHAPE test only; the
+  // position gate (isOnCellBorder) and the fill gate live in the callers.
   function isKropkiCircle(rect) {
-    var hasFk = rect.classList.contains('feature-kropki');
-    var hasTb = rect.classList.contains('textbg');
-    if (!hasFk && !hasTb) return false;
-    // textbg-only: must be circular (rx ≈ w/2)
-    if (!hasFk) {
-      var rx = parseFloat(rect.getAttribute('rx') || 0);
-      var w  = parseFloat(rect.getAttribute('width') || 0);
-      if (!(rx > 0 && Math.abs(rx - w / 2) < 1)) return false;
-    }
-    return true;
+    // Native Kropki use the feature-kropki class — authoritative, always a circle.
+    if (rect.classList.contains('feature-kropki')) return true;
+    // Otherwise require a TRUE circle: square bounding box (w ≈ h) AND fully
+    // rounded (rx ≈ w/2). The w ≈ h test is essential — rx ≈ w/2 ALONE also matches
+    // a PILL's short side (e.g. a vertical 2-cell double-arrow bulb has w=48,h=112,
+    // rx=24 = w/2), which is NOT a Kropki dot. (See LESSONS "Kropki detection".)
+    var w  = parseFloat(rect.getAttribute('width')  || 0);
+    var h  = parseFloat(rect.getAttribute('height') || 0);
+    var rx = parseFloat(rect.getAttribute('rx')     || 0);
+    if (!(w > 0 && Math.abs(w - h) < 1 && rx > 0 && Math.abs(rx - w / 2) < 1)) return false;
+    // Accept the textbg class (cosmetic Kropki) OR a class-less circle (some authors
+    // draw edge dots as bare <rect> circles with no class — e.g. clover's "Diamond
+    // Ring" nipb00tmn1). Reject other NAMED classes so we don't grab unrelated
+    // decorated circles. Position (isOnCellBorder) + mono fill are the real guards.
+    var cls = rect.getAttribute('class');
+    return !cls || cls.trim() === '' || rect.classList.contains('textbg');
   }
 
   // Bare Kropki dot (no existing label text) — used for label injection.
@@ -1164,6 +1183,19 @@
     var onVert  = dx < tol && Math.abs(dy - half) < tol;  // on a vertical cell border
     var onHoriz = dy < tol && Math.abs(dx - half) < tol;  // on a horizontal cell border
     return onVert || onHoriz;
+  }
+
+  // The exact set the Kropki colour-fix OWNS: a black/white Kropki-shaped circle on
+  // a cell border. Object shading and the label-bg fix must SKIP these so the Kropki
+  // section is their sole controller — otherwise a black Kropki dot reads as a "gray
+  // object" (highlight + shading) and a white dot gets flattened to the label-bg
+  // colour. Unconditional (ignores kropkiFixEnabled): a Kropki dot is never an
+  // object-shading / label-bg target; when the Kropki fix is off it falls to DR.
+  function isKropkiDotRect(rect, cs) {
+    if (!isKropkiCircle(rect)) return false;
+    var f = (rect.getAttribute('fill') || '').toUpperCase();
+    if (f !== '#FFFFFF' && f !== '#000000') return false;
+    return isOnCellBorder(rect, cs || getGridCellSize());
   }
 
   function fixKropkiDot(rect) {
@@ -1232,7 +1264,10 @@
     }
   }
   function fixAllKropkiDots(svg) {
-    svg.querySelectorAll('rect.feature-kropki, rect.textbg').forEach(function (rect) {
+    // Include class-less #overlay/#underlay circles (some authors draw edge dots as
+    // bare <rect> circles) alongside the classed dots; isKropkiCircle + the fill /
+    // position gates inside fixKropkiDot filter out everything that isn't a dot.
+    svg.querySelectorAll('rect.feature-kropki, rect.textbg, #overlay rect, #underlay rect').forEach(function (rect) {
       if (isKropkiCircle(rect)) fixKropkiDot(rect);
     });
   }
@@ -1282,7 +1317,7 @@
     svg.querySelectorAll('text[data-spdr-kropki-label]').forEach(function (t) { t.remove(); });
     if (!settings.kropkiFixEnabled) return;
     var cs = getGridCellSize();
-    svg.querySelectorAll('rect.feature-kropki, rect.textbg').forEach(function (rect) {
+    svg.querySelectorAll('rect.feature-kropki, rect.textbg, #overlay rect, #underlay rect').forEach(function (rect) {
       if (!isKropkiRect(rect)) return;
       if (!isOnCellBorder(rect, cs)) return;  // only label real edge dots — never quadruples/bulbs/endpoints
       var fill = rect.getAttribute('fill');
@@ -1414,6 +1449,10 @@
     var fc = parseColor(fillAttr);
     if (fillAttr === 'none' || (fc && fc.a === 0)) return;
     if (fc && fc.a !== 0 && !isGrayColor(fc)) return;
+    // A Kropki dot (incl. a class-less white border circle that happens to match the
+    // white-fill arm of LABEL_RECT_SEL) is owned by the Kropki fix — never paint it
+    // the label-bg colour, or it goes dark-on-dark. (Issue: clover's "Diamond Ring".)
+    if (isKropkiDotRect(rect)) return;
     if (settings.labelBgEnabled) {
       var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity);
       rect.style.setProperty('fill', bg, 'important');
@@ -1449,7 +1488,7 @@
           if (m.attributeName === 'data-darkreader-inline-fill') {
             if (el.tagName === 'rect') {
               if (el.matches(LABEL_RECT_SEL)) fixLabelRect(el);
-              if (el.closest('#underlay')) fixUnderlayRect(el);
+              if (el.closest('#underlay') && !isKropkiDotRect(el)) fixUnderlayRect(el);
               if (isKropkiCircle(el)) fixKropkiDot(el);
             } else if (el.tagName === 'path') {
               if (el.closest('#cages') && el.matches(CAGE_FILL_SEL)) fixCagePath(el);
@@ -3151,7 +3190,7 @@
   // (#underlay rect + qualifying #overlay rect) and fixAllCagePaths (CAGE_FILL_SEL).
   function objFillSources() {
     var out = [];
-    hqa('#underlay rect').forEach(function (e) { out.push(e); });
+    hqa('#underlay rect').forEach(function (e) { if (!isKropkiDotRect(e)) out.push(e); });
     hqa('#overlay rect').forEach(function (e) { if (shouldShadeOverlayRect(e)) out.push(e); });
     hqa(CAGE_FILL_SEL).forEach(function (e) { out.push(e); });
     return out;
@@ -3179,14 +3218,15 @@
     // button (#control-normal), even when values exist; ONSHOW simulates if none.
     userDigit:     function () { return hqa('#cell-values text, text.cell-value').concat(firstOf('#control-normal')); },
     // Mirrors fixLabelRect: LABEL_RECT_SEL minus COLOURED (saturated) fills (author
-    // cosmetic shapes Object shading owns) and minus fill="none"/transparent boxes
-    // (invisible label anchors we now leave alone). Still overlaps Kropki on the
-    // white/black circular textbg dots (accurate).
-    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
-    // Mirrors fixAllKropkiDots: real Kropki dots are `rect.feature-kropki, rect.textbg`
-    // that are circular (isKropkiCircle) AND sit on a cell border (isOnCellBorder) — the
-    // same gate fixKropkiDot uses, so quadruples / bulbs / line endpoints are excluded.
-    kropki:        function () { var cs = getGridCellSize(); return hqa('rect.feature-kropki, rect.textbg').filter(function (r) { return isKropkiCircle(r) && isOnCellBorder(r, cs); }); },
+    // cosmetic shapes Object shading owns), minus fill="none"/transparent boxes
+    // (invisible label anchors we leave alone), and minus Kropki dots (now owned
+    // solely by the Kropki fix — fixLabelRect skips them too, so no overlap).
+    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; if (isKropkiDotRect(r)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
+    // Mirrors fixAllKropkiDots exactly via isKropkiDotRect (circular + black/white +
+    // on a cell border): native feature-kropki, cosmetic textbg, AND class-less
+    // #overlay/#underlay circles. Quadruples (grid corner) / bulbs / centre circles
+    // / line endpoints fail the position or shape gate and are excluded.
+    kropki:        function () { return hqa('rect.feature-kropki, rect.textbg, #overlay rect, #underlay rect').filter(isKropkiDotRect); },
     selection:     function () { return hqa('#cell-highlights path.cage-selectioncage'); },
     cellColors:    function () { var e = hqa('#cell-colors > *'); return e.length ? e : firstOf('#control-colour'); },
     // One eyeball per pencilmark kind (combined valid+invalid). When none exist,
