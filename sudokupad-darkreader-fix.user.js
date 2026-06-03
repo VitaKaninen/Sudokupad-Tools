@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.186.0
+// @version      2.187.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.186.0';
+  var SCRIPT_VERSION = '2.187.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1026,24 +1026,73 @@
     paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
-  // Map each grid cell to the index of the shaded extra-region that covers it.
-  // "r,c" -> path index (undefined where no extra-region covers the cell). Used by
-  // the border-fade feature to tell whether a single shaded region spans a region
-  // boundary (same index on both sides) vs two separate regions meeting / a puzzle
-  // edge (different index / undefined). Independent of shaded-COLOUR mode: the grey
-  // extra-regions exist whether or not we recolour them. Same isPointInFill
-  // cell-centre sampling as assignExtraRegionColors.
-  function buildShadedCellRegionMap(svg, cs, rows, cols) {
+  // Map each grid cell to the id of the connected SHADED REGION it belongs to.
+  // "r,c" -> component id (undefined where the cell isn't shaded). A shaded region
+  // is a maximal orthogonally-connected run of cells that share the same shade
+  // colour. Used by the border-fade feature: a border segment fades only when the
+  // SAME region sits on both sides (same id) — so a single shaded shape that a
+  // region border cuts through fades, while two separate shaded shapes meeting at
+  // a border (different ids, e.g. 3isnzti76g), a shaded/blank boundary, and the
+  // puzzle's outer edge (off-grid → undefined) all stay opaque.
+  //
+  // Sources of "shaded cells" (gray AND coloured alike, full-cell backgrounds only —
+  // not small shapes/dots/lines):
+  //   • full-cell rects in #underlay and #cell-colors (w≈h≈cs, not round)
+  //   • #cages path.cage-extraregion (each path = its own region, sampled by fill)
+  // Grouping is by the cell's raw author fill, so two touching cells of different
+  // colours are different regions; identical-colour touching cells are one region
+  // (which is also what they look like — one continuous shape).
+  function buildShadedRegionMap(svg, cs, rows, cols) {
     var map = {};
-    if (!svg || !svg.createSVGPoint || !cs || cs < 4) return map;
-    var paths = svg.querySelectorAll('#cages path.cage-extraregion');
-    if (!paths.length) return map;
-    var pt = svg.createSVGPoint();
-    paths.forEach(function (p, i) {
-      for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
-        pt.x = c * cs + cs / 2; pt.y = r * cs + cs / 2;
-        try { if (p.isPointInFill(pt)) map[r + ',' + c] = i; } catch (e) {}
+    if (!svg || !cs || cs < 4) return map;
+    var colorAt = {};  // "r,c" -> token (string)
+    function setCell(r, c, tok) {
+      if (r >= 0 && r < rows && c >= 0 && c < cols) colorAt[r + ',' + c] = tok;
+    }
+    // Full-cell shaded rects in #underlay / #cell-colors.
+    ['#underlay', '#cell-colors'].forEach(function (sel) {
+      var host = svg.querySelector(sel);
+      if (!host) return;
+      host.querySelectorAll('rect').forEach(function (rect) {
+        var w = parseFloat(rect.getAttribute('width'));
+        var h = parseFloat(rect.getAttribute('height'));
+        if (!(Math.abs(w - cs) <= 1 && Math.abs(h - cs) <= 1)) return;   // full cell only
+        var rx = parseFloat(rect.getAttribute('rx')) || 0;
+        if (rx >= cs * 0.3) return;                                       // skip circles/pills
+        var f = rect.getAttribute('fill');
+        if (!f || f === 'none') return;
+        var col = parseColor(f);
+        if (!col || col.a === 0) return;
+        var x = parseFloat(rect.getAttribute('x')) || 0;
+        var y = parseFloat(rect.getAttribute('y')) || 0;
+        setCell(Math.round(y / cs), Math.round(x / cs), 'f:' + f.toLowerCase());
+      });
+    });
+    // Checked "extra regions" (#cages path.cage-extraregion): each path is its own
+    // region regardless of fill — sample cell membership via isPointInFill.
+    if (svg.createSVGPoint) {
+      var pt = svg.createSVGPoint();
+      svg.querySelectorAll('#cages path.cage-extraregion').forEach(function (p, i) {
+        for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+          pt.x = c * cs + cs / 2; pt.y = r * cs + cs / 2;
+          try { if (p.isPointInFill(pt)) colorAt[r + ',' + c] = 'xr:' + i; } catch (e) {}
+        }
+      });
+    }
+    // Flood-fill connected components sharing the same token.
+    var id = 0;
+    Object.keys(colorAt).forEach(function (k) {
+      if (map[k] !== undefined) return;
+      var tok = colorAt[k], q = [k];
+      map[k] = id;
+      while (q.length) {
+        var cur = q.shift(), p = cur.split(','), r = +p[0], c = +p[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var nk = nb[0] + ',' + nb[1];
+          if (map[nk] === undefined && colorAt[nk] === tok) { map[nk] = id; q.push(nk); }
+        });
       }
+      id++;
     });
     return map;
   }
@@ -1869,14 +1918,14 @@
     var SW = parseFloat(settings.regionColorStripeWidth) || 3;
     // cellRegion already built above.
 
-    // Border-fade: where ONE shaded extra-region spans a region boundary, draw the
+    // Border-fade: where ONE shaded region spans a region boundary, draw the
     // multi-color border strips at a lower opacity so the continuous shading shows
-    // through (instead of the border visually cutting the shape in two). Only when
-    // the puzzle has shaded regions; the per-edge check (spansSameShaded) leaves
-    // puzzle edges, two-separate-regions boundaries, and non-shaded boundaries
-    // fully opaque on its own.
-    var fadeSpan = needMultiBorders && settings.regionBorderMultiFadeEnabled && needShadedClones;
-    var shadedCellReg = fadeSpan ? buildShadedCellRegionMap(svg, cs, rows, cols) : null;
+    // through (instead of the border visually cutting the shape in two). The
+    // per-edge check (spansSameShaded) leaves puzzle edges, two-separate-region
+    // boundaries, and non-shaded boundaries fully opaque on its own. An empty map
+    // (no shaded cells) means no edge ever fades.
+    var fadeSpan = needMultiBorders && settings.regionBorderMultiFadeEnabled;
+    var shadedCellReg = fadeSpan ? buildShadedRegionMap(svg, cs, rows, cols) : null;
     var fadeOp = (settings.regionBorderMultiFadeOpacity != null) ? settings.regionBorderMultiFadeOpacity : 0.3;
     var fadePalette = [
       hexToRgba(settings.regionColorPalette0 || '#e05252', fadeOp),
