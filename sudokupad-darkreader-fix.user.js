@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.184.0
+// @version      2.185.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.184.0';
+  var SCRIPT_VERSION = '2.185.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1191,11 +1191,14 @@
   // object" (highlight + shading) and a white dot gets flattened to the label-bg
   // colour. Unconditional (ignores kropkiFixEnabled): a Kropki dot is never an
   // object-shading / label-bg target; when the Kropki fix is off it falls to DR.
-  function isKropkiDotRect(rect, cs) {
+  // Takes ONLY the rect — cs is computed internally so this is safe to pass straight
+  // to Array.filter (which would otherwise feed the array index in as a 2nd arg and
+  // wreck isOnCellBorder by using a 1px cell size).
+  function isKropkiDotRect(rect) {
     if (!isKropkiCircle(rect)) return false;
     var f = (rect.getAttribute('fill') || '').toUpperCase();
     if (f !== '#FFFFFF' && f !== '#000000') return false;
-    return isOnCellBorder(rect, cs || getGridCellSize());
+    return isOnCellBorder(rect, getGridCellSize());
   }
 
   function fixKropkiDot(rect) {
