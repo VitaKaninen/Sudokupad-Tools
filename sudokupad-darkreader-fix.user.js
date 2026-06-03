@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.182.0
+// @version      2.183.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.182.0';
+  var SCRIPT_VERSION = '2.183.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1333,34 +1333,47 @@
   }
 
   // Center a Kropki label's *ink* on the circle center (cx, cy), identically across
-  // browser ENGINES. We anchor to the ALPHABETIC baseline (forced inline, below) and
-  // shift the label so the glyph's ink-center lands on (cx, cy).
+  // browser ENGINES and across dots. Two things make that hard, each with its own fix:
   //
-  // Why not `dominant-baseline:middle/central`: they center the LINE BOX, not the ink,
-  // and — the v2.181 bug — Blink (Chrome/Brave) and Gecko (Firefox/LibreWolf) compute
-  // that baseline slightly differently. Upright that's an unnoticed VERTICAL difference,
-  // but the rotate(90,cx,cy) on horizontal-border dots turns the vertical axis into the
-  // horizontal one, so the engine difference showed up as a visible LEFT shift of the
-  // rotated glyph in Gecko only. The alphabetic baseline needs no font-metric math (every
-  // engine agrees on it) and a glyph's ink height above it is a pure font-outline property
-  // (same font on every puzzle/browser) — so one calibrated fraction per glyph centers it
-  // everywhere, in both orientations.
+  // 1) BASELINE (engine consistency). text-anchor:middle + a baseline center the glyph's
+  //    LINE BOX, not its ink. `dominant-baseline:middle/central` also need a font-metric
+  //    (x-height / em-center) computation that Blink and Gecko do differently -- invisible
+  //    vertically when upright, but rotate(90,cx,cy) turns it into a horizontal shift of
+  //    the rotated glyph in Gecko (the v2.181 bug). Fix: anchor to the ALPHABETIC baseline
+  //    (forced inline-!important, beating SudokuPad's `middle` CSS rule), which every
+  //    engine places identically with no metric math. A glyph's ink height above it is a
+  //    pure font-outline property, so one fraction per glyph centers it everywhere.
   //
-  // dy = the ink-center height above the baseline (fraction of font-size): placing the
-  // anchor at cy+dy·fs drops the baseline below center so the ink lands on center. dx ≈ 0
-  // (text-anchor:middle centers horizontally — also engine-consistent). Calibrated once
-  // via canvas (its textBaseline:'alphabetic' == SVG's alphabetic baseline). Applied in
-  // the UNROTATED frame, so rotate(90,cx,cy) keeps centered ink centered. Synchronous, no
-  // cache. Tweak a value if a glyph looks off; unknown glyphs use a generic ~⅓-em offset.
-  var KROPKI_INK_NUDGE_DEFAULT = { dx: 0, dy: 0.32 };  // generic: most ink centers ~⅓ em up
+  // 2) HINTING (per-dot + engine consistency). At the small label size (~16px) the font is
+  //    HINTED -- outlines grid-fitted toward whole device pixels -- which bends the ink
+  //    ~0.5px sideways and ~0.7px down off its true geometry, by an amount that depends on
+  //    each dot's sub-pixel position (so every dot drifts differently) AND on the engine's
+  //    hinter (so Blink != Gecko). The vector circle behind it is NOT hinted, so the glyph
+  //    slides off-center. Fix: `text-rendering:geometricPrecision` (forced inline) makes
+  //    the live SVG pipeline render the true unhinted outline -- the same on every dot and
+  //    every engine. (NB: this is honored when the inline SVG is painted in the document;
+  //    an <img>-decoded SVG ignores it, so don't "verify" the effect that way.)
+  //
+  // The fixes combine: with geometricPrecision the render IS the geometry, so the nudges
+  // are calibrated AS the geometry -- each glyph's ink-center height above the alphabetic
+  // baseline, measured via canvas at LARGE size (where hinting vanishes), as a fraction of
+  // font-size. dx is ~0 for these (the hinted left-shift is an artifact geometricPrecision
+  // removes). Placing the anchor at cy+dy*fs drops the baseline below center so the ink
+  // lands on center. Applied in the UNROTATED frame, so rotate(90,cx,cy) keeps centered ink
+  // centered. Synchronous, no cache. Tweak a value if a glyph looks off-center.
+  var KROPKI_INK_NUDGE_DEFAULT = { dx: 0, dy: 0.35 };  // generic: unknown-glyph ink ~0.35 em up
   var KROPKI_INK_NUDGE = {
-    ':': { dx: 0, dy: 0.275 },  // colon ink center sits ~0.275·fontSize above the baseline
-    '~': { dx: 0, dy: 0.324 }   // tilde ink center sits ~0.324·fontSize above the baseline
+    ':': { dx: 0, dy: 0.275 },  // colon ink-center 0.275*fontSize above the alphabetic baseline
+    '~': { dx: 0, dy: 0.324 }   // tilde ink-center 0.324*fontSize above the alphabetic baseline
   };
   function centerKropkiLabel(t, cx, cy) {
-    // Pin the alphabetic baseline (inline !important beats SudokuPad's `dominant-baseline:
-    // middle` CSS rule, which a presentation attribute can't) so the nudge is engine-stable.
+    // Engine-stable rendering, so the calibrated nudge below holds in every browser:
+    //  - pin the alphabetic baseline (inline !important beats SudokuPad's `dominant-
+    //    baseline:middle` CSS, which a presentation attribute can't);
+    //  - force geometricPrecision so the glyph renders its true unhinted outline (no
+    //    per-dot / per-engine pixel snapping).
     t.style.setProperty('dominant-baseline', 'alphabetic', 'important');
+    t.style.setProperty('text-rendering', 'geometricPrecision', 'important');
     var fs = parseFloat(t.getAttribute('font-size')) || 16;
     var n = KROPKI_INK_NUDGE[(t.textContent || '').trim()] || KROPKI_INK_NUDGE_DEFAULT;
     t.setAttribute('x', cx + n.dx * fs);
