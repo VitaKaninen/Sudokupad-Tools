@@ -8,9 +8,9 @@
 - **Rules-dialog auto-dismiss** (added v2.91, removed v2.106): SudokuPad's dialog API kept changing; not worth maintaining.
 - **Elapsed-time version display** ("vX.Y.Z · 5m ago", dropped v2.103): the manual `SCRIPT_UPDATE_TIME` constant was easy to forget and often ended up in the future showing `0:00`. Replaced by `window.spdrVersion`.
 
-## Region borders & overlapping shaded areas (the "spanning indicator" road — ABANDONED)
+## Region borders & overlapping shaded areas (the "spanning indicator" — KNOWN BRIGHTENING ISSUE)
 
-Tried across several sessions (v2.186 fade → v2.187 fade-on-real-puzzles → v2.188 lift), all reverted to the v2.185.0 baseline. Don't re-walk this without a genuinely new idea — record below so we don't re-fight it.
+**Status: the v2.188 lift IS the current shipped implementation** (opt-in `regionBorderMultiLiftEnabled`). It works as an indicator but has an unsolved **brightening** side-effect (analysed below). An earlier session almost reverted the whole road to v2.185, then put it back to v2.188 at the user's request — so the feature stays; this is a record of *why it brightens* and the most promising fix directions, not an abandonment. Don't re-derive the analysis from scratch; pick up from "the clip-to-band idea" below.
 
 **The problem we were solving.** The multi-color region border is *wider than the stock grid line*. Where a shaded shape sits right up against (or crosses) a region boundary, the wide border eats the small gap and you can't tell **"shape ends at the boundary"** from **"shape crosses the boundary."** We wanted a visual indicator of which one it is, for grey *and* coloured shaded regions alike, but **only** where the *same* shape is on both sides — not where two *separate* shaded regions just happen to meet at the border.
 - "Same shape on both sides" = a **connected component of same-colour shaded cells** (flood-fill, join orthogonal neighbours only when their author fill matches). Identical-colour cells touching orthogonally already *look* like one shape; distinct blobs meeting diagonally / across a gap are different. Compare component ids across each boundary edge → "spans" iff same id on both sides.
@@ -20,7 +20,7 @@ Tried across several sessions (v2.186 fade → v2.187 fade-on-real-puzzles → v
 - It faded along the **whole cell border**, even the parts where the shape didn't actually cross → ugly.
 - **SW×SW corner artifacts**: a solid nub at the end of a faded edge, or a dark double-painted square, wherever a faded edge met a solid/outer edge — because the strips own/trim corners *independently of fade state* and there's no single right opacity for a corner shared by a faded and a solid edge.
 
-**Approach (b) — lift the spanning shape ABOVE the border (v2.188). REJECTED (brightening).**
+**Approach (b) — lift the spanning shape ABOVE the border (v2.188). CURRENT implementation — but it brightens.**
 - The user's framing: "the border obscures the object → put the object above the border." Correct instinct, but the implementation **brightens the shaded area**, which contradicts the stated intent (a pure indicator, *no* opacity/brightness change).
 - **Why it brightens — the key SVG fact: SVG child elements have no usable z-index.** "Raise the z-level" is impossible as a move; stacking is *document order* only, so "raising" means **drawing a second copy higher in the order**. The original translucent layer stays put and the lifted copy lands on top → **two translucent fills of the same colour stack = brighter / more opaque**. Confirmed on `z8ndhpjd05` (grey `cage-extraregion`, clones `rgba(153,153,153,0.6)` over the existing 0.6 layer) and the brightening tracks the spanning region exactly because that's the only place the second layer exists. Math: single `0.6·153 + 0.4·B`; double `0.84·153 + 0.16·B` → noticeably lighter (e.g. B=51: ~112 → ~137).
 - The "real" single instance lives in **different places** by shape type, which is why a clean fix is awkward:
@@ -35,7 +35,7 @@ Tried across several sessions (v2.186 fade → v2.187 fade-on-real-puzzles → v
 
 **Test puzzles used.** `tuli24e927` (grey `#CFCFCF` `#underlay` shaded regions), `3isnzti76g` (`#D0D0FF` — the *two separate regions meeting at a border* case that must NOT be treated as spanning), `z8ndhpjd05` (grey `cage-extraregion`; brightening confirmed in-DOM), `129xjm3wsq` "Candy Canes" (pure `#underlay`: 15 green + 15 red full-cell rects, 0 extra-regions, 0 cell-colors, 6 components of which **4 span** a box boundary — the hard plain-cell case; here `cell-colors` is empty so lifting would only ever cover the **grid lines**).
 
-**Outcome:** abandoned and reverted to v2.185.0 (the lift/fade code, its setting `regionBorderMultiLiftEnabled`, and the related LESSONS/PROJECT_SUMMARY notes were all removed). The multi-color region *borders* themselves stay — only the "indicate where a shape spans the border" sub-feature is dropped.
+**Outcome / where it stands:** the v2.188 lift ships as-is (opt-in, off by default), brightening included. The brightening is the one open defect; **clip-to-band** (above) is the recommended next attempt, and **trimming grid lines to end at the borders** is the deeper structural fix that would also dissolve the layering cycle. Neither is implemented. (History note: a later session reverted the whole road to v2.185 then restored to v2.188 at the user's request — so if you see a v2.189 "revert" commit followed by a v2.190 "restore" commit, that round-trip is why; net effect = unchanged from v2.188.)
 
 ## Environment gotchas
 
