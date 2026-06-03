@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.181.0
+// @version      2.182.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.181.0';
+  var SCRIPT_VERSION = '2.182.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1316,7 +1316,7 @@
       t.setAttribute('x', cx);
       t.setAttribute('y', cy);
       t.setAttribute('text-anchor', 'middle');
-      t.setAttribute('dominant-baseline', 'central');
+      t.setAttribute('dominant-baseline', 'alphabetic');  // enforced inline in centerKropkiLabel; see there
       var lblSize = parseFloat(settings.kropkiLabelSize); if (!isFinite(lblSize) || lblSize <= 0) lblSize = 16;
       t.setAttribute('font-size', lblSize);
       t.setAttribute('font-weight', settings.kropkiLabelWeight || '600');
@@ -1332,31 +1332,37 @@
     });
   }
 
-  // Center a Kropki label's *ink* on the circle center (cx, cy). text-anchor:middle
-  // plus the effective `dominant-baseline:middle` center the glyph's LINE BOX, not its
-  // visible INK, and the two differ per glyph. There is no reliable RUNTIME way to
-  // measure ink here: getBBox/getBoundingClientRect return the line box (constant ~19px
-  // regardless of glyph), Canvas measureText's metrics render ~2px off SudokuPad's SVG
-  // rasterizer, and an <img>-isolated SVG falls back to a different font. The previous
-  // async raster approach (v2.175) chased this and was both unstable across label
-  // rebuilds and prone to flinging a glyph clean out of its circle (the colon went 12px
-  // off in v2.180). So instead we apply a FIXED per-glyph nudge, calibrated once against
-  // the live render (a rebuild-immune probe drawn in the real Tahoma font, measured on a
-  // pixel ruler): at the middle baseline a colon is already centered, while a tilde's
-  // wavy stroke rides ~6% of the font-size high. The nudge is a fraction of font-size —
-  // the font is identical on every puzzle, so one value per glyph works everywhere. It
-  // is applied in the UNROTATED frame, so the rotate(90,cx,cy) pivot (horizontal-border
-  // dots) keeps the ink centered in both orientations. Synchronous: every label rebuild
-  // re-centers correctly with no cache and no async race. dy > 0 = downward (SVG y+).
-  // Tweak a value here if a glyph ever looks off-center; unknown glyphs default to dead
-  // center (no nudge).
+  // Center a Kropki label's *ink* on the circle center (cx, cy), identically across
+  // browser ENGINES. We anchor to the ALPHABETIC baseline (forced inline, below) and
+  // shift the label so the glyph's ink-center lands on (cx, cy).
+  //
+  // Why not `dominant-baseline:middle/central`: they center the LINE BOX, not the ink,
+  // and — the v2.181 bug — Blink (Chrome/Brave) and Gecko (Firefox/LibreWolf) compute
+  // that baseline slightly differently. Upright that's an unnoticed VERTICAL difference,
+  // but the rotate(90,cx,cy) on horizontal-border dots turns the vertical axis into the
+  // horizontal one, so the engine difference showed up as a visible LEFT shift of the
+  // rotated glyph in Gecko only. The alphabetic baseline needs no font-metric math (every
+  // engine agrees on it) and a glyph's ink height above it is a pure font-outline property
+  // (same font on every puzzle/browser) — so one calibrated fraction per glyph centers it
+  // everywhere, in both orientations.
+  //
+  // dy = the ink-center height above the baseline (fraction of font-size): placing the
+  // anchor at cy+dy·fs drops the baseline below center so the ink lands on center. dx ≈ 0
+  // (text-anchor:middle centers horizontally — also engine-consistent). Calibrated once
+  // via canvas (its textBaseline:'alphabetic' == SVG's alphabetic baseline). Applied in
+  // the UNROTATED frame, so rotate(90,cx,cy) keeps centered ink centered. Synchronous, no
+  // cache. Tweak a value if a glyph looks off; unknown glyphs use a generic ~⅓-em offset.
+  var KROPKI_INK_NUDGE_DEFAULT = { dx: 0, dy: 0.32 };  // generic: most ink centers ~⅓ em up
   var KROPKI_INK_NUDGE = {
-    ':': { dx: 0, dy: 0    },   // colon: already centred at the middle baseline
-    '~': { dx: 0, dy: 0.06 }    // tilde: ink rides high → nudge down ~0.06·fontSize
+    ':': { dx: 0, dy: 0.275 },  // colon ink center sits ~0.275·fontSize above the baseline
+    '~': { dx: 0, dy: 0.324 }   // tilde ink center sits ~0.324·fontSize above the baseline
   };
   function centerKropkiLabel(t, cx, cy) {
+    // Pin the alphabetic baseline (inline !important beats SudokuPad's `dominant-baseline:
+    // middle` CSS rule, which a presentation attribute can't) so the nudge is engine-stable.
+    t.style.setProperty('dominant-baseline', 'alphabetic', 'important');
     var fs = parseFloat(t.getAttribute('font-size')) || 16;
-    var n = KROPKI_INK_NUDGE[(t.textContent || '').trim()] || { dx: 0, dy: 0 };
+    var n = KROPKI_INK_NUDGE[(t.textContent || '').trim()] || KROPKI_INK_NUDGE_DEFAULT;
     t.setAttribute('x', cx + n.dx * fs);
     t.setAttribute('y', cy + n.dy * fs);
   }
