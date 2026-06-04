@@ -128,6 +128,8 @@ A mechanical inventory of **1,890 real puzzles** + the **render-element buckets*
 ### When to consult it (and when not)
 Consult **before a broad/cross-cutting change** — one that touches a shared bucket many puzzles share (`#arrows | path`, overlay rects, `#cell-colors`, kropki/`textbg`, cages) rather than being scoped to one puzzle. Use it to (a) count how many puzzles the change can reach, (b) read the attribute-union to see if any variant violates your assumption, (c) pull 3–5 representative URLs to spot-check in-browser. **Skip it** for a one-puzzle tweak, a pure-CSS/UI change, or anything that can't reach other puzzles — querying then is the token waste the catalog is meant to prevent.
 
+**Open audit:** [`CATALOG_AUDIT.md`](CATALOG_AUDIT.md) — working checklist of buckets the script may not handle, each to be resolved to "handled by us" or "acknowledged fine". Group A (DR-managed but unverified) first; **fog last and separate**.
+
 Caveats: ~1890 of the ~2000-URL target (near-complete, not exhaustive); `grid_w/h` inflate for outer-clue/nogrid puzzles (see CATALOG_INSTRUCTIONS anomalies); the DOM can't distinguish line types (thermo vs palindrome vs region-sum are all `#arrows | path`) — that's why the CSV's constraint columns exist, cross-reference both.
 
 ## snippets/

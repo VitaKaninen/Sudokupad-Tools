@@ -6,6 +6,7 @@ TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on Sudo
 - [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — current state, architecture, features, terminology, testing setup, test-puzzle URLs.
 - [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) — what beats DarkReader and what doesn't, dead ends, removed features. **Check this before debugging a rendering issue** so we don't re-solve a solved problem.
 - [`docs/Catalog/`](docs/Catalog/) — inventory of 1890 real puzzles + their render buckets, for predicting side effects of broad changes. **See "Cross-referencing the puzzle catalog" below before consulting it — query it, never read it into context.**
+- [`docs/CATALOG_AUDIT.md`](docs/CATALOG_AUDIT.md) — open checklist of catalog buckets the script may not handle yet (Group A first; **fog last**). Resolve each to handled-or-acknowledged; record the decision inline as you go.
 
 **Finding code:** the script is one ~4,200-line IIFE with 120+ functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region.
 
