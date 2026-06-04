@@ -1,319 +1,184 @@
-# Puzzle Element Catalog — Extraction Instructions
+# Puzzle Element Catalog — Capture Spec
 
-Purpose: produce, for any SudokuPad puzzle, a complete inventory of the **render
-elements** it contains, so that before changing the script we can see every kind
-of thing a change might affect. The per-puzzle inventories roll up into one master
-union list (`ELEMENT_CATALOG.md`) covering every element type seen across all puzzles.
+Purpose: across ~2,000 SudokuPad puzzles, produce a complete inventory of the
+**render elements** they contain and the **decision-relevant properties** of each, so
+the DarkReader-fix userscript can be made robust against whatever it meets in the wild.
 
-## Core principle — completeness is mechanical, not visual
-
-**Do not catalog by looking at the rendered puzzle and listing what you see.** That
-is lossy (near-invisible cosmetics get missed) and unverifiable (you can't prove
-nothing was skipped). Instead:
-
-1. **Extract** with the deterministic script in Step 2. It walks the *entire*
-   `#svgrenderer` DOM and reports *every* element bucket. Completeness is guaranteed
-   by the iteration, not by your diligence.
-2. **Annotate** each bucket with a human name from the Known Buckets table (Step 4).
-3. **Flag** any bucket you cannot confidently name as `UNKNOWN — investigate`. Never
-   guess a name. An honest `UNKNOWN` is the safety net that lets the catalog grow.
-
-If you follow this, you cannot miss an element — you can only fail to *name* one, and
-the `UNKNOWN` flag captures that. The naming is the only judgement call.
+The deliverable of the whole exercise is the set of **buckets the script doesn't yet
+handle** — see "Buckets & unknowns" below. We are mining for those, not avoiding them.
 
 ---
 
-## Step 0 — Load the puzzle
+## How the work is split
 
-Open the puzzle URL (e.g. `https://sudokupad.app/pbwqsppuho`) in a browser with the
-page fully rendered. If driving via Claude-in-Chrome MCP, `location.reload()` first
-and wait until `document.querySelector('#svgrenderer')` is non-null.
+| Phase | What | Tool | Cost |
+|---|---|---|---|
+| **1 — Extraction** | Walk each puzzle's DOM, record every element bucket + its decision attributes + the puzzle's constraint semantics. Purely mechanical. | **`sudokupad_extractor.user.js`** (bulk) or the MCP fallback below (single puzzle) | none (script) |
+| **2 — Synthesis** | Merge the per-puzzle records into one master understanding: every bucket → how the script should treat it → flagged UNKNOWNs. Needs judgement. | AI, over the script's **Union** export | tokens |
 
-Record the puzzle id (the URL slug) and the title. Read it from
-**`window.convertedPuzzle?.title`** (the authoritative source on current SudokuPad
-builds), falling back to the on-page `document.title` if needed.
+The bulk extractor **is** the Phase-1 pipeline for the 2,000-URL run. The MCP procedure
+at the bottom is a single-puzzle manual fallback — same capture, no automation.
 
-> ⚠️ On SudokuPad **v0.611.0** (current), `Framework.getApp()` returns an **empty**
-> object and `Framework.getApp().puzzle` is `undefined` — the live puzzle model now
-> lives in **`window.convertedPuzzle`**. Older builds may still expose
-> `Framework.getApp().puzzle`; prefer `convertedPuzzle` and fall back to it.
+## Core principle — completeness is mechanical, not visual
 
-## Step 1 — Confirm the page is a real puzzle
+Don't catalog by eyeballing the rendered puzzle (lossy, unverifiable). The extractor
+walks the *entire* `#svgrenderer` DOM and reports *every* element bucket. Completeness
+is guaranteed by the iteration, not by diligence. Naming/handling decisions come later
+(Phase 2) and never gate capture.
 
-Run and confirm non-null / non-zero:
+## Buckets & unknowns — read this if the concept is fuzzy
 
-```js
-!!document.querySelector('#svgrenderer') && document.querySelectorAll('#svgrenderer *').length
-```
+- A **bucket** is one distinct element kind: the key `layer | tag.class`
+  (e.g. `#overlay | rect.feature-kropki`). The walk groups every element into buckets
+  and counts them.
+- **Known vs. unknown does not matter at extraction time, and you do NOT need a bucket
+  list planned in advance.** An unnamed element is captured exactly as correctly as a
+  named one — naming is a label applied in Phase 2, it doesn't affect capture.
+- An **UNKNOWN bucket** = "an element kind the script may mishandle." That is the
+  actionable output. The catalog exists to surface these across many puzzles.
+- The only way "not knowing in advance" can bite: the capture measures a **fixed set**
+  of attributes (below). If some element's behaviour depends on a property *not* in that
+  set, we'd capture the bucket but miss the deciding attribute. The set is broad (drawn
+  from every past lesson) — but that's the edge to watch.
 
-If this is 0 or null, the puzzle hasn't rendered — stop and reload. Do not catalog
-a blank page.
+---
 
-## Step 2 — Deterministic DOM enumeration (the backbone)
+## What we capture (and what we deliberately don't)
 
-Paste this into the console (or run via MCP `javascript_tool`). It returns a text
-table: one row per distinct `(layer | tag.classlist)` bucket, with a count and a
-sample fill/stroke/text so each bucket is identifiable.
+Captured **per puzzle**:
 
-```js
-(() => {
-  const svg = document.querySelector('#svgrenderer');
-  if (!svg) return 'NO #svgrenderer — page not a rendered puzzle';
-  const buckets = new Map();
-  const walk = (el, layer) => {
-    for (const child of el.children) {
-      const tag = child.tagName.toLowerCase();
-      const cls = (child.getAttribute('class') || '')
-        .split(/\s+/).filter(Boolean).sort().join('.');
-      const key = `${layer} | ${tag}${cls ? '.' + cls : ''}`;
-      let b = buckets.get(key);
-      if (!b) buckets.set(key, b = { count: 0, fill: null, stroke: null, text: null, rx: null });
-      b.count++;
-      if (b.fill   == null) b.fill   = child.getAttribute('fill');
-      if (b.stroke == null) b.stroke = child.getAttribute('stroke');
-      if (b.rx     == null) b.rx     = child.getAttribute('rx');
-      if (tag === 'text' && b.text == null) b.text = (child.textContent || '').trim().slice(0, 16);
-      if (child.children.length) walk(child, layer); // recurse, keep top-level layer label
-    }
-  };
-  for (const top of svg.children) {
-    const layer = top.id ? '#' + top.id
-      : `${top.tagName.toLowerCase()}[${(top.getAttribute('class') || '').trim()}]`;
-    walk(top, layer);
-  }
-  return [...buckets.entries()].sort().map(([k, v]) =>
-    `${k}  ×${v.count}` +
-    (v.fill   ? `  fill=${v.fill}`     : '') +
-    (v.stroke ? `  stroke=${v.stroke}` : '') +
-    (v.rx     ? `  rx=${v.rx}`         : '') +
-    (v.text   ? `  text="${v.text}"`   : '')
-  ).join('\n');
-})()
-```
+- **`id`, `url`, `title`, `author`** — title/author/id from **`window.convertedPuzzle`**
+  (authoritative on v0.611.0; `Framework.getApp()` is **empty** there, never read it for
+  these). `url` is the shortened slug URL after redirect.
+- **`gridSize`** — true play-grid side from `convertedPuzzle.solution` length
+  (`√len`). Reliable, unlike `gridN` (which is inflated by outer clues / padding / nogrid).
+- **`constraints`** — non-zero `convertedPuzzle` arrays only, e.g. `{cages:18, cosmetic:5,
+  foglight:36}`. The dozen `array[0]` keys are dropped as noise. This is the **semantic
+  layer**: the DOM can't tell a thermo from a palindrome from a region-sum line (all
+  `#arrows | path`) — the constraint arrays can.
+- **`cageStyles`** — tally of `cages[].style` (e.g. `{box:6, rowcol:12}`). Distinguishes a
+  real 1-9 region (`cage-extraregion`) from killer cages / box outlines / decoration.
+- **`meta`** — `{cs, gridN, theme}`.
+- **`buckets`** — the structured decision dump: one entry per bucket with the fields below.
 
-**Capture the entire output verbatim.** This is the raw, complete inventory. Every
-row is a real element kind present in the puzzle; nothing was filtered.
+**Excluded from capture** (noise / not puzzle content):
 
-> Note: SudokuPad injects elements that are **not** part of the puzzle definition —
-> selection rectangles, highlight overlays, and (if our userscript is loaded) the
-> `[data-spdr-region-split]` group and any `data-spdr-*` clones. **Disable the
-> userscript before extracting**, or explicitly mark and exclude any bucket whose
-> layer/class begins with `spdr`. We catalog the *puzzle's* elements, not ours.
+- Our own clones (`spdr*`).
+- SudokuPad selection/highlight UI (`#cell-highlights`) — UI, not puzzle content.
+- The universal `g[defs]` filter block — render plumbing present on **every** puzzle (fog
+  or not), the script never touches it.
+- The old raw "Step 2" enumeration — it was a strict subset of the decision dump (it only
+  added a raw `rx`/`fill` sample the dump already encodes as `shape`/`fill`). Redundant;
+  dropped.
 
-### Running via Claude-in-Chrome MCP — defeat the ~1100-char output cap
+### DarkReader: extract with DR **ON**
 
-The `javascript_tool` truncates returned output at **~1100 characters**, silently
-(it appends `[TRUNCATED]`). Step 2b routinely runs past 3,000 chars, and Step 2 is
-near the limit on dense puzzles. Returning a big string in one call **drops rows
-without warning** — and a dropped bucket only gets caught later by the Step-6
-round-trip count, if at all. So when driving via MCP, never return the full text
-directly. Instead:
+DR's darkening does not corrupt the capture: the probe reads the **source** `fill`/`stroke`
+(DR stores its override behind a CSS variable / parent filter the probe doesn't read), so
+`gray:true/false` reflects the authored colour regardless of DR state. What DR *does* add is
+the **`drManaged`** flag — the one signal that says which elements DR is already converting,
+which is exactly what the fix script needs to know. DR-off would lose that and gain nothing.
 
-1. **Stash the result on `window`, return only its length:**
-   ```js
-   window.__out = /* the snippet that builds the text */;
-   'LEN=' + window.__out.length
-   ```
-2. **Pull it back in ≤1000-char slices** (the cap is on the *displayed* result, not
-   the slice — even `slice(0,1200)` gets cut, so keep windows ≤1000):
-   ```js
-   window.__out.slice(0, 1000)
-   window.__out.slice(1000, 2000)
-   // …continue until you've read `length` chars
-   ```
-3. **Cache the extractor across puzzles via `sessionStorage`.** Every puzzle shares
-   the `sudokupad.app` origin, so `sessionStorage` survives navigation between them.
-   Define the extractor once as a function, store its source, then re-run it on each
-   later puzzle without re-sending the whole snippet:
-   ```js
-   sessionStorage.setItem('__catfn', runCat.toString());   // once, after defining runCat()
-   eval('(' + sessionStorage.getItem('__catfn') + ')')()   // on every later puzzle
-   ```
+### Per-bucket fields → the decision each gates
 
-In a real browser **console** (human-driven) this cap does not apply — the
-truncation is specific to the MCP tool path. The validated approach for an
-MCP/cheap-model bulk run is: one combined function that builds Step 2, Step 2b, and
-the Step 3 dump into `window.__CAT = {meta, s2, s2b, s3}` (and caches itself in
-`sessionStorage`), then chunked retrieval of each field.
-
-## Step 2b — Decision-relevant attribute dump (why a change behaves the way it does)
-
-Step 2 proves *which kinds* of element exist. It does **not** capture the properties
-that decide what a script change *does* to them — and it has a real blind spot: it
-samples the `fill` **attribute** only, so an element coloured via an inline
-`style.fill` (e.g. the `#N` rank markers / X-O letters) shows **no fill** in Step 2,
-hiding the very gray-ness that determines whether object-shading touches it.
-
-This probe re-walks the same DOM and, **per bucket**, records the attributes that the
-lessons have repeatedly shown to be decisive (see the legend below). Paste it in;
-capture the output alongside Step 2's.
-
-```js
-(() => {
-  const svg = document.querySelector('#svgrenderer');
-  if (!svg) return 'NO #svgrenderer';
-  function parseColor(s){
-    if(!s) return null; s=String(s).trim();
-    if(s==='none'||s==='transparent') return {r:0,g:0,b:0,a:0,none:true};
-    let m;
-    if(m=s.match(/^#([0-9a-f]{3,8})$/i)){let h=m[1];
-      if(h.length===3||h.length===4)h=h.replace(/./g,c=>c+c);
-      const n=parseInt(h.slice(0,6),16);
-      const a=h.length===8?parseInt(h.slice(6,8),16)/255:1;
-      return {r:(n>>16)&255,g:(n>>8)&255,b:n&255,a};}
-    if(m=s.match(/^rgba?\(([^)]+)\)/i)){const p=m[1].split(',').map(parseFloat);
-      return {r:p[0],g:p[1],b:p[2],a:p[3]==null?1:p[3]};}
-    const el=document.createElement('span');el.style.color=s;document.documentElement.appendChild(el);
-    const c=getComputedStyle(el).color;el.remove();
-    const mm=c.match(/rgba?\(([^)]+)\)/); if(!mm) return null;
-    const p=mm[1].split(',').map(parseFloat);
-    return {r:p[0],g:p[1],b:p[2],a:p[3]==null?1:p[3]};}
-  function isGray(c){ if(!c||c.none) return null;
-    const r=c.r/255,g=c.g/255,b=c.b/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2;
-    let s=0; if(mx!==mn){const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn);} return s<0.08; }
-  function gcd(a,b){a=Math.round(a);b=Math.round(b);return b===0?a:gcd(b,a%b);}
-  let cs=0, board=0; const cg=svg.querySelector('#cell-grids path.cell-grid');
-  if(cg){const d=cg.getAttribute('d')||cg.dataset.spdrOrigD||'';
-    const ns=(d.match(/\d+(?:\.\d+)?/g)||[]).map(Number).filter(n=>n>0.5);
-    cs=ns.reduce(gcd,0)||0; board=ns.length?Math.max(...ns):0;}  // board = full grid extent (max coord)
-  const gridN=cs?Math.round(board/cs):0;
-  function own(el,p){ return el.style.getPropertyValue(p)||el.getAttribute(p)||''; } // what OUR code reads
-  function src(el,p){
-    if(el.style.getPropertyValue(p)) return el.style.getPropertyPriority(p)==='important'?'inline!':'inline';
-    if(el.getAttribute(p)!=null) return 'attr';
-    let q=el.parentElement;
-    while(q&&q!==svg){ if(q.style.getPropertyValue(p)||q.getAttribute(p)!=null) return 'inherited'; q=q.parentElement; }
-    return 'css/none'; }
-  function shape(el){ if(el.tagName.toLowerCase()!=='rect') return el.tagName.toLowerCase();
-    const w=+el.getAttribute('width')||0,h=+el.getAttribute('height')||0,rx=+el.getAttribute('rx')||0;
-    if(!cs) return 'rect';
-    if(Math.abs(w-h)<2&&Math.abs(rx-w/2)<2) return 'circle';
-    if(rx>0&&Math.abs(rx-Math.min(w,h)/2)<3) return 'pill';
-    if(Math.abs(w-cs)<cs*0.2&&Math.abs(h-cs)<cs*0.2&&rx<cs*0.3) return 'fullcell';
-    return 'rect'; }
-  function rot(el){ try{const m=el.getCTM&&el.getCTM(); return m?(Math.abs(m.b)>0.01||Math.abs(m.c)>0.01):false;}catch(e){return false;} }
-  function pos(el){ if(!cs) return ''; let bb; try{bb=el.getBBox();}catch(e){return '';}
-    const cx=bb.x+bb.width/2,cy=bb.y+bb.height/2;
-    if(cx<-1||cy<-1||cx>board+1||cy>board+1) return 'outside';
-    const t=cs*0.2, mod=v=>((v%cs)+cs)%cs;
-    const xg=Math.min(mod(cx),cs-mod(cx))<t, yg=Math.min(mod(cy),cs-mod(cy))<t;
-    const xm=Math.abs(mod(cx)-cs/2)<t, ym=Math.abs(mod(cy)-cs/2)<t;
-    if(xg&&yg) return 'corner'; if((xg&&ym)||(xm&&yg)) return 'border';
-    if(xm&&ym) return 'center'; return 'arbitrary'; }
-  function span(el){ if(!cs)return 0; let bb; try{bb=el.getBBox();}catch(e){return 0;}
-    const a=Math.floor((bb.x+1)/cs),b=Math.floor((bb.x+bb.width-1)/cs),
-          c=Math.floor((bb.y+1)/cs),d=Math.floor((bb.y+bb.height-1)/cs);
-    return Math.max(1,b-a+1)*Math.max(1,d-c+1); }
-  const B=new Map(), addS=(s,v)=>{ if(v!=null&&v!=='') s.add(v); };
-  function walk(el,layer){
-    for(const ch of el.children){
-      const tag=ch.tagName.toLowerCase();
-      const cls=(ch.getAttribute('class')||'').split(/\s+/).filter(Boolean).sort().join('.');
-      const isOurs=(ch.id&&ch.id.startsWith('spdr'))||/spdr/.test(cls);
-      if(!isOurs){
-        const key=`${layer} | ${tag}${cls?'.'+cls:''}`;
-        let b=B.get(key); if(!b){b={n:0,fv:new Set(),fs:new Set(),fg:new Set(),sv:new Set(),ss:new Set(),sg:new Set(),sw:new Set(),sh:new Set(),po:new Set(),rot:false,cells:new Set(),op:new Set(),none:false,dr:false,zlo:1e9,zhi:-1,tx:new Set()};B.set(key,b);}
-        b.n++; const zi=Array.prototype.indexOf.call(el.children,ch); b.zlo=Math.min(b.zlo,zi);b.zhi=Math.max(b.zhi,zi);
-        const fo=own(ch,'fill'),fc=parseColor(fo);
-        addS(b.fs,src(ch,'fill')); if(fo){addS(b.fv,fo);b.fg.add(fc&&fc.none?'none':isGray(fc));} if(fc&&fc.none)b.none=true;
-        const so=own(ch,'stroke'),sc=parseColor(so);
-        if(so&&so!=='none'){addS(b.sv,so);addS(b.ss,src(ch,'stroke'));b.sg.add(isGray(sc));addS(b.sw,ch.getAttribute('stroke-width')||ch.style.strokeWidth);}
-        addS(b.sh,shape(ch)); addS(b.po,pos(ch)); if(rot(ch))b.rot=true; addS(b.cells,span(ch));
-        addS(b.op,ch.getAttribute('opacity')||ch.getAttribute('fill-opacity')||ch.style.opacity||ch.style.fillOpacity);
-        if(ch.getAttribute('data-darkreader-inline-fill')!=null||ch.getAttribute('data-darkreader-inline-stroke')!=null||ch.style.getPropertyValue('--darkreader-inline-fill'))b.dr=true;
-        if(tag==='text'){const t=(ch.textContent||'').trim().slice(0,12); if(t)addS(b.tx,t);}
-      }
-      if(ch.children.length) walk(ch,layer);
-    }
-  }
-  for(const top of svg.children){ const layer=top.id?'#'+top.id:`${top.tagName.toLowerCase()}[${(top.getAttribute('class')||'').trim()}]`;
-    if(/spdr/.test(layer)) continue; walk(top,layer); }
-  const J=s=>[...s].join(','), theme=(document.body.className.match(/setting-uitheme-\w+/)||['default'])[0];
-  const rows=[...B.entries()].sort().map(([k,v])=>{
-    const p=[`${k}  ×${v.n}  z:${v.zlo}-${v.zhi}`];
-    if(v.fv.size) p.push(`fill[${J(v.fs)}]=${J(v.fv)} gray:${J(v.fg)}`); else p.push(`fillSrc:${J(v.fs)}`);
-    if(v.none) p.push('HAS-none/transparent');
-    if(v.sv.size) p.push(`stroke[${J(v.ss)}]=${J(v.sv)} gray:${J(v.sg)} w:${J(v.sw)}`);
-    if(v.sh.size) p.push(`shape:${J(v.sh)}`);
-    if([...v.po].some(Boolean)) p.push(`pos:${J(v.po)}`);
-    if(v.rot) p.push('ROTATED');
-    if([...v.cells].some(x=>x>1)) p.push(`cells:${J(v.cells)}`);
-    if([...v.op].some(x=>x!=null&&x!=='')) p.push(`opacity:${J(v.op)}`);
-    if(v.dr) p.push('DR-managed');
-    if(v.tx.size) p.push(`text:"${J(v.tx)}"`);
-    return p.join('  |  ');
-  }).join('\n');
-  return `cs=${cs} gridN=${gridN} theme=${theme}\n`+rows;
-})()
-```
-
-Also dump the **constraint-style tally** (the authoritative "what it means" the DOM
-can't give you — e.g. `cage-extraregion` = a real 1-9 region, not decoration):
-
-```js
-(() => { const p = window.convertedPuzzle; if(!p||!p.cages) return 'no convertedPuzzle.cages';
-  const t={}; p.cages.forEach(c=>{const s=(c.style||c.type||'none'); t[s]=(t[s]||0)+1;});
-  return 'cages by style: '+JSON.stringify(t)+(p.cosmetics?` | cosmetics:${Object.keys(p.cosmetics).length} groups`:''); })()
-```
-
-### Field → decision it gates (why each is in the dump)
-
-| Field in the dump | What it decides | Lesson it came from |
+| Field | What it decides | Lesson it came from |
 |---|---|---|
-| `fill[src]=…` (src = inline!/inline/attr/inherited/css) | **inherited/css ⇒ our code can't see it ⇒ element untouched.** The single field that can prove a puzzle unaffected | overlay-marker gap; cascade section |
-| `gray:true/false/none` (saturation `<0.08`) | gray vs colored slider routing; white & black are gray | Gray-vs-colored shading (v2.140) |
-| `HAS-none/transparent`, `opacity:` | invisible anchors / translucent endpoints take different paths; translucent layers double-paint brighter | v2.176; z8ndhpjd05 brightening |
-| `stroke[...] gray:` (stroke colour) | white stroke = grid-line **eraser**, dark = real outline | v2.192 |
-| `shape:circle/pill/fullcell` | circle-vs-pill is the Kropki false-positive guard | v2.184 |
-| `pos:border/corner/center/outside/arbitrary` | Kropki ownership **is** position; outside-grid = little-killer/sandwich | v2.164 / v2.184 |
-| `ROTATED`, `cells:` | dedupe/tracing path; spanning-shape indicator | highlight dedupe; personal-notes |
-| `z:lo-hi` (document order) | SVG has no z-index — paint order is sibling order; the lift/border cycle | personal-notes |
-| `DR-managed` | whether/how DarkReader already converts it | cascade section |
-| cage-style tally | `cage-extraregion` = constraint region, not decoration | region/shaded-region section |
-| `theme=` | some CSS rules key off `setting-uitheme-purple` | label-bg CSS |
+| `fillSrc` (inline!/inline/attr/inherited/css) | **inherited/css ⇒ our code can't see it ⇒ element untouched.** The single field that can prove a puzzle unaffected | overlay-marker gap; cascade |
+| `fillGray` true/false/none (saturation `<0.08`) | gray vs colored slider routing; white & black are gray | Gray-vs-colored shading (v2.140) |
+| `none`, `opacity` | invisible anchors / translucent endpoints take different paths; translucent layers double-paint brighter | v2.176; z8ndhpjd05 brightening |
+| `strokeGray` (stroke colour) | white stroke = grid-line **eraser**, dark = real outline | v2.192 |
+| `shape` circle/pill/fullcell | circle-vs-pill is the Kropki false-positive guard | v2.184 |
+| `pos` border/corner/center/outside/arbitrary | Kropki ownership **is** position; outside-grid = little-killer/sandwich | v2.164 / v2.184 |
+| `rotated`, `cells` | dedupe/tracing path; spanning-shape indicator | highlight dedupe; personal-notes |
+| `z` (lo-hi, document order) | SVG has no z-index — paint order is sibling order; the lift/border cycle | personal-notes |
+| `drManaged` | whether/how DarkReader already converts it | cascade |
+| `cageStyles` | `cage-extraregion` = constraint region, not decoration | region/shaded-region |
+| `meta.theme` | some CSS rules key off `setting-uitheme-purple` | label-bg CSS |
 
-## Step 3 — Semantic constraint layer (secondary, for naming help)
+---
 
-The DOM tells you *what renders*; the puzzle definition tells you *what it means*
-(a stroked `#arrows` path could be a thermo shaft, palindrome, renban, whisper, or
-arrow line). Dump the constraint types to help annotate — **discover** the keys,
-don't assume them (the schema varies by how the puzzle was authored):
+## The three outputs (generated by the extractor at download time)
 
-```js
-(() => {
-  // Current SudokuPad keeps the puzzle model in window.convertedPuzzle.
-  // Framework.getApp().puzzle is undefined on v0.611.0 — fall back only for old builds.
-  const p = window.convertedPuzzle || Framework.getApp()?.puzzle;
-  if (!p) return 'no convertedPuzzle / app.puzzle';
-  const out = {};
-  for (const k of Object.keys(p)) {
-    const v = p[k];
-    out[k] = Array.isArray(v) ? `array[${v.length}]`
-      : (v && typeof v === 'object' ? `object{${Object.keys(v).slice(0,8).join(',')}}`
-      : (typeof v === 'string' ? `"${String(v).slice(0,40)}"` : typeof v));
-  }
-  return JSON.stringify(out, null, 2);
-})()
-```
+The script stores the per-puzzle records and builds these on demand — the dedup/aggregation
+happens in the script, so Phase-2's AI job shrinks to interpretation, not merging.
 
-> `convertedPuzzle` is richer than the old `app.puzzle` for naming help: it exposes
-> named per-constraint arrays (`thermos`, `kropkis`, `littleKiller`, `palindrome`,
-> `sudokuX`, `arrowSums`, `sandwichCages`, `inequality`, `foglight`, `foglink`,
-> `cages`, `cosmetic`, …). A non-empty array confirms that constraint type is present
-> before you even eyeball the DOM. Note the key set **varies** by author/import — some
-> puzzles omit `foglight`/`foglink` entirely; don't assume a fixed schema.
+1. **⬇ Union (JSON)** — buckets deduped across all puzzles. Per bucket: `totalCount`,
+   `puzzleCount`, `firstSeen`, the *union* of every decision-attribute value seen, and the
+   `puzzles` list exhibiting it. **This is the file Phase-2 AI reads.**
+2. **⬇ Index (CSV)** — one row per puzzle: `id, title, author, grid_w, grid_h, is_square`,
+   a boolean column per curated feature (`fog, kropki, xv, killer_cage, extra_region, thermo,
+   arrow, palindrome, little_killer, sandwich, inequality, sudoku_x, windoku, cosmetic,
+   cell_colors, givens`), then **one auto-discovered boolean column for every other
+   constraint key** seen across the dataset (new types like `renban`/`whisper` get their own
+   filterable column automatically — no catch-all blob), and `url`. The searchable "which
+   puzzles contain what" lookup — open in Excel, filter `fog=1`. Purely mechanical; no AI.
+   - **Grid size** is reported as separate `grid_w`/`grid_h` (so non-square boards show), from
+     the rendered cell-grid extent, falling back to the solution-derived square side; when
+     neither is determinable the three columns read literal **`undefined`** (searchable).
+     Caveat: the rendered extent inflates for outer-clue / nogrid puzzles (same as `gridN`).
+3. **⬇ Raw (JSON)** — the stored per-puzzle records. Safety net: re-examine one puzzle's full
+   dump without re-running.
 
-Use this only as a cross-reference for naming buckets in Step 4. The DOM output from
-Step 2 remains the authoritative inventory — it is what the userscript actually
-manipulates.
+Plus **⬇ Failed** (URLs that wouldn't render after retries).
 
-## Step 4 — Annotate each bucket
+## Running the bulk extractor
 
-For every row from Step 2, assign a name from the **Known Buckets** table below. The
-match key is `layer + tag + class`. If a row matches no known entry, write the row
-verbatim followed by `— UNKNOWN, investigate` and move on. Do **not** invent a name.
+1. Install `sudokupad_extractor.user.js` in TamperMonkey. **DarkReader ON.** Disable the
+   DarkReader-fix userscript (or rely on the `spdr*` exclusion).
+2. Open `https://sudokupad.app/` — the panel appears top-right.
+3. Set a **Session** name (per-tab namespace; lets you run several tabs in parallel).
+4. **Load File** (one URL per line), **Start**. It navigates each URL, waits for render,
+   captures, and advances. Auto-saves Raw every 50 puzzles. Resumable after pause/reload.
+5. When complete, download **Union**, **Index**, and **Raw**.
 
-### Known Buckets (extend this table as new ones are confirmed)
+---
+
+## Known anomalies & caveats (validation run, SudokuPad v0.611.0)
+
+A future model running extraction/synthesis should read these before trusting any field.
+
+- **`gridN` is render-extent ÷ cell size, NOT the play-grid dimension.** A 6×6 reported
+  `gridN=7`; a 9×9 with outer clues `gridN=15`. Outer clues, padding, and `setting-nogrid`
+  inflate it. Use **`gridSize`** (from `solution` length) for the real grid; `cs` (cell
+  size, a constant 64 across the validation set) is reliable; `gridN` is not.
+- **`Framework.getApp()` is empty on v0.611.0.** Title/author/constraints come from
+  `convertedPuzzle` (already wired in).
+- **`convertedPuzzle` is a PAGE-window global — the userscript must read it via
+  `unsafeWindow`, not `window`.** Because the extractor uses `@grant`, it runs in
+  TamperMonkey's sandbox where `window` is a wrapper that doesn't expose page globals;
+  plain `window.convertedPuzzle` is `undefined` and silently empties
+  constraints/cageStyles/author/gridSize while the DOM walk (shared `document`) still
+  works. Fixed in v2.0.1 via `@grant unsafeWindow` + a `pageWindow()` helper. The MCP
+  fallback runs in page context, so `window.convertedPuzzle` is fine there.
+- **`convertedPuzzle` schema varies by author/import.** `rules` is sometimes a string,
+  sometimes `array[1]`; fog puzzles add `foglight`/`foglink`, non-fog omit them entirely.
+  Capture tolerates this — never assume a fixed key set.
+- **Given digits render in different layers/forms per puzzle.** Seen as
+  `#cell-givens | text.cell-given`, and as stroked `#cell-values | path` (digit *outlines*,
+  not `<text>`). "Givens" is not one stable bucket — the Index `givens` flag checks both the
+  constraint array and the `cell-given` class.
+- **The `g[defs]` filter block is general render plumbing, NOT fog.** It's excluded from
+  capture. Only `#fog-defs` / `#fog-fogcover` are fog-specific. Easy to misattribute.
+- **Selection UI leaks in if a cell is selected on load** (`#cell-highlights`). Excluded from
+  capture. (In the MCP fallback, deselect — click empty space — before extracting.)
+- **Extraction waits for `convertedPuzzle`, not just the SVG (v2.2.0).** Some puzzles render
+  a bare grid skeleton (~24 elements) *before* the puzzle model is wired up; extracting then
+  gives garbage with empty constraints. The ready-check requires `convertedPuzzle`, so a
+  puzzle that never initializes it (observed on `c7jl019y8w` — stuck at 24 elements, no model
+  even after 10s) times out and is logged as **failed** rather than silently mis-captured.
+  If legitimate puzzles start timing out, raise `RENDER_TIMEOUT_MS` (normal puzzles wire up
+  the model in 1–3s).
+- **The Start button navigates to the first queued URL before extracting (v2.2.0).** Earlier
+  it extracted whatever page was already loaded, mis-capturing the leftover puzzle from a
+  prior run and consuming the first queue slot unvisited (symptom: one puzzle duplicated,
+  the first missing, zero failures).
+
+---
+
+## Known buckets (naming reference for Phase-2 synthesis)
+
+Not needed for extraction. This is the head-start lookup for naming Union buckets in Phase 2;
+extend it as new ones are confirmed. Match key is `layer + tag + class`.
 
 | Layer | tag.class | Meaning | Script touches it via |
 |---|---|---|---|
@@ -333,121 +198,21 @@ verbatim followed by `— UNKNOWN, investigate` and move on. Do **not** invent a
 | `#cell-pencilmarks` | `text` | corner pencilmarks | pencilmark reflow/colour |
 | `rect.feature-kropki` | (any layer) | native Kropki dots | Kropki fix |
 | `rect.textbg` | (any layer) | label backgrounds — Kropki circles AND other labelled circles | Kropki / label-bg |
-| highlights / selection | `rect`, `path` | SudokuPad UI, not puzzle content | — (exclude) |
-
-> This table mirrors the SVG z-order and Code map in `PROJECT_SUMMARY.md`. When a new
-> confirmed bucket is added here, add the matching note there too if the script will
-> handle it.
-
-## Step 5 — Write the per-puzzle file
-
-Write `docs/puzzle-catalog/<id>.md` using the template below. Paste the **raw Step 2
-output** in the appendix unmodified (proof of completeness), and the annotated list
-in the body.
-
-```markdown
-# Catalog — <id> (<title>)
-
-- URL: https://sudokupad.app/<id>
-- Extracted: <date>  |  Userscript disabled: yes/no  |  Tool/model: <which>
-- Total elements under #svgrenderer: <N>
-
-## Elements present (annotated)
-| Bucket (layer · tag.class) | Count | Name | UNKNOWN? |
-|---|---|---|---|
-| ... | ... | ... | ... |
-
-## UNKNOWN buckets (need investigation)
-- <verbatim row>   ← describe what you tried
-
-## Constraint types (from app.puzzle)
-<paste Step 3 output>
-
-## Decision attributes (from Step 2b — per bucket)
-<paste Step 2b output + the cage-style tally>
-
-## Appendix — raw enumeration (verbatim, do not edit)
-```
-<paste Step 2 output exactly>
-```
-```
-
-## Step 6 — Roll up into the master union
-
-After each puzzle, merge its buckets into `docs/ELEMENT_CATALOG.md` — a single union
-table of every bucket ever seen, with a "first seen in" puzzle id and a list of
-puzzles exhibiting it. A bucket already present just gets the new puzzle id appended.
-New buckets get a new row (and an `UNKNOWN` flag until named). This master list is the
-"surface a change might affect" reference.
 
 ---
 
-## Quality bar / self-check (do this before finishing)
+## Single-puzzle MCP fallback (manual, when the bulk extractor isn't usable)
 
-1. **Round-trip count.** Sum of all bucket counts in your annotated table must equal
-   the total element count (minus any `spdr`/highlight/selection rows you explicitly
-   excluded). If it doesn't, you dropped a bucket — go back.
-2. **No invented names.** Every named bucket maps to a Known Buckets row. Anything
-   else is `UNKNOWN`, not a guess.
-3. **Raw appendix present and unedited.** It is the audit trail proving completeness.
-4. **Userscript exclusion stated.** Either it was disabled, or `spdr*` buckets were
-   excluded and that's noted.
+For a one-off via Claude-in-Chrome: `location.reload()`, wait until `#svgrenderer` is
+non-null, then paste the **same** `collectBuckets()` walk and the `convertedPuzzle`
+constraint/cage/title reads that the userscript uses (copy them out of
+`sudokupad_extractor.user.js`). Two MCP-specific gotchas:
 
----
+- The `javascript_tool` truncates returned output at **~1100 chars** silently. Stash the
+  result on `window` (`window.__out = …; 'LEN='+window.__out.length`) and pull it back in
+  ≤1000-char slices (`window.__out.slice(0,1000)`, `slice(1000,2000)`, …).
+- Cache the function across puzzles via `sessionStorage` (all puzzles share the
+  `sudokupad.app` origin): `sessionStorage.setItem('__catfn', fn.toString())`, then
+  `eval('('+sessionStorage.getItem('__catfn')+')')()` on each later puzzle.
 
-## Known anomalies & caveats (from the validation run, SudokuPad v0.611.0)
-
-Recorded while validating the extractor on 6 hard puzzles (fog, nogrid, irregular,
-outer-clue, kakuro, killer). Extend this list as new anomalies surface — a future
-model running the extraction should read it before trusting any derived field.
-
-- **`gridN` is render-extent ÷ cell size, NOT the play-grid dimension.** Observed: a
-  6×6 puzzle reported `gridN=7`; a 9×9 with outer clues reported `gridN=15`; an 11×11
-  reported `11`; a 6×6 irregular reported `6` (correct, coincidentally). Outer clues,
-  padding, and `setting-nogrid` inflate it. `cs` (cell size) was a constant **64**
-  across all 6 and is reliable; `gridN` is not — use the per-bucket `cells:`/`pos:`
-  heuristics for spatial reasoning, and don't report `gridN` as the grid size.
-- **`Framework.getApp()` is empty on v0.611.0.** Title and constraint data come from
-  `window.convertedPuzzle` (already wired into Steps 0 & 3).
-- **Selection/highlight UI leaks into the capture if a cell is selected on load.**
-  Seen concretely as `#cell-highlights | path.cage-selectioncage` +
-  `#cell-highlights | rect.cell-highlight`. These are SudokuPad UI, not puzzle
-  content — exclude them (same policy as `spdr*` and the selection/highlight overlays
-  already noted in Step 2). Deselect (click empty space) before extracting, or drop
-  any `#cell-highlights` rows and note it.
-- **`convertedPuzzle` schema varies by author/import.** `rules` is sometimes a string,
-  sometimes `array[1]`; fog puzzles add `foglight`/`foglink` keys that non-fog puzzles
-  omit entirely. The Step 3 dump tolerates this — don't assume a fixed key set.
-- **Given digits render in different layers/forms per puzzle.** Seen as
-  `#cell-givens | text.cell-given`, and elsewhere as stroked `#cell-values | path`
-  (digit *outlines*, not `<text>`). "Givens" is not a single stable bucket — annotate
-  per puzzle.
-- **The `g[defs]` filter block is always present — it is NOT fog.**
-  `g[defs] | feblend` / `fecolormatrix` / `femorphology` / `filter.viewboxsize`
-  appears on **every** puzzle, fog or not (it is general SudokuPad render plumbing).
-  Only `#fog-defs` and `#fog-fogcover` are fog-specific. Easy to misattribute when fog
-  is the thing under investigation.
-
-## Using this to test which model is cheapest
-
-The work splits into two skills with very different difficulty:
-
-- **Extraction (Steps 1–2, 5-appendix):** purely mechanical — run a snippet, paste
-  output. Any model should do this perfectly; failures here mean a tooling/prompt
-  problem, not a capability gap.
-- **Annotation (Step 4) + self-check (round-trip count, honest UNKNOWNs):** the part
-  that needs judgement. This is where models will differ.
-
-**Test protocol:** run the same 3–5 puzzles through each candidate model. Because the
-raw appendix is deterministic, grade on:
-- Did the annotated bucket counts round-trip to the total? (mechanical — pass/fail)
-- Did it correctly name the buckets a stronger reference model named? (annotation
-  accuracy)
-- Did it flag genuinely-novel buckets as UNKNOWN instead of mislabelling them?
-  (a cheap model that *guesses* names is worse than one that honestly flags UNKNOWN)
-
-A model is "good enough" if extraction is perfect, round-trip always closes, and its
-UNKNOWN flags are honest — even if its naming is slightly less polished, because the
-master union's names can be corrected once and reused. Pick the cheapest model that
-clears that bar.
-```
+This produces the same per-puzzle record by hand; feed it into the same Union/Index synthesis.
