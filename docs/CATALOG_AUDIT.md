@@ -37,12 +37,15 @@ to native.
   rule). Native SudokuPad renders the grid + a detached example. **Our script** detects the rendered extent
   as a 10-wide board, treats the example cells as grid, and draws region borders / shading through them — the
   puzzle "looks completely different" from native.
-- **Root cause:** grid detection uses **rendered extent** (the `gridN` inflation trap CATALOG_INSTRUCTIONS
-  explicitly warns about) instead of the **solution-derived** size (`√(convertedPuzzle.solution.length)` = 6).
-  Likely in `detectGridSize`/`getGridCellSize`/`inferRegionsFromSVG`.
-- **Fix direction (deferred):** derive the true play-grid from solution length and clamp region-border /
-  cell-border drawing to it, so off-grid example/outer areas are excluded. Affects the region-border subsystem
-  broadly → cross-ref the catalog before shipping.
+- **Root cause (refined after inspection):** *not* a simple "use solution length" fix — loopdokux's
+  `convertedPuzzle.solution` is itself **length 60 (10×6)**, because the example cells are encoded as real
+  solved grid cells. So even the authoritative size says 10×6. The real problem is broader (see triage finding
+  below): our **region-inference assumes one standard single sudoku grid** and mis-draws on any non-standard
+  layout. loopdokux is one instance of that class.
+- **Fix direction (deferred):** likely **detect non-standard grids and stand the region-border feature down**
+  rather than try to infer regions perfectly. Strong signal available: **SudokuPad natively flags every one of
+  these with its "Non-standard digit set / N×N grid detected" prompt** — our script could heed the same
+  detection. Affects the region-border subsystem broadly → cross-ref the catalog before shipping.
 - **Status:** logged, not fixed (user: batch with region-border work).
 
 ### ❔ BUG-2 · "White region borders drawn on top of ours" — *unreproduced, need URL*
@@ -51,26 +54,39 @@ to native.
   paths are `stroke:none`, grey internal lines are our own cell-border clone — native borders fully
   suppressed, ours render correctly. **Need the correct URL to diagnose.**
 
-## 🔍 Triage queue — grid-extent anomaly candidates (BUG-1 class)
-Cheap catalog pre-filter for the "rendered extent ≠ true grid" bug. **Inspect each: does our region-border /
-shading drawing bleed beyond the true play grid?** (Compare to native.) Mark ✅ ok / 🔴 broken.
+## 🔍 Triage — grid-extent anomaly candidates → **one bug class** (region-inference on non-standard grids)
 
-**High suspicion — non-square rendered extent (9):**
-| extent | url | title | status |
+**Finding (2026-06-04):** inspected all 6 *reachable* candidates (3 non-square are penpa-unpublished, no URL,
+raw dump deleted → couldn't load). **Every single one is a non-standard layout and every one shows our
+region-border / region-inference feature drawing spurious or messy borders.** This is **one root bug class**,
+not many — BUG-1 (loopdokux) is just its most obvious instance. Common thread: the feature assumes **one
+standard single sudoku grid**; it mis-infers on multi-grid / nonogram-hybrid / outer-clue / blank-space layouts.
+**SudokuPad natively flags all of them** with "Non-standard digit set / N×N grid detected" — the signal a fix
+should reuse to stand the feature down.
+
+**Non-square candidates (9):**
+| extent | url | title | verdict |
 |---|---|---|---|
-| 13×9 | penpa8f031fc6… (Feb 23 2023 Battleship Sums) | | 🔲 |
-| 9×12 | penpaef06e78c… (June 13 2023 Roll Sudoku) | | 🔲 |
-| 7×19 | penpa43ea3ca3… (Oct 5 2023 Matryoshka) | | 🔲 |
-| 10×6 | clover/nov-28-2023-loopdokux | Loopdoku | 🔴 BUG-1 |
-| 11×13 | https://sudokupad.app/xhxr21vtvd | Corner/Edge Sudoku | 🔲 |
-| 18×10 | https://sudokupad.app/philip-newman/20240714-the-very-little-caterpillar | Very Little Caterpillar | 🔲 |
-| 16×14 | https://sudokupad.app/xncxzfqcx4 | Chattai | 🔲 |
-| 13×6 | https://sudokupad.app/z18ro8pfkz | Dec 29 2024 Two More Sudokus | 🔲 |
-| 19×9 | https://sudokupad.app/4m0o91tq4f | Paint It Black Sudoku | 🔲 |
+| 13×9 | penpa8f031fc6… (Battleship Sums) | | ⚪ unreachable (penpa) |
+| 9×12 | penpaef06e78c… (Roll Sudoku) | | ⚪ unreachable (penpa) |
+| 7×19 | penpa43ea3ca3… (Matryoshka) | | ⚪ unreachable (penpa) |
+| 10×6 | clover/nov-28-2023-loopdokux | Loopdoku | 🔴 region borders through off-grid example (BUG-1) |
+| 11×13 | https://sudokupad.app/xhxr21vtvd | Corner/Edge Sudoku | 🔴 outer clues inflate extent; mis-inferred borders (stray orange line) |
+| 18×10 | …/20240714-the-very-little-caterpillar | Very Little Caterpillar | 🔴 Gattai overlapping 6×6s; borders + shading all over |
+| 16×14 | https://sudokupad.app/xncxzfqcx4 | Chattai | 🔴 overlapping multi-grid; chaotic borders + stray red box |
+| 13×6 | https://sudokupad.app/z18ro8pfkz | Two More Sudokus | 🔴 two separate 6×6 grids; borders drawn across both |
+| 19×9 | https://sudokupad.app/4m0o91tq4f | Paint It Black | 🔴 Nonogram+Sudoku composite; region borders drawn on the *nonogram* |
 
-**Lower suspicion — oversized but square (21):** mostly genuine large / multi-grid (Gattai/samurai, "Two
-Sudokus", "Overlapping Sudoku", "Extra Space", 16×16, 26×26 Cascade). Skim for region-border bleed; many are
-legitimately big. URLs: `cmspmym4yo` (13×13), `dyu5vewl1g` (12×12), `5nerx2ezhs` (14×14), `26g7sle8s5`/`qoi2our96l`/`xsex6ihbvy` (16×16 Extra Space I/II/III), `7qfl3jx810` (11×11), `1qk6k8htjd` (26×26 Cascade), `g6t4b6vg0f` (14×14), `onnwl66b8d` (10×10 Sudokuro), `6xal6tvk41` (12×12 Overlapping), plus 6 penpa Gattai 10×10s + a few more (see index query).
+**Oversized-square (21) — spot-checked, same class:** `dyu5vewl1g` (12×12 "Expanded Sudoku") 🔴 stray
+mis-drawn single-cell region boxes in the blank space → confirms the bug isn't about square-ness/size but
+**non-standard layout**. The rest are named as multi-grid/large (6 penpa Gattai 10×10, `cmspmym4yo` 13×13 "Two
+Sudokus", `26g7sle8s5`/`qoi2our96l`/`xsex6ihbvy` 16×16 "Extra Space I/II/III", `1qk6k8htjd` 26×26 "Cascade",
+`6xal6tvk41` "Overlapping", `onnwl66b8d` "Sudokuro", `5nerx2ezhs`, `g6t4b6vg0f`, `7qfl3jx810`, +more) — presumed
+same class; spot-check when fixing. A genuinely-standard large grid (e.g. a plain 16×16) may be fine — the fix's
+non-standard detector should distinguish "big but single standard grid" from "composite/blank-space."
+
+**Open question for the fix:** is the region-border feature *expected* to do anything on non-standard grids?
+If not, detect-and-disable is the clean fix. (Deferred per user — batch with region-border work.)
 
 ---
 
