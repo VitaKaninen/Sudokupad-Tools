@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad Bulk Extractor
 // @namespace    https://sudokupad.app/
-// @version      2.5.0
+// @version      2.6.0
 // @description  Iterates a list of SudokuPad URLs, captures the decision-relevant DOM inventory (Step 2b) + convertedPuzzle semantics per puzzle, and exports a deduped bucket Union (JSON), a per-puzzle feature Index (CSV), and the raw records.
 // @author       GAS Catalog Project
 // @match        https://sudokupad.app/*
@@ -15,6 +15,12 @@
 
 (function () {
   'use strict';
+
+  // ── Version ───────────────────────────────────────────────────────────────
+  // Read from the userscript header so it can never drift from @version. Shown in
+  // the panel title and exposed on the page window so the running build is
+  // verifiable (e.g. `window.spdrExtractorVersion`) without guessing.
+  const SCRIPT_VERSION = (typeof GM_info !== 'undefined' && GM_info.script && GM_info.script.version) || '?';
 
   // ── Constants ──────────────────────────────────────────────────────────────
   const POLL_INTERVAL_MS   = 500;
@@ -701,7 +707,7 @@
 
     panel.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <strong style="font-size:13px;cursor:move;" id="spdr-drag">🧩 SudokuPad Extractor</strong>
+        <strong style="font-size:13px;cursor:move;" id="spdr-drag">🧩 SudokuPad Extractor <span style="color:#888;font-weight:normal;font-size:10px;">v${SCRIPT_VERSION}</span></strong>
         <span id="spdr-status" style="color:#aaa;font-size:11px;">⏸ Paused</span>
       </div>
       <div style="margin-bottom:6px;display:flex;align-items:center;gap:6px;">
@@ -829,6 +835,7 @@
 
   // ── Boot ───────────────────────────────────────────────────────────────────
   function boot() {
+    try { pageWindow().spdrExtractorVersion = SCRIPT_VERSION; } catch (e) {}
     buildUI();
     if (get(K.running)) {
       log('▶ Resuming...');
