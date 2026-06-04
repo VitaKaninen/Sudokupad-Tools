@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad Bulk Extractor
 // @namespace    https://sudokupad.app/
-// @version      2.6.0
+// @version      2.7.0
 // @description  Iterates a list of SudokuPad URLs, captures the decision-relevant DOM inventory (Step 2b) + convertedPuzzle semantics per puzzle, and exports a deduped bucket Union (JSON), a per-puzzle feature Index (CSV), and the raw records.
 // @author       GAS Catalog Project
 // @match        https://sudokupad.app/*
@@ -29,7 +29,12 @@
   const MAX_RETRIES        = 3;
   const RETRY_DELAY_MS     = 2000;
   const BETWEEN_PUZZLES_MS = 1500;
-  const AUTOSAVE_EVERY     = 50;  // auto-download results JSON every N puzzles
+  const AUTOSAVE_EVERY     = 0;   // periodic results-JSON auto-download every N puzzles; 0 disables.
+                                  // Disabled by default: GM storage already persists every record
+                                  // across crash/refresh/close (that's the real recovery net), and
+                                  // Chrome blocks all auto-downloads after the first anyway. Export
+                                  // at the end with the Raw/Union/Index/Failed buttons (user-click
+                                  // downloads, never blocked).
 
   // GM_setValue has per-value size limits, so we chunk the queue into pages
   const CHUNK_SIZE = 200; // URLs per chunk
@@ -407,8 +412,8 @@
     set(K.pos, pos);
     updateUI();
     log(`✓ Done: ${data.id}`);
-    // Auto-save every AUTOSAVE_EVERY puzzles
-    if (pos % AUTOSAVE_EVERY === 0) {
+    // Optional periodic auto-download (disabled when AUTOSAVE_EVERY is 0)
+    if (AUTOSAVE_EVERY && pos % AUTOSAVE_EVERY === 0) {
       log(`💾 Auto-saving at ${pos} puzzles...`);
       downloadJSON(allResults(), `spdr_${getNamespace()}_results_autosave_${pos}.json`);
     }
