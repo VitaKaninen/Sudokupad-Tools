@@ -47,9 +47,12 @@ is guaranteed by the iteration, not by diligence. Naming/handling decisions come
 
 Captured **per puzzle**:
 
-- **`id`, `url`, `title`, `author`** — title/author/id from **`window.convertedPuzzle`**
+- **`id`, `cpId`, `url`, `urlResolved`, `title`, `author`** — from **`convertedPuzzle`**
   (authoritative on v0.611.0; `Framework.getApp()` is **empty** there, never read it for
-  these). `url` is the shortened slug URL after redirect.
+  these). `id` is the resolved short slug, falling back to `convertedPuzzle.id` for
+  unpublished puzzles; `cpId` is always `convertedPuzzle.id` (durable identity); `url` is
+  the resolved short URL (empty if unresolved); `urlResolved` flags which. See the
+  raw-import note under anomalies.
 - **`gridSize`** — true play-grid side from `convertedPuzzle.solution` length
   (`√len`). Reliable, unlike `gridN` (which is inflated by outer clues / padding / nogrid).
 - **`constraints`** — non-zero `convertedPuzzle` arrays only, e.g. `{cages:18, cosmetic:5,
@@ -172,14 +175,24 @@ A future model running extraction/synthesis should read these before trusting an
   it extracted whatever page was already loaded, mis-capturing the leftover puzzle from a
   prior run and consuming the first queue slot unvisited (symptom: one puzzle duplicated,
   the first missing, zero failures).
-- **Raw-import URLs resolve to a short slug before extraction (v2.3.0).** Loading a long
-  f-puzzles/SCF/CTC/penpa URL lands on the encoded blob, then SudokuPad rewrites the URL to
-  a short slug and reloads. Extracting during that window records the ~900-char blob as the
-  `id`/`url`. The ready-check now refuses to extract while on an import URL (`isImportUrl()`),
-  so it waits for the slug; the resolved short URL becomes `id`/`url` and the original long
-  URL is preserved as `originalUrl`. **Pre-resolving the list offline isn't worth it** — the
-  slug is only minted by SudokuPad's own load, so the browser is the natural place to capture
-  it, and we get it for free by waiting.
+- **Raw-import URLs & the short-slug question (v2.3.0 → v2.4.0).** Loading a long
+  f-puzzles/SCF/CTC/penpa URL lands on the encoded blob; for an **already-published** puzzle
+  SudokuPad rewrites the URL to its short slug and reloads. Extracting during that window
+  would record the ~900-char blob as the id, so extraction waits up to `RESOLVE_GRACE_MS`
+  (5s) for the slug. **But many long URLs never resolve — they're unpublished puzzles with
+  no short URL.** So after the grace window we extract anyway (never fail for this reason)
+  and record a clean id from a fallback chain:
+  - `id` = the resolved short slug if it appeared, else **`convertedPuzzle.id`** (a stable
+    embedded id like `sxsm_Author_<hash>`), never the giant blob;
+  - `cpId` = `convertedPuzzle.id` always (the durable identity for dedup);
+  - `url` = the resolved short URL or empty; `urlResolved` = 1/0 (surfaced in the CSV so
+    unpublished puzzles are searchable); `originalUrl` = the long URL we navigated to.
+  - **Do NOT call the "Create Short URL" action to force a slug.** Investigation showed the
+    UI's `captureSudokuPadLink` just navigates to the long URL; the real id-maker is
+    `PuzzleLoader.createPuzzleId` (a local md5 hash, no network), but a computed id only
+    *resolves* if the puzzle is also uploaded — i.e. shortening an unpublished puzzle means
+    **publishing thousands of puzzles to CTC's server**. Not appropriate, and unnecessary
+    since `convertedPuzzle.id` already gives a clean stable identifier offline.
 
 ---
 

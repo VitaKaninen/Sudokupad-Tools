@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad Bulk Extractor
 // @namespace    https://sudokupad.app/
-// @version      2.3.0
+// @version      2.4.0
 // @description  Iterates a list of SudokuPad URLs, captures the decision-relevant DOM inventory (Step 2b) + convertedPuzzle semantics per puzzle, and exports a deduped bucket Union (JSON), a per-puzzle feature Index (CSV), and the raw records.
 // @author       GAS Catalog Project
 // @match        https://sudokupad.app/*
@@ -19,6 +19,7 @@
   // ── Constants ──────────────────────────────────────────────────────────────
   const POLL_INTERVAL_MS   = 500;
   const RENDER_TIMEOUT_MS  = 12000;
+  const RESOLVE_GRACE_MS   = 5000; // wait this long for an import URL to redirect to its short slug before extracting anyway (unpublished puzzles never resolve)
   const MAX_RETRIES        = 3;
   const RETRY_DELAY_MS     = 2000;
   const BETWEEN_PUZZLES_MS = 1500;
@@ -341,20 +342,25 @@
   }
 
   // ── Puzzle ready check ─────────────────────────────────────────────────────
-  // Require the rendered SVG, the puzzle model (convertedPuzzle), AND a resolved
-  // (non-import) URL. Some puzzles report a partial SVG skeleton before the model is
-  // wired up (extracting then yields empty-constraint garbage); and import URLs must
-  // first redirect to their short slug (else the id is the 900-char blob). Waiting
-  // on all three means a puzzle that never resolves times out and is logged as
-  // failed (visible, not silent) rather than mis-captured.
+  // Model-ready: rendered SVG + the puzzle model (convertedPuzzle). Some puzzles show
+  // a partial SVG skeleton before the model is wired up; extracting then yields
+  // empty-constraint garbage, so we wait for convertedPuzzle. URL-resolution is a
+  // SEPARATE, soft condition handled in the poll (grace period) — see attemptExtraction.
   function puzzleIsReady() {
     const svg = document.querySelector('#svgrenderer');
-    return !!(svg && document.querySelectorAll('#svgrenderer *').length > 0
-      && getConverted() && !isImportUrl());
+    return !!(svg && document.querySelectorAll('#svgrenderer *').length > 0 && getConverted());
   }
 
+  // The id we record. Prefer the resolved short slug from the URL; but if we're still
+  // on a raw-import blob (an unpublished puzzle that has no short URL), fall back to
+  // convertedPuzzle.id — a clean, stable, embedded id — instead of a 900-char string.
   function getPuzzleId() {
-    return location.pathname.replace(/^\//, '').split('?')[0] || location.href;
+    const fromUrl = location.pathname.replace(/^\//, '').split('?')[0] || location.href;
+    if (isImportUrl() || fromUrl.length > 60) {
+      const cp = getConverted();
+      if (cp && cp.id) return cp.id;
+    }
+    return fromUrl;
   }
 
   // ── Navigation ─────────────────────────────────────────────────────────────
@@ -413,20 +419,30 @@
     const poll = setInterval(() => {
       if (!get(K.running)) { clearInterval(poll); return; }
 
-      if (puzzleIsReady()) {
+      // Extract once the model is ready AND the URL has resolved to its short slug.
+      // If it's still an import blob after RESOLVE_GRACE_MS, the puzzle is almost
+      // certainly unpublished (no short URL exists) — extract anyway rather than
+      // fail; getPuzzleId() then falls back to convertedPuzzle.id for a clean id.
+      const modelReady = puzzleIsReady();
+      const urlResolved = !isImportUrl();
+      if (modelReady && (urlResolved || elapsed >= RESOLVE_GRACE_MS)) {
         clearInterval(poll);
+        if (!urlResolved) log('↪ URL did not resolve to a slug — using convertedPuzzle.id');
         setTimeout(() => {
           try {
             const cap = collectBuckets();
             if (!cap) throw new Error('collectBuckets returned null after ready check passed');
             const cp = getConverted();
+            const resolved = !isImportUrl();
             markCurrentSuccess({
-              id:          getPuzzleId(),
-              url:         location.href,        // shortened URL after redirect
+              id:          getPuzzleId(),                       // short slug, or cp.id if unresolved
+              cpId:        (cp && cp.id) || '',                 // stable embedded id (always)
+              url:         resolved ? location.href : '',       // only the resolved short URL
+              urlResolved: resolved,
               title:       (cp && cp.title)  || document.title || '',
               author:      (cp && cp.author) || (cp && cp.metadata && cp.metadata.author) || '',
               gridSize:    getGridSize(cp),
-              meta:        cap.meta,             // { cs, gridN, theme }
+              meta:        cap.meta,             // { cs, gridN, gridW, gridH, theme }
               constraints: getConstraints(cp),   // non-zero arrays only
               cageStyles:  getCageStyles(cp),
               buckets:     cap.buckets,          // structured decision dump
@@ -620,7 +636,8 @@
         if (!COVERED_KEYS.has(k) && !NON_FEATURE_KEYS.has(k)) extra.add(k);
     const extraCols = [...extra].sort();
 
-    const head = ['id', 'title', 'author', 'grid_w', 'grid_h', 'is_square', ...featNames, ...extraCols, 'url'];
+    const head = ['id', 'cp_id', 'title', 'author', 'grid_w', 'grid_h', 'is_square',
+      ...featNames, ...extraCols, 'url_resolved', 'url'];
     const rows = [head.map(csvCell).join(',')];
     for (const rec of records) {
       const c = rec.constraints || {};
@@ -628,7 +645,8 @@
       const flags = featNames.map(fn => FEATURE_COLS[fn](c, bucketKeys) ? 1 : 0);
       const extraFlags = extraCols.map(k => (c[k] > 0 ? 1 : 0));
       const d = gridDims(rec);
-      const row = [rec.id, rec.title, rec.author, d.w, d.h, d.sq, ...flags, ...extraFlags, rec.url];
+      const row = [rec.id, rec.cpId || '', rec.title, rec.author, d.w, d.h, d.sq,
+        ...flags, ...extraFlags, (rec.urlResolved ? 1 : 0), rec.url];
       rows.push(row.map(csvCell).join(','));
     }
     return rows.join('\n');
