@@ -102,5 +102,33 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
 - **Version check:** `window.spdrVersion === 'X.Y.Z'`.
 - **JS inspection:** `Framework.getApp()` → `app.puzzle.cells`, `app.puzzle.selectedCells`, `app.select(cells)`, `app.deselect()`; read CSS via `getComputedStyle(el).prop`.
 
+## Puzzle catalog (side-effect prediction for broad changes)
+A mechanical inventory of **1,890 real puzzles** + the **render-element buckets** they contain, so a broad change to a shared layer/bucket can be checked for collateral damage *before* shipping. Built by `Tamper Monkey Extraction/sudokupad_extractor.user.js`; capture spec + anomalies in [`CATALOG_INSTRUCTIONS.md`](CATALOG_INSTRUCTIONS.md). Three generated files in [`docs/Catalog/`](Catalog/):
+
+- **`spdr_MERGED_index.csv`** (337 KB, 1890 rows) — one row per puzzle, a boolean column per feature (`fog,kropki,xv,killer_cage,extra_region,thermo,arrow,palindrome,little_killer,sandwich,inequality,sudoku_x,windoku,cosmetic,cell_colors,givens,centremarks,global,pencilmarks`) + `id,cp_id,title,author,grid_w,grid_h,is_square,url`. **"Which puzzles have feature X."**
+- **`spdr_MERGED_union.json`** (319 KB, 60 buckets) — each render bucket (`layer | tag.class`) deduped across all puzzles, with the *union* of every decision-attribute value seen (`fillSrc,fillGray,strokeGray,shape,pos,opacity,…`) + the `puzzles` list exhibiting it. **"What variants of bucket Y exist in the wild, and which puzzles to spot-check."**
+- **`spdr_MERGED_raw.json`** (8 MB) — per-puzzle full dumps. Safety net only; never load wholesale.
+
+### How to query it WITHOUT burning tokens
+**Never read these files into context** (8 MB raw / 80k-token union). Always query via `python` and pull back only the small answer.
+
+- **CSV — use Python's `csv` module, never `awk -F,` / `grep`-by-column.** Titles contain quoted commas (`"June 8, 2021: Killer"`), so column-position splitting silently mis-aligns and gives wildly wrong counts (measured: naive `awk` said `fog`=856; the real answer via `csv.DictReader` is 6). Pattern:
+  ```python
+  import csv; rows=list(csv.DictReader(open('docs/Catalog/spdr_MERGED_index.csv',encoding='utf-8')))
+  hit=[r for r in rows if r['kropki']=='1' and r['fog']=='1']
+  print(len(hit), [r['url'] or r['id'] for r in hit][:5])   # count + a few URLs to open
+  ```
+- **Union — index by bucket key, slice the `puzzles` list.** Read one bucket's attribute-union, not the file:
+  ```python
+  import json; b={x['bucket']:x for x in json.load(open('docs/Catalog/spdr_MERGED_union.json',encoding='utf-8'))}
+  e=b['#arrows | path']; print(e['puzzleCount'], e['fillGray'], e['pos'], e['shape'], e['puzzles'][:5])
+  ```
+- **Raw — fetch one puzzle by id only**, never iterate the 8 MB in context.
+
+### When to consult it (and when not)
+Consult **before a broad/cross-cutting change** — one that touches a shared bucket many puzzles share (`#arrows | path`, overlay rects, `#cell-colors`, kropki/`textbg`, cages) rather than being scoped to one puzzle. Use it to (a) count how many puzzles the change can reach, (b) read the attribute-union to see if any variant violates your assumption, (c) pull 3–5 representative URLs to spot-check in-browser. **Skip it** for a one-puzzle tweak, a pure-CSS/UI change, or anything that can't reach other puzzles — querying then is the token waste the catalog is meant to prevent.
+
+Caveats: ~1890 of the ~2000-URL target (near-complete, not exhaustive); `grid_w/h` inflate for outer-clue/nogrid puzzles (see CATALOG_INSTRUCTIONS anomalies); the DOM can't distinguish line types (thermo vs palindrome vs region-sum are all `#arrows | path`) — that's why the CSV's constraint columns exist, cross-reference both.
+
 ## snippets/
 Experimental code preserved for possible reuse. Currently `rounding-experiment.md` — the dropped corner-rounding feature plus its SVG `stroke-linejoin` lessons.

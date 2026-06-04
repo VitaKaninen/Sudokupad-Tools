@@ -3,8 +3,8 @@ test-images
 # Per-machine Claude Code settings (not shared)
 .claude/settings.local.json
 
-# Session scratch (compaction-safe working notes; finalized into docs then cleared)
-docs/WIP.md
-
 # Personal puzzle tracker (local only)
 docs/Puzzle list.txt
+
+# Catalog raw dump (8 MB, regenerable safety net) — track only Index + Union
+docs/Catalog/spdr_MERGED_raw.json

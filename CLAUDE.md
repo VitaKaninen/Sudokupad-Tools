@@ -5,14 +5,21 @@ TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on Sudo
 ## Project knowledge — read before substantive work
 - [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — current state, architecture, features, terminology, testing setup, test-puzzle URLs.
 - [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) — what beats DarkReader and what doesn't, dead ends, removed features. **Check this before debugging a rendering issue** so we don't re-solve a solved problem.
+- [`docs/Catalog/`](docs/Catalog/) — inventory of 1890 real puzzles + their render buckets, for predicting side effects of broad changes. **See "Cross-referencing the puzzle catalog" below before consulting it — query it, never read it into context.**
 
 **Finding code:** the script is one ~4,200-line IIFE with 120+ functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region.
 
 When you add, rename, or remove a function listed in the Code map — or add a new feature — update the Code map in the same change; keep it coarse (entry points per feature, not every helper).
 
-**Record discoveries as you go (compaction-safe).** Conversation context is lost when it compacts; files are not. The moment you confirm a new fix, dead end, or non-obvious fact, append it to `docs/WIP.md` — do not hold it only in the conversation. Mark uncertain items `(tentative)`. **At session start, if `docs/WIP.md` has notes, fold the confirmed ones into `LESSONS_LEARNED.md` / `PROJECT_SUMMARY.md` and clear WIP**; finalize the same way at session end. Record genuine discoveries, not routine progress. Every 5–10 sessions (or when it feels stale) rewrite `PROJECT_SUMMARY.md` fresh rather than appending. Git history is the changelog — don't keep narrative history in these docs. (`docs/archive/` holds the pre-2026-05-29 handoff file for human reference only; don't load it.)
+**Record discoveries as you go (compaction-safe).** Conversation context is lost when it compacts; files are not. The moment you confirm a new fix, dead end, or non-obvious fact, fold it into `LESSONS_LEARNED.md` / `PROJECT_SUMMARY.md` — do not hold it only in the conversation. Record genuine discoveries, not routine progress. Every 5–10 sessions (or when it feels stale) rewrite `PROJECT_SUMMARY.md` fresh rather than appending. Git history is the changelog — don't keep narrative history in these docs. (`docs/archive/` holds the pre-2026-05-29 handoff file for human reference only; don't load it.)
 
 ## Standing instructions
+
+### Cross-referencing the puzzle catalog (side-effect check)
+`docs/Catalog/` inventories 1890 puzzles and the render buckets they contain, to predict whether a **broad change breaks other puzzles**. It is a tool to reach for *deliberately*, not by default — querying it sloppily or when it can't help wastes tokens (its whole point is to *save* the user from blind broad changes, so don't undermine that).
+
+- **When to use it:** before a change that touches a **shared bucket** many puzzles have (`#arrows | path`, overlay rects, `#cell-colors`, kropki/`textbg`, cages) — i.e. not scoped to one puzzle. Query it to count affected puzzles, check the attribute-union for a variant that breaks your assumption, and pull 3–5 URLs to spot-check. **Don't** consult it for a single-puzzle tweak, a CSS/UI-only change, or anything that can't reach other puzzles.
+- **How to use it without burning tokens — never read the files into context** (raw is 8 MB; union ~80k tokens). Always query via `python` and return only the small answer. **For the CSV use Python's `csv` module, never `awk -F,`/`grep`-by-column** — quoted commas in titles silently mis-align columns and give wrong counts. Exact query patterns + caveats: see **"Puzzle catalog"** in [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md).
 
 ### Commit + push after every edit
 After every version bump, immediately and without asking:
