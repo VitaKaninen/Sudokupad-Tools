@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.192.0
+// @version      2.193.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.192.0';
+  var SCRIPT_VERSION = '2.193.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -362,7 +362,7 @@
     rebuildStyleTag();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -1064,7 +1064,9 @@
 
   // Given digits — apply colour via inline fill so DR doesn't re-convert it.
   // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
-  // they have no cell-given class and DarkReader handles their colour correctly.
+  // they have no cell-given class. Grayscale overlay markers are handled
+  // separately by fixOverlayMarkerText (gray object-shading sliders); coloured
+  // overlay text is left to DarkReader.
   function fixGivenText(t) {
     if (settings.givenEnabled) {
       var color = hexToRgba(settings.givenColor, settings.givenOpacity);
@@ -1096,6 +1098,47 @@
   }
   function fixAllUserDigits(svg) {
     svg.querySelectorAll('#cell-values text, text.cell-value').forEach(fixUserText);
+  }
+  // Overlay marker text — author-drawn grayscale <text> in #overlay (e.g. the
+  // "#N" rank markers in clover's Rank Sudoku, or the X/O letters in Counting
+  // Neighbours). The author sets a dim gray inline fill (#AAA / #CCC) and DR
+  // passes it through nearly unchanged, so it isn't covered by any of our digit
+  // controls. We route the GRAY ones through the same Gray object-shading sliders
+  // as gray shapes (computeObjectShade's gray branch), so they track that single
+  // brightness/opacity control. We deliberately do NOT recolour these to a fixed
+  // colour the way fixGivenText does — that's the v2.118.0 bug (forcing them to
+  // near-white givenColor made them far brighter than the author intended); the
+  // shading transform scales the author's gray instead, preserving the dim look.
+  // Skips: Kropki labels (author '#000'/'#fff' text or our injected labels — owned
+  // by the Kropki fix) and any COLOURED overlay text (left to DarkReader).
+  function fixOverlayMarkerText(t) {
+    if (t.dataset.spdrKropkiText !== undefined) return;   // existing author Kropki label
+    if (t.dataset.spdrKropkiLabel !== undefined) return;  // our injected Kropki label
+    // Capture the author's original fill once, before we ever override it.
+    if (t.dataset.spdrOrigFill === undefined) {
+      t.dataset.spdrOrigFill = t.style.getPropertyValue('fill') || t.getAttribute('fill') || '';
+    }
+    var orig = t.dataset.spdrOrigFill;
+    var c = parseColor(orig);
+    if (!c || c.a === 0 || !isGrayColor(c)) return;        // only author-gray markers
+    var sh = settings.underlayEnabled ? computeObjectShade(c) : null;
+    if (sh) {
+      t.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
+      t.style.setProperty('fill-opacity', String(sh.a), 'important');
+      t.removeAttribute('data-darkreader-inline-fill');
+      t.removeAttribute('data-darkreader-inline-color');
+      t.style.removeProperty('--darkreader-inline-fill');
+      t.style.removeProperty('--darkreader-inline-color');
+    } else {
+      // Section off / both gray sliders off → hand back to the author's colour
+      // (non-important, exactly as it shipped) so DarkReader reasserts its look.
+      if (orig) t.style.setProperty('fill', orig);
+      else t.style.removeProperty('fill');
+      t.style.removeProperty('fill-opacity');
+    }
+  }
+  function fixAllOverlayMarkerText(svg) {
+    svg.querySelectorAll('#overlay text').forEach(fixOverlayMarkerText);
   }
 
   // ── Kropki dot color fix ──────────────────────────────────────────────────────
@@ -1478,6 +1521,7 @@
     fixAllLines(svg);
     fixAllGivens(svg);
     fixAllUserDigits(svg);
+    fixAllOverlayMarkerText(svg);
     fixAllKropkiDots(svg);
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
@@ -1500,6 +1544,7 @@
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
               else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
+              else if (el.closest('#overlay')) { fixOverlayMarkerText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-color') {
             if (el.tagName === 'text') {
@@ -1507,6 +1552,7 @@
               else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
               else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
               else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
+              else if (el.closest('#overlay')) { fixOverlayMarkerText(el); }
             }
           } else if (m.attributeName === 'data-darkreader-inline-stroke') {
             // Lines: DR re-converts the stroke after our scan.
@@ -1524,7 +1570,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
     }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
   }
 
