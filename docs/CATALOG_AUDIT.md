@@ -21,6 +21,59 @@ inline here the moment it's made (compaction-safe).
 
 ---
 
+## ⚠️ Methodology note (learned the hard way, 2026-06-04)
+The Group-A audit asked "is *this element* DR-converted?" and **missed blaring whole-puzzle regressions
+visible in the very screenshots it took** (loopdokux below). A spot-check must judge the **whole puzzle
+against the no-script / native baseline**, not just the target bucket. Bucket-level DOM checks prove an
+element is touched; they do **not** prove the puzzle looks right. Always eyeball the full render and compare
+to native.
+
+## 🐞 Confirmed bugs found during inspection (logged — fix later)
+
+### 🔴 BUG-1 · Off-grid example area treated as play-grid → region borders drawn through it
+- **Puzzle:** https://sudokupad.app/clover/nov-28-2023-loopdokux (true grid **6×6**; catalog row says
+  `grid_w=10, grid_h=6, is_square=0`).
+- **Symptom:** the author drew a separate 4×6 *example diagram* beside the real grid (explaining the loop
+  rule). Native SudokuPad renders the grid + a detached example. **Our script** detects the rendered extent
+  as a 10-wide board, treats the example cells as grid, and draws region borders / shading through them — the
+  puzzle "looks completely different" from native.
+- **Root cause:** grid detection uses **rendered extent** (the `gridN` inflation trap CATALOG_INSTRUCTIONS
+  explicitly warns about) instead of the **solution-derived** size (`√(convertedPuzzle.solution.length)` = 6).
+  Likely in `detectGridSize`/`getGridCellSize`/`inferRegionsFromSVG`.
+- **Fix direction (deferred):** derive the true play-grid from solution length and clamp region-border /
+  cell-border drawing to it, so off-grid example/outer areas are excluded. Affects the region-border subsystem
+  broadly → cross-ref the catalog before shipping.
+- **Status:** logged, not fixed (user: batch with region-border work).
+
+### ❔ BUG-2 · "White region borders drawn on top of ours" — *unreproduced, need URL*
+- Reported on a puzzle whose URL was pasted as `5dv5v9gzux` twice (the real second URL was lost). On
+  `5dv5v9gzux` itself I **could not** reproduce: native `path.cell-grid` `d` is cleared, all 9 `cage-box`
+  paths are `stroke:none`, grey internal lines are our own cell-border clone — native borders fully
+  suppressed, ours render correctly. **Need the correct URL to diagnose.**
+
+## 🔍 Triage queue — grid-extent anomaly candidates (BUG-1 class)
+Cheap catalog pre-filter for the "rendered extent ≠ true grid" bug. **Inspect each: does our region-border /
+shading drawing bleed beyond the true play grid?** (Compare to native.) Mark ✅ ok / 🔴 broken.
+
+**High suspicion — non-square rendered extent (9):**
+| extent | url | title | status |
+|---|---|---|---|
+| 13×9 | penpa8f031fc6… (Feb 23 2023 Battleship Sums) | | 🔲 |
+| 9×12 | penpaef06e78c… (June 13 2023 Roll Sudoku) | | 🔲 |
+| 7×19 | penpa43ea3ca3… (Oct 5 2023 Matryoshka) | | 🔲 |
+| 10×6 | clover/nov-28-2023-loopdokux | Loopdoku | 🔴 BUG-1 |
+| 11×13 | https://sudokupad.app/xhxr21vtvd | Corner/Edge Sudoku | 🔲 |
+| 18×10 | https://sudokupad.app/philip-newman/20240714-the-very-little-caterpillar | Very Little Caterpillar | 🔲 |
+| 16×14 | https://sudokupad.app/xncxzfqcx4 | Chattai | 🔲 |
+| 13×6 | https://sudokupad.app/z18ro8pfkz | Dec 29 2024 Two More Sudokus | 🔲 |
+| 19×9 | https://sudokupad.app/4m0o91tq4f | Paint It Black Sudoku | 🔲 |
+
+**Lower suspicion — oversized but square (21):** mostly genuine large / multi-grid (Gattai/samurai, "Two
+Sudokus", "Overlapping Sudoku", "Extra Space", 16×16, 26×26 Cascade). Skim for region-border bleed; many are
+legitimately big. URLs: `cmspmym4yo` (13×13), `dyu5vewl1g` (12×12), `5nerx2ezhs` (14×14), `26g7sle8s5`/`qoi2our96l`/`xsex6ihbvy` (16×16 Extra Space I/II/III), `7qfl3jx810` (11×11), `1qk6k8htjd` (26×26 Cascade), `g6t4b6vg0f` (14×14), `onnwl66b8d` (10×10 Sudokuro), `6xal6tvk41` (12×12 Overlapping), plus 6 penpa Gattai 10×10s + a few more (see index query).
+
+---
+
 ## Group A — present in the wild, never verified — ✅ COMPLETE (2026-06-04)
 
 **Outcome: all 5 resolved, zero code changes needed.** 3 turned out already handled by our script
