@@ -29,8 +29,14 @@ Open the puzzle URL (e.g. `https://sudokupad.app/pbwqsppuho`) in a browser with 
 page fully rendered. If driving via Claude-in-Chrome MCP, `location.reload()` first
 and wait until `document.querySelector('#svgrenderer')` is non-null.
 
-Record the puzzle id (the URL slug) and the title
-(`Framework.getApp()?.puzzle?.title` or the on-page title).
+Record the puzzle id (the URL slug) and the title. Read it from
+**`window.convertedPuzzle?.title`** (the authoritative source on current SudokuPad
+builds), falling back to the on-page `document.title` if needed.
+
+> ⚠️ On SudokuPad **v0.611.0** (current), `Framework.getApp()` returns an **empty**
+> object and `Framework.getApp().puzzle` is `undefined` — the live puzzle model now
+> lives in **`window.convertedPuzzle`**. Older builds may still expose
+> `Framework.getApp().puzzle`; prefer `convertedPuzzle` and fall back to it.
 
 ## Step 1 — Confirm the page is a real puzzle
 
@@ -93,6 +99,42 @@ row is a real element kind present in the puzzle; nothing was filtered.
 > `[data-spdr-region-split]` group and any `data-spdr-*` clones. **Disable the
 > userscript before extracting**, or explicitly mark and exclude any bucket whose
 > layer/class begins with `spdr`. We catalog the *puzzle's* elements, not ours.
+
+### Running via Claude-in-Chrome MCP — defeat the ~1100-char output cap
+
+The `javascript_tool` truncates returned output at **~1100 characters**, silently
+(it appends `[TRUNCATED]`). Step 2b routinely runs past 3,000 chars, and Step 2 is
+near the limit on dense puzzles. Returning a big string in one call **drops rows
+without warning** — and a dropped bucket only gets caught later by the Step-6
+round-trip count, if at all. So when driving via MCP, never return the full text
+directly. Instead:
+
+1. **Stash the result on `window`, return only its length:**
+   ```js
+   window.__out = /* the snippet that builds the text */;
+   'LEN=' + window.__out.length
+   ```
+2. **Pull it back in ≤1000-char slices** (the cap is on the *displayed* result, not
+   the slice — even `slice(0,1200)` gets cut, so keep windows ≤1000):
+   ```js
+   window.__out.slice(0, 1000)
+   window.__out.slice(1000, 2000)
+   // …continue until you've read `length` chars
+   ```
+3. **Cache the extractor across puzzles via `sessionStorage`.** Every puzzle shares
+   the `sudokupad.app` origin, so `sessionStorage` survives navigation between them.
+   Define the extractor once as a function, store its source, then re-run it on each
+   later puzzle without re-sending the whole snippet:
+   ```js
+   sessionStorage.setItem('__catfn', runCat.toString());   // once, after defining runCat()
+   eval('(' + sessionStorage.getItem('__catfn') + ')')()   // on every later puzzle
+   ```
+
+In a real browser **console** (human-driven) this cap does not apply — the
+truncation is specific to the MCP tool path. The validated approach for an
+MCP/cheap-model bulk run is: one combined function that builds Step 2, Step 2b, and
+the Step 3 dump into `window.__CAT = {meta, s2, s2b, s3}` (and caches itself in
+`sessionStorage`), then chunked retrieval of each field.
 
 ## Step 2b — Decision-relevant attribute dump (why a change behaves the way it does)
 
@@ -239,16 +281,27 @@ don't assume them (the schema varies by how the puzzle was authored):
 
 ```js
 (() => {
-  const p = Framework.getApp()?.puzzle;
-  if (!p) return 'no app.puzzle';
+  // Current SudokuPad keeps the puzzle model in window.convertedPuzzle.
+  // Framework.getApp().puzzle is undefined on v0.611.0 — fall back only for old builds.
+  const p = window.convertedPuzzle || Framework.getApp()?.puzzle;
+  if (!p) return 'no convertedPuzzle / app.puzzle';
   const out = {};
   for (const k of Object.keys(p)) {
     const v = p[k];
-    out[k] = Array.isArray(v) ? `array[${v.length}]` : (v && typeof v === 'object' ? 'object' : typeof v);
+    out[k] = Array.isArray(v) ? `array[${v.length}]`
+      : (v && typeof v === 'object' ? `object{${Object.keys(v).slice(0,8).join(',')}}`
+      : (typeof v === 'string' ? `"${String(v).slice(0,40)}"` : typeof v));
   }
   return JSON.stringify(out, null, 2);
 })()
 ```
+
+> `convertedPuzzle` is richer than the old `app.puzzle` for naming help: it exposes
+> named per-constraint arrays (`thermos`, `kropkis`, `littleKiller`, `palindrome`,
+> `sudokuX`, `arrowSums`, `sandwichCages`, `inequality`, `foglight`, `foglink`,
+> `cages`, `cosmetic`, …). A non-empty array confirms that constraint type is present
+> before you even eyeball the DOM. Note the key set **varies** by author/import — some
+> puzzles omit `foglight`/`foglink` entirely; don't assume a fixed schema.
 
 Use this only as a cross-reference for naming buckets in Step 4. The DOM output from
 Step 2 remains the authoritative inventory — it is what the userscript actually
@@ -341,6 +394,39 @@ New buckets get a new row (and an `UNKNOWN` flag until named). This master list 
    excluded and that's noted.
 
 ---
+
+## Known anomalies & caveats (from the validation run, SudokuPad v0.611.0)
+
+Recorded while validating the extractor on 6 hard puzzles (fog, nogrid, irregular,
+outer-clue, kakuro, killer). Extend this list as new anomalies surface — a future
+model running the extraction should read it before trusting any derived field.
+
+- **`gridN` is render-extent ÷ cell size, NOT the play-grid dimension.** Observed: a
+  6×6 puzzle reported `gridN=7`; a 9×9 with outer clues reported `gridN=15`; an 11×11
+  reported `11`; a 6×6 irregular reported `6` (correct, coincidentally). Outer clues,
+  padding, and `setting-nogrid` inflate it. `cs` (cell size) was a constant **64**
+  across all 6 and is reliable; `gridN` is not — use the per-bucket `cells:`/`pos:`
+  heuristics for spatial reasoning, and don't report `gridN` as the grid size.
+- **`Framework.getApp()` is empty on v0.611.0.** Title and constraint data come from
+  `window.convertedPuzzle` (already wired into Steps 0 & 3).
+- **Selection/highlight UI leaks into the capture if a cell is selected on load.**
+  Seen concretely as `#cell-highlights | path.cage-selectioncage` +
+  `#cell-highlights | rect.cell-highlight`. These are SudokuPad UI, not puzzle
+  content — exclude them (same policy as `spdr*` and the selection/highlight overlays
+  already noted in Step 2). Deselect (click empty space) before extracting, or drop
+  any `#cell-highlights` rows and note it.
+- **`convertedPuzzle` schema varies by author/import.** `rules` is sometimes a string,
+  sometimes `array[1]`; fog puzzles add `foglight`/`foglink` keys that non-fog puzzles
+  omit entirely. The Step 3 dump tolerates this — don't assume a fixed key set.
+- **Given digits render in different layers/forms per puzzle.** Seen as
+  `#cell-givens | text.cell-given`, and elsewhere as stroked `#cell-values | path`
+  (digit *outlines*, not `<text>`). "Givens" is not a single stable bucket — annotate
+  per puzzle.
+- **The `g[defs]` filter block is always present — it is NOT fog.**
+  `g[defs] | feblend` / `fecolormatrix` / `femorphology` / `filter.viewboxsize`
+  appears on **every** puzzle, fog or not (it is general SudokuPad render plumbing).
+  Only `#fog-defs` and `#fog-fogcover` are fog-specific. Easy to misattribute when fog
+  is the thing under investigation.
 
 ## Using this to test which model is cheapest
 
