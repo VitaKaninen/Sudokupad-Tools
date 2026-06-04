@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad Bulk Extractor
 // @namespace    https://sudokupad.app/
-// @version      2.4.0
+// @version      2.5.0
 // @description  Iterates a list of SudokuPad URLs, captures the decision-relevant DOM inventory (Step 2b) + convertedPuzzle semantics per puzzle, and exports a deduped bucket Union (JSON), a per-puzzle feature Index (CSV), and the raw records.
 // @author       GAS Catalog Project
 // @match        https://sudokupad.app/*
@@ -98,21 +98,25 @@
   }
 
   function queueAppend(urls) {
-    let n = get(K.chunks, 0);
-    let lastChunk = n > 0 ? GM_getValue(pk(`q_${n-1}`), []) : [];
+    if (!urls.length) return;
+    const n = get(K.chunks, 0);
+    // idx = index of the chunk we're currently filling (0-based). For an existing
+    // queue we resume filling its last chunk; otherwise we start at chunk 0.
+    // NB: index by `idx`, NOT by the chunk *count* — counting `n` while writing
+    // `q_${n-1}` orphaned the first chunk into `q_-1` (never read back). See git
+    // history: this dropped the first CHUNK_SIZE URLs of every list >200 long.
+    let idx = n > 0 ? n - 1 : 0;
+    let chunk = n > 0 ? GM_getValue(pk(`q_${idx}`), []) : [];
     for (const url of urls) {
-      if (lastChunk.length >= CHUNK_SIZE) {
-        GM_setValue(pk(`q_${n-1}`), lastChunk);
-        n++;
-        lastChunk = [];
+      if (chunk.length >= CHUNK_SIZE) {
+        GM_setValue(pk(`q_${idx}`), chunk);
+        idx++;
+        chunk = [];
       }
-      lastChunk.push(url);
+      chunk.push(url);
     }
-    if (lastChunk.length > 0) {
-      GM_setValue(pk(`q_${n > 0 ? n-1 : 0}`), lastChunk);
-      if (n === 0) n = 1;
-    }
-    set(K.chunks, n);
+    GM_setValue(pk(`q_${idx}`), chunk);
+    set(K.chunks, idx + 1);
   }
 
   function clearQueue() {
