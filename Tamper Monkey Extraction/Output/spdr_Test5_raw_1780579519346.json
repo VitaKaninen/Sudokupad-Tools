@@ -1,0 +1,674 @@
+[
+  {
+    "originalUrl": "https://sudokupad.app/fpuzN4IgzglgXgpiBcBOANCALhNAbO8QCkBXAOxgAIB2MgJgAZqBGeMgJRmICMBDYgegEVCXACYAnQgAccYEKi6E0ACwD2ohCADGWZQDcYogISyQ46TDTqAymh7Cuo4WTCFhygNaEypmGDJcJUgCeAHRkADrEEda29o6i7NzEXoTSfgFYgcwAIhAA5pi%2BXNrEuX5kufGBZFgQpGQAtoRgaGQAZqr1ZWDmZMqtZBrKxN0aChB6ZMJ5BWQA7piKZMTKXjASMFxovgAUtX7EVarC%2BgCUoRFRNsR2DmQAjkJikqnehemZZDn5W2R7XHOKTDkDQQURaciNZppdb2JzKeowWaKfTkPZKcjtQiiAYwLBYXwQeoIqabXFVZyiUTKEhTEpkJSbAag8HBYwVCDCBAAbS5wAAvsh%2BYKBULRSLxYKQDoioRcAAWVD5PTEBBocQwPkAXWQvIlYuFBv1%2FO1usNevNZpNRot1uFVptDstOttLvN9rNHtd7tdnvFVqlMtwADZFeN2Kr1Y6fcbtSAHiJxFJcLzNLj8dyQCwGABhBjGLPZ6j56i54uFkCx6VYWUyeBchjIADMmpFqbxta5mcb2cb%2Be7cvzcp7g%2BzA8rgY71GQcpbko0aY7mYAHNml%2FmV4h84hV1vs5vx9WfNyKMhELPQPP2xmWEHs0H87eKPmKHfn9mnwea9yQ0vz2303WmZDmuqAsEOm6gQArDuUF7hWqBVl%2BdaQcgFB%2FpeAGdiw0F5rBRagbeuGZreRafkedaNsgkHoQu17QQOsGQQ%2Bo7MUxZGTjRV6AWB2ZMaBQ73ox%2BbQfe7Hcr%2BrYYYuLAvr2oEvgxy7DqBK5jghE7cpR1GSbR3EloJmYlk%2BoHdgZLDdh%2B6mHh2KFoVqqA1KQ3KgI55E8pm9HMYpN68RWsbUtgtQwNm6gAMTZhFkXGPMwhKAgtDBJBrauR2WEliBmY5hlLAlhBmVwZq%2FkKK5IV4OFkURdFHJxfACVJZKKXcml759i1oH6a1olFYFpClSA5UVVVsWKPFiXJUFqVAb5%2FGvrBXWoAFJVhRVlWoDFNV1eNpCTTxcldspU3ef2fkLcVQV9QNUVrdVI21WNDUTU1hmlqBOZETl5aveWhWnT1wXLStQ0bfdLmPXWWGEcJL3EZ9Hnfd1S1lStIXXcNo31aD21PSw27vSu73bvhSmkQj50A4NqPAxjICNeDSl7TJB0sKpb5jqTvXk1dIDrbdm0PVjdOM2Zt5mS%2Bxkwx%2B7P%2FUjgOU7zIM02D7nYTBU3ZdBeU8fuUsXcjQPy9TtPK9u2Urtl26axuJ0gItZMyxT3M3ejWp8kAA%3D%3D",
+    "id": "0qe26aaixc",
+    "url": "https://sudokupad.app/0qe26aaixc",
+    "title": "June 7 2021: Renban/Quadruples",
+    "author": "clover!",
+    "gridSize": "",
+    "meta": {
+      "cs": 64,
+      "gridN": 9,
+      "gridW": 9,
+      "gridH": 9,
+      "theme": "setting-uitheme-purple"
+    },
+    "constraints": {
+      "givens": 2,
+      "cages": 27,
+      "rules": 1,
+      "thermos": 34,
+      "cosmetic": 46
+    },
+    "cageStyles": {
+      "box": 9,
+      "rowcol": 18
+    },
+    "buckets": [
+      {
+        "k": "#arrows | path",
+        "n": 12,
+        "z": [
+          0,
+          11
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "none"
+        ],
+        "fGray": [
+          "none"
+        ],
+        "none": true,
+        "sVal": [
+          "#CCCCCC"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "16"
+        ],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "corner"
+        ],
+        "cells": [
+          4
+        ],
+        "op": [],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#cell-givens | text.cell-given",
+        "n": 2,
+        "z": [
+          0,
+          1
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "text"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [],
+        "op": [],
+        "text": [
+          "4",
+          "6"
+        ]
+      },
+      {
+        "k": "#cell-grids | path.cage-box",
+        "n": 9,
+        "z": [
+          1,
+          9
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "none"
+        ],
+        "fGray": [
+          "none"
+        ],
+        "none": true,
+        "sVal": [
+          "rgba(0, 0, 0, 1)"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "3px"
+        ],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [
+          9
+        ],
+        "op": [],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#cell-grids | path.cell-grid",
+        "n": 1,
+        "z": [
+          0,
+          0
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [
+          81
+        ],
+        "op": [],
+        "text": []
+      },
+      {
+        "k": "#overlay | rect.textbg",
+        "n": 10,
+        "z": [
+          0,
+          18
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "#FFFFFF"
+        ],
+        "fGray": [
+          "true"
+        ],
+        "sVal": [
+          "#000000"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "2"
+        ],
+        "shape": [
+          "circle"
+        ],
+        "pos": [
+          "corner"
+        ],
+        "cells": [
+          4
+        ],
+        "op": [
+          "1"
+        ],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#overlay | text",
+        "n": 10,
+        "z": [
+          1,
+          19
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "text"
+        ],
+        "pos": [
+          "corner"
+        ],
+        "cells": [
+          4
+        ],
+        "op": [],
+        "text": [
+          "1 3",
+          "2 4",
+          "7 9",
+          "6 8",
+          "5 7",
+          "3 5",
+          "2",
+          "8"
+        ]
+      }
+    ],
+    "timestamp": "2026-06-04T13:25:00.425Z"
+  },
+  {
+    "originalUrl": "https://sudokupad.app/fpuzN4IgzglgXgpiBcBOANCALhNAbO8QCkBXAOxgAIAOZMgJgAYaBGeMgaQixwCcRUBDQmgAWAex54AxlhEA3GFwCEvEF0I4wMNAhABlNH2IATPl0NkwhQyIDWhMqvVk%2BAB2dYAngDoAOsV8ARCABzTDAyCGInMgk%2BIPIAWz53MmIRNHsYZxg%2BNGoDM3jCMHSLeLI0EXKhchk%2BLEJyAAoIADMyELliAEpwyOFyCucyHBb0iTFSLjIRNv7o2JgfP2JGgEk%2BoQgw50IoKBxqOZh45zRkmLiwk3IAKyL0lrEnGGLqjAkwBS7lIK4IQwQAG1AcAAL7IMEQ8GQmHQuFQgC6yBB8NhUPRaLBSJRGNReNx2Mx%2BKJiORJPJeMJxOpBLJNIppJxDIpVNxbJZSJA1g43AuuBBIAkME4YCBIAASowAMKMZTimgykCc2r1XAgADMIGhguFWFF8EBEvVitQ4oALIrlXUGtoAOxaiE6kVi8UAVhNEoAbJbUCqbXhGLLtULnQaJdKaHLpZqrartBQHaAQ3qXdKzVGpa6lb7rWrGJHg7r9YbJVLPRn7bH%2FSBEImnSmw%2FKpfbTcbKzm4wGs4XQyWLS2Je72yA%2FXnNT2GyXvQPxbbm9mR7ntOmJ8WJXPZaa55Gq3nu47k2vZ1LNaaKCeF6PtLXVy73aevRfd9pA3XDy7jQ%2FzU%2BO9XGOODyLF053TLdMzlOdywRW9G2NUCjXA1syyVGCS2NBMkNrZ88ATVCJQtWtTXdLDfzVfckyAxtvUI9cpRIxdOxAV88PFc8aPFRA6JQwDewlTiZ04hNsKYgCKN4jjEL45DhPLFjOK%2FTj02gnjJ3wqV4O%2FLMiPUy8lzwGgVxUo93S0wdkNNb1TPFb0oNIl86C1aCgA%3D%3D",
+    "id": "fpuzN4IgzglgXgpiBcBOANCALhNAbO8QCkBXAOxgAIAOZMgJgAYaBGeMgaQixwCcRUBDQmgAWAex54AxlhEA3GFwCEvEF0I4wMNAhABlNH2IATPl0NkwhQyIDWhMqvVk%2BAB2dYAngDoAOsV8ARCABzTDAyCGInMgk%2BIPIAWz53MmIRNHsYZxg%2BNGoDM3jCMHSLeLI0EXKhchk%2BLEJyAAoIADMyELliAEpwyOFyCucyHBb0iTFSLjIRNv7o2JgfP2JGgEk%2BoQgw50IoKBxqOZh45zRkmLiwk3IAKyL0lrEnGGLqjAkwBS7lIK4IQwQAG1AcAAL7IMEQ8GQmHQuFQgC6yBB8NhUPRaLBSJRGNReNx2Mx%2BKJiORJPJeMJxOpBLJNIppJxDIpVNxbJZSJA1g43AuuBBIAkME4YCBIAASowAMKMZTimgykCc2r1XAgADMIGhguFWFF8EBEvVitQ4oALIrlXUGtoAOxaiE6kVi8UAVhNEoAbJbUCqbXhGLLtULnQaJdKaHLpZqrartBQHaAQ3qXdKzVGpa6lb7rWrGJHg7r9YbJVLPRn7bH%2FSBEImnSmw%2FKpfbTcbKzm4wGs4XQyWLS2Je72yA%2FXnNT2GyXvQPxbbm9mR7ntOmJ8WJXPZaa55Gq3nu47k2vZ1LNaaKCeF6PtLXVy73aevRfd9pA3XDy7jQ%2FzU%2BO9XGOODyLF053TLdMzlOdywRW9G2NUCjXA1syyVGCS2NBMkNrZ88ATVCJQtWtTXdLDfzVfckyAxtvUI9cpRIxdOxAV88PFc8aPFRA6JQwDewlTiZ04hNsKYgCKN4jjEL45DhPLFjOK%2FTj02gnjJ3wqV4O%2FLMiPUy8lzwGgVxUo93S0wdkNNb1TPFb0oNIl86C1aCgA%3D%3D",
+    "url": "https://sudokupad.app/fpuzN4IgzglgXgpiBcBOANCALhNAbO8QCkBXAOxgAIAOZMgJgAYaBGeMgaQixwCcRUBDQmgAWAex54AxlhEA3GFwCEvEF0I4wMNAhABlNH2IATPl0NkwhQyIDWhMqvVk%2BAB2dYAngDoAOsV8ARCABzTDAyCGInMgk%2BIPIAWz53MmIRNHsYZxg%2BNGoDM3jCMHSLeLI0EXKhchk%2BLEJyAAoIADMyELliAEpwyOFyCucyHBb0iTFSLjIRNv7o2JgfP2JGgEk%2BoQgw50IoKBxqOZh45zRkmLiwk3IAKyL0lrEnGGLqjAkwBS7lIK4IQwQAG1AcAAL7IMEQ8GQmHQuFQgC6yBB8NhUPRaLBSJRGNReNx2Mx%2BKJiORJPJeMJxOpBLJNIppJxDIpVNxbJZSJA1g43AuuBBIAkME4YCBIAASowAMKMZTimgykCc2r1XAgADMIGhguFWFF8EBEvVitQ4oALIrlXUGtoAOxaiE6kVi8UAVhNEoAbJbUCqbXhGLLtULnQaJdKaHLpZqrartBQHaAQ3qXdKzVGpa6lb7rWrGJHg7r9YbJVLPRn7bH%2FSBEImnSmw%2FKpfbTcbKzm4wGs4XQyWLS2Je72yA%2FXnNT2GyXvQPxbbm9mR7ntOmJ8WJXPZaa55Gq3nu47k2vZ1LNaaKCeF6PtLXVy73aevRfd9pA3XDy7jQ%2FzU%2BO9XGOODyLF053TLdMzlOdywRW9G2NUCjXA1syyVGCS2NBMkNrZ88ATVCJQtWtTXdLDfzVfckyAxtvUI9cpRIxdOxAV88PFc8aPFRA6JQwDewlTiZ04hNsKYgCKN4jjEL45DhPLFjOK%2FTj02gnjJ3wqV4O%2FLMiPUy8lzwGgVxUo93S0wdkNNb1TPFb0oNIl86C1aCgA%3D%3D",
+    "title": "June 8, 2021: Killer",
+    "author": "clover!",
+    "gridSize": "",
+    "meta": {
+      "cs": 64,
+      "gridN": 9,
+      "gridW": 9,
+      "gridH": 9,
+      "theme": "setting-uitheme-purple"
+    },
+    "constraints": {
+      "cages": 51,
+      "rules": 1,
+      "cosmetic": 53
+    },
+    "cageStyles": {
+      "killer": 24,
+      "box": 9,
+      "rowcol": 18
+    },
+    "buckets": [
+      {
+        "k": "#cages | path.cage-killer",
+        "n": 24,
+        "z": [
+          0,
+          61
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "none"
+        ],
+        "fGray": [
+          "none"
+        ],
+        "none": true,
+        "sVal": [
+          "rgba(0, 0, 0, 1)"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "1.5px"
+        ],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "border",
+          "center",
+          "corner"
+        ],
+        "cells": [
+          2,
+          3,
+          4
+        ],
+        "op": [],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#cages | rect.cage-killer.cage-label",
+        "n": 20,
+        "z": [
+          1,
+          62
+        ],
+        "fSrc": [
+          "inline"
+        ],
+        "fVal": [
+          "rgba(255, 255, 255, 0.9)"
+        ],
+        "fGray": [
+          "true"
+        ],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "rect"
+        ],
+        "pos": [
+          "corner"
+        ],
+        "cells": [],
+        "op": [],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#cages | text.cage-killer.cage-label",
+        "n": 20,
+        "z": [
+          2,
+          63
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "text"
+        ],
+        "pos": [
+          "corner"
+        ],
+        "cells": [],
+        "op": [],
+        "text": [
+          "3",
+          "7",
+          "11",
+          "8",
+          "12",
+          "9",
+          "15",
+          "13",
+          "4",
+          "5",
+          "6",
+          "24",
+          "10"
+        ]
+      },
+      {
+        "k": "#cell-grids | path.cage-box",
+        "n": 9,
+        "z": [
+          1,
+          9
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "none"
+        ],
+        "fGray": [
+          "none"
+        ],
+        "none": true,
+        "sVal": [
+          "rgba(0, 0, 0, 1)"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "3px"
+        ],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [
+          9
+        ],
+        "op": [],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#cell-grids | path.cell-grid",
+        "n": 1,
+        "z": [
+          0,
+          0
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [
+          81
+        ],
+        "op": [],
+        "text": []
+      }
+    ],
+    "timestamp": "2026-06-04T13:25:04.694Z"
+  },
+  {
+    "originalUrl": "https://sudokupad.app/fpuzN4IgzglgXgpiBcBOANCALhNAbO8QCkBXAOxgAIUyAmABioEZ4yAlAQwwHsB6ABVYgBOYLgA0AaiFStCaABYcBCEAGMsHAG4wBAQkkgBhHGBholAZTStiAE1YDrZMIWscA1oTIGjZVgAdfWACeAHQAOsThACIQAOaYYGQcxGQwmLJajhDW5BwAZj7JIo6EALZkaBxk9DRhEcTRcWgJSSlpGZDZifmsZGLFZRVkAKy1UbHxicmpcu1ZOd1kAO6ymOQuaD4C5MpJxsoyEJqj9eNNk60zApmdeT5kAEZYrMquZOub5BDJPYxUnuwQDjHAAq6S2HzIxEqpBiAM0ZB2xDAaAE%2FGIZwAFNZTglFmkODI7mJkCk0MpgmQSqxAokrlSaVCNrJWPCZmRfAIOL4tGgadkwMoBBB7jBrMEAJR6GJC6wIADacuAAF9kMrVSq1ZqNdr1QBdZCKnVa9Um43K%2FWG01G61Wi1mm32vUGx0u612h0e23Oz2up2W32u91W4OB%2FUgbG5XJaGDEZS4RUqGBYLBgeUgZhUADCAHY9BnMwAOEC6jWJ5Op%2BBy9NZxB5%2BiZ2sl1VllNp5gANkzVDz2a7xdLcfLbYLfdQzEQfaboEHrcr6YnAGY8xOACz95szitV8eZtdjidDdfTpOz7cLht5lcXqctrfpq%2B1sdDa8Dk935jPotPnNH29t5%2B5t%2B7a%2FpubadsBY6doeN6gXOH6ZhB6bgf2Yaopw8rHkOcH1kuY71t2MFvm29aHnhu4gURcFZl%2B1YvhulHblm9B1pmzGEVh25XsxY7nmxr4cemz7dt%2BfH0QJzC9sJ6YjgR%2FGnumvakdJmbQUqYYAB7qBhf7YaxLEEag6isFghC4CAEhye%2BOEsWuYZGSZZkWWJ8nMCReZZtBhnGaZSgiCAlltlmiH5p5ID2T5eBOZhLlBe5P52d5Zl%2BQFVF6TxekJQ5vn%2Bc577Ptx94ZV5WV4MluX%2FqOSGTsVEUgGV0XvhOBU7gZYWJdlKXbs%2Bj6CYWxY1UlOUNcOKnLqNmW1fVOnblBPbjQNHXlXBnaAb1uYTYNalKkAA%3D%3D%3D",
+    "id": "op15q0d27q",
+    "url": "https://sudokupad.app/op15q0d27q",
+    "title": "June 9, 2021: Ratio/Pairs/XV",
+    "author": "clover!",
+    "gridSize": "",
+    "meta": {
+      "cs": 64,
+      "gridN": 9,
+      "gridW": 9,
+      "gridH": 9,
+      "theme": "setting-uitheme-purple"
+    },
+    "constraints": {
+      "cages": 27,
+      "rules": 1,
+      "kropkis": 20
+    },
+    "cageStyles": {
+      "box": 9,
+      "rowcol": 18
+    },
+    "buckets": [
+      {
+        "k": "#cell-grids | path.cage-box",
+        "n": 9,
+        "z": [
+          1,
+          9
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "none"
+        ],
+        "fGray": [
+          "none"
+        ],
+        "none": true,
+        "sVal": [
+          "rgba(0, 0, 0, 1)"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "3px"
+        ],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [
+          9
+        ],
+        "op": [],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#cell-grids | path.cell-grid",
+        "n": 1,
+        "z": [
+          0,
+          0
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "path"
+        ],
+        "pos": [
+          "center"
+        ],
+        "cells": [
+          81
+        ],
+        "op": [],
+        "text": []
+      },
+      {
+        "k": "#overlay | rect.feature-kropki",
+        "n": 20,
+        "z": [
+          0,
+          19
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "#FFFFFF",
+          "#000000"
+        ],
+        "fGray": [
+          "true"
+        ],
+        "sVal": [
+          "#000000"
+        ],
+        "sSrc": [
+          "attr"
+        ],
+        "sGray": [
+          "true"
+        ],
+        "sW": [
+          "2"
+        ],
+        "shape": [
+          "circle"
+        ],
+        "pos": [
+          "border"
+        ],
+        "cells": [
+          2
+        ],
+        "op": [
+          "1"
+        ],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#overlay | rect.feature-xv",
+        "n": 13,
+        "z": [
+          20,
+          44
+        ],
+        "fSrc": [
+          "attr"
+        ],
+        "fVal": [
+          "#FFFFFF"
+        ],
+        "fGray": [
+          "true"
+        ],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "rect"
+        ],
+        "pos": [
+          "border"
+        ],
+        "cells": [
+          2
+        ],
+        "op": [
+          "1"
+        ],
+        "dr": true,
+        "text": []
+      },
+      {
+        "k": "#overlay | text",
+        "n": 13,
+        "z": [
+          21,
+          45
+        ],
+        "fSrc": [
+          "css/none"
+        ],
+        "fVal": [],
+        "fGray": [],
+        "sVal": [],
+        "sSrc": [],
+        "sGray": [],
+        "sW": [],
+        "shape": [
+          "text"
+        ],
+        "pos": [
+          "border"
+        ],
+        "cells": [
+          2
+        ],
+        "op": [],
+        "text": [
+          "V",
+          "X"
+        ]
+      }
+    ],
+    "timestamp": "2026-06-04T13:25:09.505Z"
+  }
+]

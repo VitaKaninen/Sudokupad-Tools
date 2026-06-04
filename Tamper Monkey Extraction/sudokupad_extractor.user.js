@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad Bulk Extractor
 // @namespace    https://sudokupad.app/
-// @version      2.2.1
+// @version      2.3.0
 // @description  Iterates a list of SudokuPad URLs, captures the decision-relevant DOM inventory (Step 2b) + convertedPuzzle semantics per puzzle, and exports a deduped bucket Union (JSON), a per-puzzle feature Index (CSV), and the raw records.
 // @author       GAS Catalog Project
 // @match        https://sudokupad.app/*
@@ -325,15 +325,32 @@
     return side * side === sol.length ? side : '';
   }
 
+  // A raw-import URL (f-puzzles / SCF / CTC / penpa blob) that SudokuPad rewrites to
+  // a short slug and reloads. We must NOT extract while still on one of these, or we
+  // record the giant encoded string as the id/url instead of the resolved short slug.
+  // Detection is by length (these are huge) with a prefix net; short slugs and
+  // author/name paths never trigger.
+  function isImportUrl() {
+    let p = location.pathname.replace(/^\//, '');
+    try { p = decodeURIComponent(p); } catch (e) {}
+    const seg = p.split('/')[0];                                   // first path segment
+    if (seg.length > 60) return true;                              // long encoded blob
+    if (seg.length > 40 && /^(fpuz|scf|scl|scln|ctc|penpa)/i.test(seg)) return true;
+    if (/[?&](puzzleid|fpuzzles|fpuz|scf|scl)=/i.test(location.search)) return true;
+    return false;
+  }
+
   // ── Puzzle ready check ─────────────────────────────────────────────────────
-  // Require BOTH the rendered SVG and the puzzle model (convertedPuzzle). Some
-  // puzzles report a partial SVG (a bare grid skeleton) before the model is wired
-  // up; extracting then yields garbage with empty constraints. Waiting for
-  // convertedPuzzle guarantees the semantic layer is present, and a puzzle that
-  // never initializes it times out and is logged as failed (visible, not silent).
+  // Require the rendered SVG, the puzzle model (convertedPuzzle), AND a resolved
+  // (non-import) URL. Some puzzles report a partial SVG skeleton before the model is
+  // wired up (extracting then yields empty-constraint garbage); and import URLs must
+  // first redirect to their short slug (else the id is the 900-char blob). Waiting
+  // on all three means a puzzle that never resolves times out and is logged as
+  // failed (visible, not silent) rather than mis-captured.
   function puzzleIsReady() {
     const svg = document.querySelector('#svgrenderer');
-    return !!(svg && document.querySelectorAll('#svgrenderer *').length > 0 && getConverted());
+    return !!(svg && document.querySelectorAll('#svgrenderer *').length > 0
+      && getConverted() && !isImportUrl());
   }
 
   function getPuzzleId() {

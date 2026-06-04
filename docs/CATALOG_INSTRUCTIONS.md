@@ -172,6 +172,14 @@ A future model running extraction/synthesis should read these before trusting an
   it extracted whatever page was already loaded, mis-capturing the leftover puzzle from a
   prior run and consuming the first queue slot unvisited (symptom: one puzzle duplicated,
   the first missing, zero failures).
+- **Raw-import URLs resolve to a short slug before extraction (v2.3.0).** Loading a long
+  f-puzzles/SCF/CTC/penpa URL lands on the encoded blob, then SudokuPad rewrites the URL to
+  a short slug and reloads. Extracting during that window records the ~900-char blob as the
+  `id`/`url`. The ready-check now refuses to extract while on an import URL (`isImportUrl()`),
+  so it waits for the slug; the resolved short URL becomes `id`/`url` and the original long
+  URL is preserved as `originalUrl`. **Pre-resolving the list offline isn't worth it** — the
+  slug is only minted by SudokuPad's own load, so the browser is the natural place to capture
+  it, and we get it for free by waiting.
 
 ---
 
