@@ -130,10 +130,11 @@ capture the output alongside Step 2's.
     const r=c.r/255,g=c.g/255,b=c.b/255,mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2;
     let s=0; if(mx!==mn){const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn);} return s<0.08; }
   function gcd(a,b){a=Math.round(a);b=Math.round(b);return b===0?a:gcd(b,a%b);}
-  let cs=0; const cg=svg.querySelector('#cell-grids path.cell-grid');
+  let cs=0, board=0; const cg=svg.querySelector('#cell-grids path.cell-grid');
   if(cg){const d=cg.getAttribute('d')||cg.dataset.spdrOrigD||'';
-    const ns=(d.match(/\d+(?:\.\d+)?/g)||[]).map(Number).filter(n=>n>0.5); cs=ns.reduce(gcd,0)||0;}
-  const gridN=Math.round(Math.sqrt(svg.querySelectorAll('.cell').length))||0, board=cs*gridN;
+    const ns=(d.match(/\d+(?:\.\d+)?/g)||[]).map(Number).filter(n=>n>0.5);
+    cs=ns.reduce(gcd,0)||0; board=ns.length?Math.max(...ns):0;}  // board = full grid extent (max coord)
+  const gridN=cs?Math.round(board/cs):0;
   function own(el,p){ return el.style.getPropertyValue(p)||el.getAttribute(p)||''; } // what OUR code reads
   function src(el,p){
     if(el.style.getPropertyValue(p)) return el.style.getPropertyPriority(p)==='important'?'inline!':'inline';
