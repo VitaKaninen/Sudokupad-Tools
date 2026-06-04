@@ -5,6 +5,3 @@ test-images
 
 # Personal puzzle tracker (local only)
 docs/Puzzle list.txt
-
-# Catalog raw dump (8 MB, regenerable safety net) — track only Index + Union
-docs/Catalog/spdr_MERGED_raw.json
