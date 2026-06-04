@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.193.0
+// @version      2.194.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -33,7 +33,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.193.0';
+  var SCRIPT_VERSION = '2.194.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3266,6 +3266,25 @@
   }
   // The exact set of line strokes Object-shading governs — mirrors fixAllLines.
   function objLineSources() { return hqa('#arrows path[stroke]').filter(isLineStroke); }
+  // The grayscale #overlay marker texts Object-shading governs — mirrors
+  // fixOverlayMarkerText's gates (skip Kropki labels; original colour must be gray).
+  // Always gray (coloured overlay text is left to DR), so they only ever feed the
+  // gray side of objShade. Reads the captured orig fill so it's stable even after
+  // shading has overwritten the live fill.
+  function overlayMarkerColor(t) {
+    var raw = (t.dataset.spdrOrigFill !== undefined && t.dataset.spdrOrigFill !== '')
+      ? t.dataset.spdrOrigFill
+      : (t.style.getPropertyValue('fill') || t.getAttribute('fill') || '');
+    return parseColor(raw);
+  }
+  function objTextSources() {
+    return hqa('#overlay text').filter(function (t) {
+      if (t.dataset.spdrKropkiText !== undefined) return false;   // author Kropki label
+      if (t.dataset.spdrKropkiLabel !== undefined) return false;  // our injected Kropki label
+      var c = overlayMarkerColor(t);
+      return !!(c && c.a !== 0 && isGrayColor(c));
+    });
+  }
   function fillColorIsGray(el) { var c = parseColor(el.getAttribute('fill') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
   function strokeColorIsGray(el) { var c = parseColor(el.getAttribute('stroke') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
   function hasPaintedStroke(el) { var s = el.getAttribute('stroke'); if (!s || s === 'none') return false; var c = parseColor(s); return !!(c && c.a !== 0); }
@@ -3276,6 +3295,7 @@
     var out = [];
     objFillSources().forEach(function (e) { var g = fillColorIsGray(e); if (g === wantGray) out.push(e); });
     objLineSources().forEach(function (e) { var g = strokeColorIsGray(e); if (g === wantGray) out.push(e); });
+    if (wantGray) objTextSources().forEach(function (e) { out.push(e); });  // gray overlay marker text
     return out;
   }
 
