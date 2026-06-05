@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.194.0
+// @version      2.195.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -22,6 +22,31 @@
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Force SudokuPad's "dark mode alpha" (DMA) OFF — consistent baseline
+  //
+  // This (DarkReader) edition assumes DR is the dark substrate. SudokuPad's own
+  // dark mode is a separate, experimental layer that, left on, slightly shifts
+  // colours on top of DR — and its persisted setting can be flipped by the native
+  // -mode edition or by hand, so the page would otherwise look different depending
+  // on a toggle state the user never set deliberately. We pin it OFF (setting +
+  // class) at document-start so this edition always renders the same way. (The
+  // native-mode edition instead owns a frozen copy of DMA under `.spdr-dark`.)
+  // ═══════════════════════════════════════════════════════════════════════════
+  (function forceDMAOff() {
+    try {
+      var SS = 'svencodes_settings';
+      var s = JSON.parse(localStorage.getItem(SS) || '{}');
+      if (s.darkmode !== false) { s.darkmode = false; localStorage.setItem(SS, JSON.stringify(s)); }
+    } catch (e) {}
+    function strip() {
+      if (!document.body) return false;
+      document.body.classList.remove('setting-darkmode');
+      return true;
+    }
+    if (!strip()) document.addEventListener('DOMContentLoaded', strip);
+  })();
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Settings
   //
   // Defaults match the actual on-screen colours after DarkReader's conversion,
@@ -33,7 +58,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.194.0';
+  var SCRIPT_VERSION = '2.195.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
