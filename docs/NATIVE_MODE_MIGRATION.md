@@ -7,6 +7,7 @@ The pivot (branch `native-mode`, started 2026-06-05): **stop fighting DarkReader
 - **v2.196** — darken translucent-white (`#ffffff80`) line-endpoint circles (broaden `LABEL_RECT_SEL` white arm to a case-insensitive prefix).
 - **v3.0.0 / v3.0.1** — fork identity for parallel TM testing (`@name` "SudokuPad – Native Dark Mode", `window.spdrEdition='native'`, `@updateURL`→`native-mode` branch); major bump marks the break; file renamed `sudokupad-darkreader-fix.user.js` → `sudokupad-native-dark-mode.user.js`.
 - **v3.1.0** — baked in `window.spdrGapScan()` (always-on gap detector) + ran the first upfront audit (see Audit log below).
+- **v3.2.0** — TEMP migration dev tool: auto-run gap scan after the board settles + a clickable ⚠ badge by the version label listing suspect cells (gated by `GAPSCAN_AUTO`). To be removed at project end (see cleanup list).
 
 ## Audit log
 **Contrast audit (invisible-object class), 2026-06-05 — `window.spdrGapScan()`.** Heuristic: flag any board element (`#underlay`/`#overlay`/`#arrows`/`#cages`/`#cell-colors`/`#cell-grids`) that paints something (effective alpha > 0.06) but renders at contrast < 1.25 vs the page bg, AND that we didn't fix (no inline `!important` of ours — so object-shaded / label-bg'd elements are excluded). Validated: 0 false-positives on the known-good test puzzle (the 31 raw low-contrast hits were all our own intentionally-dim shaded cells, correctly excluded).
@@ -33,4 +34,5 @@ Re-base onto native, then **delete the DR code each step orphans** (don't defer 
   - [ ] `CLAUDE.md` title (`# SudokuPad – DarkReader Fix`) + intro line ("fixes DarkReader visual issues").
   - [ ] `PROJECT_SUMMARY.md` — rewrite fresh (it's periodically rewritten anyway) once the migration settles.
   - [ ] Repo rename `Sudokupad-darkreader-fix` → TBD (decide later; affects all raw URLs).
+  - [ ] **Remove the TEMP auto gap-scan badge** (the `GAPSCAN_AUTO` block + `startGapAutoScan`/`renderGapBadge` + the `buildAllUI` call). `window.spdrGapScan()` itself can stay as a manual helper or go.
   - [ ] **Merge `native-mode` → `main`**: reconcile `@name` / `@namespace` / `@updateURL` / filename for the mainline.
