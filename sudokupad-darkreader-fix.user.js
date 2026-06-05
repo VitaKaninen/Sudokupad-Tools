@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.195.0
+// @version      2.196.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -16,6 +16,50 @@
 
 (function () {
   'use strict';
+
+  // ╔═══════════════════════════════════════════════════════════════════════╗
+  // ║  A/B TEST HARNESS — REMOVE BEFORE RELEASE                              ║
+  // ║  Lets BOTH userscripts stay enabled in Tampermonkey at once while only ║
+  // ║  ONE runs per tab. The active variant is chosen by  #variant=a|b  in   ║
+  // ║  the URL hash (per-tab, survives reloads). No hash → defaults to       ║
+  // ║  Native (b). The active script paints a fixed bottom-center radio bar  ║
+  // ║  so either of us can flip the live script (writes the hash + reloads). ║
+  // ║    a = SudokuPad – DarkReader Fix (this file, main 2.x)                ║
+  // ║    b = SudokuPad – Native Dark Mode (native 3.x)                       ║
+  // ╚═══════════════════════════════════════════════════════════════════════╝
+  var __abMatch = location.hash.match(/variant=([ab])/);
+  var __abActive = __abMatch ? __abMatch[1] : 'b';   // bare URL → Native wins
+  if (__abActive !== 'a') return;                    // this file is variant 'a'
+  (function mountAbSwitch() {
+    function mount() {
+      if (document.getElementById('spdr-ab-switch')) return;
+      var root = document.body || document.documentElement;
+      if (!root) return;
+      var bar = document.createElement('div');
+      bar.id = 'spdr-ab-switch';
+      bar.style.cssText = 'position:fixed;left:50%;bottom:0;transform:translateX(-50%);'
+        + 'z-index:2147483647;background:rgba(20,20,20,.88);color:#eee;'
+        + 'font:12px/1.5 sans-serif;padding:4px 12px;border:1px solid #666;'
+        + 'border-bottom:none;border-radius:7px 7px 0 0;display:flex;gap:14px;'
+        + 'align-items:center;user-select:none;';
+      bar.innerHTML =
+          '<b style="color:#9a9a9a;letter-spacing:.5px">A/B&nbsp;TEST</b>'
+        + '<label style="cursor:pointer"><input type="radio" name="spdrab" value="a"> A&nbsp;·&nbsp;DarkReader&nbsp;Fix&nbsp;2.x</label>'
+        + '<label style="cursor:pointer"><input type="radio" name="spdrab" value="b"> B&nbsp;·&nbsp;Native&nbsp;3.x</label>';
+      root.appendChild(bar);
+      var sel = bar.querySelector('input[value="' + __abActive + '"]');
+      if (sel) sel.checked = true;
+      bar.addEventListener('change', function (e) {
+        if (e.target.value === __abActive) return;
+        location.hash = 'variant=' + e.target.value;
+        location.reload();
+      });
+    }
+    mount();
+    document.addEventListener('DOMContentLoaded', mount);
+    setInterval(mount, 1000);   // re-paint if the SPA wipes the bar
+  })();
+  // ═══ end A/B TEST HARNESS ═══
 
   // crackingthecryptic.com hosts many non-puzzle pages; only activate when a
   // puzzle is loaded (identified by the presence of an "id" query parameter).
