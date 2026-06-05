@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.4.0
-// @description  Locks DarkReader out of SudokuPad and rides the site's own native dark mode, fixing the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
+// @version      3.5.0
+// @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
 // @match        https://beta.sudokupad.app/*
@@ -22,19 +22,81 @@
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Dark substrate: lock DarkReader out, ride SudokuPad's native dark mode
+  // Dark substrate: lock DarkReader out, run our OWN frozen copy of SudokuPad's
+  // native dark mode ("dark mode alpha" / DMA)
   //
-  // We no longer fight DarkReader. We evict it from SudokuPad only — injecting
-  // <meta name="darkreader-lock"> makes the extension bypass this page entirely
-  // (DR keeps working on every other site) — and instead ride SudokuPad's own
-  // .setting-darkmode theme. Native dark mode is author-built and SEMANTIC (it
-  // knows what a Kropki dot / cage / given is) and it's static CSS, so there is
-  // no MutationObserver war, no cascade fight, and nothing to "restore" on
-  // toggle. It leaves a small, finite set of gaps — gray/translucent-dark
-  // objects aren't inverted (they vanish), some non-exact white labels are
-  // missed, control buttons stay bright — which the rest of this script fixes.
-  // (Side effect: this flips SudokuPad's own `darkmode` setting on, persistently.)
+  // We neither fight DarkReader nor *ride* SudokuPad's DMA — both are forced OFF
+  // so we always start from one known state that can't drift underneath us:
+  //   • DarkReader is evicted from SudokuPad via <meta name="darkreader-lock">
+  //     (the extension bypasses this page only; it keeps working everywhere else).
+  //   • SudokuPad's own `darkmode` setting is forced OFF, so the site never adds
+  //     its `.setting-darkmode` class and the in-app toggle reads off.
+  // DMA is author-built and SEMANTIC (it knows a Kropki dot / cage / given), so
+  // instead of losing it we REPLICATE it: FROZEN_DARK_CSS below is a verbatim copy
+  // of DMA's rule set (its `.setting-darkmode {…}` CSS-variable block + ~22 SVG
+  // rules) re-keyed to our own `.spdr-dark` body class. That reproduces DMA pixel
+  // -for-pixel yet immunises us against SudokuPad changing the alpha feature, and
+  // gives us a fully-owned base for our own tweaks + gap fixes (gray/translucent
+  // -dark objects that vanish, non-exact white labels, bright control buttons),
+  // which the rest of this script layers on top. If SudokuPad's DMA ever changes
+  // and we want to track it, re-enumerate its `.setting-darkmode` rules from the
+  // console and refresh FROZEN_DARK_CSS. Captured from style.css + sudokupad
+  // -colors.css @ v0.611.0.
   // ═══════════════════════════════════════════════════════════════════════════
+
+  var FROZEN_DARK_CSS = `
+  .spdr-dark {
+    --dm-black: #1a1a1a;
+    --dm-white: #eee;
+    --dm-black-alpha: rgba(18,18,18,0.7);
+    --dm-userblue: #5f95ec;
+    --dm-rulesbg: #265016;
+    --dm-button-color: #8522c3;
+    --dm-button-border: #eee;
+    --dm-button-bg: #242424;
+    --dm-button-hover: #333;
+    --dm-button-dark: #6a1b9a;
+    --dm-button-dark-hover: #9f3cdd;
+    --color-white: var(--dm-black);
+    --color-black: var(--dm-white);
+    --body-bg: var(--dm-black);
+    --button-color: #8522c3;
+    --button-bg: var(--dm-button-bg);
+    --controls-button-text: var(--dm-white);
+    --controls-button-bg: var(--dm-button-dark);
+    --controls-button-hover-bg: var(--dm-button-dark-hover);
+    --puzzle-given: var(--dm-white);
+    --puzzle-givenCornermark: var(--body-bg);
+    --puzzle-givenCandidate: var(--body-bg);
+    --puzzle-value: #5f95ec;
+    --puzzle-candidate: #5f95ec;
+    --puzzle-pencilmark: #5f95ec;
+    --puzzle-outlines: rgba(26,26,26,0.7);
+    --outlinefilter: url("#outlinefilter_dark");
+  }
+  .spdr-dark .cell-grid { stroke: var(--dm-white); }
+  .spdr-dark .cage-box { stroke: var(--dm-white); }
+  .spdr-dark .textbg_ffffff { fill: var(--dm-black); }
+  .spdr-dark [stroke="#000"], .spdr-dark [stroke="#000000"] { stroke: var(--dm-white); }
+  .spdr-dark [fill="#000"], .spdr-dark [fill="#000000"] { fill: var(--dm-white); }
+  .spdr-dark [stroke="rgba(255,255,255,0.7)"] { stroke: var(--dm-black-alpha); }
+  .spdr-dark [fill="rgba(255,255,255,0.7)"] { fill: var(--dm-black-alpha); }
+  .spdr-dark [stroke="#fff"], .spdr-dark [stroke="#ffffff"], .spdr-dark [stroke="#FFF"], .spdr-dark [stroke="#FFFFFF"] { stroke: var(--dm-black); }
+  .spdr-dark [fill="#fff"], .spdr-dark [fill="#ffffff"], .spdr-dark [fill="#FFF"], .spdr-dark [fill="#FFFFFF"] { fill: var(--dm-black); }
+  .spdr-dark [bordercolor="#fff"], .spdr-dark [bordercolor="#ffffff"], .spdr-dark [bordercolor="#FFF"], .spdr-dark [bordercolor="#FFFFFF"] { stroke: var(--dm-black); }
+  .spdr-dark [stroke="#000000"] { stroke: var(--dm-white); }
+  .spdr-dark [stroke="rgba(0, 0, 0, 1)"] { stroke: var(--dm-white); }
+  .spdr-dark .cell-given, .spdr-dark .cell-pencilmark.givenCornermark, .spdr-dark .cell-candidate .given { color: var(--dm-white); fill: var(--dm-white); }
+  .spdr-dark rect.textbg[fill="#FFF"], .spdr-dark rect.textbg[fill="#FFFFFF"], .spdr-dark rect.textbg[fill="#fff"], .spdr-dark rect.textbg[fill="#ffffff"], .spdr-dark rect.feature-xv[fill="#FFF"], .spdr-dark rect.feature-xv[fill="#FFFFFF"], .spdr-dark rect.feature-xv[fill="#fff"], .spdr-dark rect.feature-xv[fill="#ffffff"] { fill: var(--dm-black); }
+  .spdr-dark rect.feature-kropki[fill="#000" i], .spdr-dark rect.feature-kropki[fill="#000000" i] { stroke: var(--dm-white); fill: var(--dm-black); }
+  .spdr-dark text.feature-kropki[fill="#000" i], .spdr-dark text.feature-kropki[fill="#000000" i] { fill: var(--dm-black); }
+  .spdr-dark rect.feature-kropki[fill="#fff" i], .spdr-dark rect.feature-kropki[fill="#ffffff" i] { stroke: var(--dm-black); fill: var(--dm-white); }
+  .spdr-dark text.feature-kropki[fill="#fff" i], .spdr-dark text.feature-kropki[fill="#ffffff" i] { fill: var(--dm-white); }
+  .spdr-dark .dialog { color: var(--dm-white); background-color: var(--dm-black); }
+  .spdr-dark #controls { color: var(--dm-white); }
+  .spdr-dark .puzzle-rules { background-color: var(--dm-rulesbg); }
+  .spdr-dark .dialog .setting-item label { color: var(--dm-button-color); }`;
+
   (function lockDRUseNative() {
     // 1. DarkReader lock — DR bypasses any page whose <head> carries this meta.
     function addLock() {
@@ -52,20 +114,40 @@
       ho.observe(document.documentElement, { childList: true, subtree: true });
     }
 
-    // 2. Enable SudokuPad's native dark mode. Persist the site's own setting so
-    //    its toggle reflects it and it re-applies on normal init, AND add the
-    //    body class live so we don't depend on a reload or on script load order.
+    // 2. Force SudokuPad's own dark mode OFF. We run at document-start, before
+    //    SudokuPad's bundle reads the setting, so it never adds .setting-darkmode
+    //    on its own and the in-app toggle reflects "off" — one consistent base.
     try {
       var SS = 'svencodes_settings';
       var s = JSON.parse(localStorage.getItem(SS) || '{}');
-      if (s.darkmode !== true) { s.darkmode = true; localStorage.setItem(SS, JSON.stringify(s)); }
+      if (s.darkmode !== false) { s.darkmode = false; localStorage.setItem(SS, JSON.stringify(s)); }
     } catch (e) {}
-    function applyNativeClass() {
-      if (!document.body) return false;
-      document.body.classList.add('setting-darkmode');
+
+    // 3. Inject our frozen copy of DMA (keyed on our own .spdr-dark class).
+    function addFrozenCSS() {
+      if (document.getElementById('spdr-frozen-dark')) return true;
+      var head = document.head || document.documentElement;
+      if (!head) return false;
+      var st = document.createElement('style');
+      st.id = 'spdr-frozen-dark';
+      st.textContent = FROZEN_DARK_CSS;
+      head.appendChild(st);
       return true;
     }
-    if (!applyNativeClass()) document.addEventListener('DOMContentLoaded', applyNativeClass);
+    if (!addFrozenCSS()) {
+      var so = new MutationObserver(function () { if (addFrozenCSS()) so.disconnect(); });
+      so.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // 4. Add our own dark class to <body> (and strip SudokuPad's, defensively, in
+    //    case its bundle managed to set it before our setting write landed).
+    function applyDarkClass() {
+      if (!document.body) return false;
+      document.body.classList.add('spdr-dark');
+      document.body.classList.remove('setting-darkmode');
+      return true;
+    }
+    if (!applyDarkClass()) document.addEventListener('DOMContentLoaded', applyDarkClass);
   })();
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -80,7 +162,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.4.0';
+  var SCRIPT_VERSION = '3.5.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -227,11 +309,12 @@
   function isDarkReader() {
     return document.documentElement.getAttribute('data-darkreader-scheme') === 'dark';
   }
-  // The page's dark substrate is now SudokuPad's NATIVE dark mode (we lock DR out
-  // at the top). isDarkMode() is true under either, so the script boots on native
-  // and still works if DR somehow remains (e.g. lock failed on an old DR build).
+  // The page's dark substrate is now our own frozen DMA copy under the .spdr-dark
+  // body class (we lock DR out and force SudokuPad's own dark mode off at the top).
+  // isDarkMode() is true under either, so the script still works if DR somehow
+  // remains (e.g. lock failed on an old DR build).
   function isNativeDark() {
-    return !!(document.body && document.body.classList.contains('setting-darkmode'));
+    return !!(document.body && document.body.classList.contains('spdr-dark'));
   }
   function isDarkMode() {
     return isNativeDark() || isDarkReader();
@@ -478,15 +561,15 @@
     // carry an inline !important light bg that no stylesheet can beat, so they're
     // darkened imperatively in darkenInlineToolButtons() instead.
     css += `
-    body.setting-darkmode #controls .controls-app button:not(.selected):not(.selectedperm),
-    body.setting-darkmode #controls .controls-tool button:not(.selected):not(.selectedperm),
-    body.setting-darkmode #controls .controls-aux button:not(.selected):not(.selectedperm) {
+    body.spdr-dark #controls .controls-app button:not(.selected):not(.selectedperm),
+    body.spdr-dark #controls .controls-tool button:not(.selected):not(.selectedperm),
+    body.spdr-dark #controls .controls-aux button:not(.selected):not(.selectedperm) {
       background: #2a2a2e !important;
       color: #b568e4 !important;
     }
-    body.setting-darkmode #controls .controls-app button:not(.selected):not(.selectedperm):hover,
-    body.setting-darkmode #controls .controls-tool button:not(.selected):not(.selectedperm):hover,
-    body.setting-darkmode #controls .controls-aux button:not(.selected):not(.selectedperm):hover {
+    body.spdr-dark #controls .controls-app button:not(.selected):not(.selectedperm):hover,
+    body.spdr-dark #controls .controls-tool button:not(.selected):not(.selectedperm):hover,
+    body.spdr-dark #controls .controls-aux button:not(.selected):not(.selectedperm):hover {
       background: #3a3a42 !important;
     }`;
 
@@ -517,7 +600,7 @@
   function darkenInlineToolButtons() {
     var els = document.querySelectorAll('#controls .controls-tool [data-collapsed-w]');
     if (!els.length) return false;
-    var dark = document.body.classList.contains('setting-darkmode');
+    var dark = document.body.classList.contains('spdr-dark');
     for (var i = 0; i < els.length; i++) {
       var el = els[i];
       if (dark) {
@@ -1766,8 +1849,8 @@
     var obs = new MutationObserver(function () {
       if (isDarkMode() && document.getElementById('svgrenderer')) { obs.disconnect(); startLabelRectPatch(); }
     });
-    // Watch DR's scheme attr (legacy) AND the body class (native dark mode lands
-    // there once SudokuPad / our top block applies setting-darkmode).
+    // Watch DR's scheme attr (legacy) AND the body class (our dark substrate lands
+    // there once our top block applies the .spdr-dark class).
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-darkreader-scheme'] });
     obs.observe(document.body || document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   }
