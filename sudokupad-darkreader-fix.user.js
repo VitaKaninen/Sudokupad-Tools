@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.194.0
+// @version      2.195.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -22,6 +22,53 @@
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // Dark substrate: lock DarkReader out, ride SudokuPad's native dark mode
+  //
+  // We no longer fight DarkReader. We evict it from SudokuPad only — injecting
+  // <meta name="darkreader-lock"> makes the extension bypass this page entirely
+  // (DR keeps working on every other site) — and instead ride SudokuPad's own
+  // .setting-darkmode theme. Native dark mode is author-built and SEMANTIC (it
+  // knows what a Kropki dot / cage / given is) and it's static CSS, so there is
+  // no MutationObserver war, no cascade fight, and nothing to "restore" on
+  // toggle. It leaves a small, finite set of gaps — gray/translucent-dark
+  // objects aren't inverted (they vanish), some non-exact white labels are
+  // missed, control buttons stay bright — which the rest of this script fixes.
+  // (Side effect: this flips SudokuPad's own `darkmode` setting on, persistently.)
+  // ═══════════════════════════════════════════════════════════════════════════
+  (function lockDRUseNative() {
+    // 1. DarkReader lock — DR bypasses any page whose <head> carries this meta.
+    function addLock() {
+      if (document.querySelector('meta[name="darkreader-lock"]')) return true;
+      var head = document.head || document.documentElement;
+      if (!head) return false;
+      var m = document.createElement('meta');
+      m.name = 'darkreader-lock';
+      head.appendChild(m);
+      return true;
+    }
+    if (!addLock()) {
+      // <head> may not exist yet at document-start — add it the moment it does.
+      var ho = new MutationObserver(function () { if (addLock()) ho.disconnect(); });
+      ho.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // 2. Enable SudokuPad's native dark mode. Persist the site's own setting so
+    //    its toggle reflects it and it re-applies on normal init, AND add the
+    //    body class live so we don't depend on a reload or on script load order.
+    try {
+      var SS = 'svencodes_settings';
+      var s = JSON.parse(localStorage.getItem(SS) || '{}');
+      if (s.darkmode !== true) { s.darkmode = true; localStorage.setItem(SS, JSON.stringify(s)); }
+    } catch (e) {}
+    function applyNativeClass() {
+      if (!document.body) return false;
+      document.body.classList.add('setting-darkmode');
+      return true;
+    }
+    if (!applyNativeClass()) document.addEventListener('DOMContentLoaded', applyNativeClass);
+  })();
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // Settings
   //
   // Defaults match the actual on-screen colours after DarkReader's conversion,
@@ -33,7 +80,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.194.0';
+  var SCRIPT_VERSION = '2.195.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -176,6 +223,15 @@
   }
   function isDarkReader() {
     return document.documentElement.getAttribute('data-darkreader-scheme') === 'dark';
+  }
+  // The page's dark substrate is now SudokuPad's NATIVE dark mode (we lock DR out
+  // at the top). isDarkMode() is true under either, so the script boots on native
+  // and still works if DR somehow remains (e.g. lock failed on an old DR build).
+  function isNativeDark() {
+    return !!(document.body && document.body.classList.contains('setting-darkmode'));
+  }
+  function isDarkMode() {
+    return isNativeDark() || isDarkReader();
   }
   // Parse hex (3/4/6/8 digit) or rgb()/rgba() into {r,g,b,a}. Returns null on failure.
   function parseColor(str) {
@@ -1575,12 +1631,14 @@
   }
 
   function waitForDRAndSVG() {
-    if (isDarkReader() && document.getElementById('svgrenderer')) { startLabelRectPatch(); return; }
+    if (isDarkMode() && document.getElementById('svgrenderer')) { startLabelRectPatch(); return; }
     var obs = new MutationObserver(function () {
-      if (isDarkReader() && document.getElementById('svgrenderer')) { obs.disconnect(); startLabelRectPatch(); }
+      if (isDarkMode() && document.getElementById('svgrenderer')) { obs.disconnect(); startLabelRectPatch(); }
     });
+    // Watch DR's scheme attr (legacy) AND the body class (native dark mode lands
+    // there once SudokuPad / our top block applies setting-darkmode).
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-darkreader-scheme'] });
-    obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    obs.observe(document.body || document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   }
   waitForDRAndSVG();
 
