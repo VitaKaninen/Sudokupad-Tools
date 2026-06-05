@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.2.0
+// @version      3.3.0
 // @description  Locks DarkReader out of SudokuPad and rides the site's own native dark mode, fixing the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -80,7 +80,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.2.0';
+  var SCRIPT_VERSION = '3.3.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -465,6 +465,26 @@
       --cell-color-r: rgb(170, 12, 9) !important;
       --cell-color-s: rgb(47, 106, 49) !important;
       --cell-color-t: rgb(9, 89, 170) !important;
+    }`;
+
+    // Native dark mode leaves SudokuPad's app/tool/aux control buttons on their
+    // light #eee background (it themes only #controls TEXT), so they glare against
+    // the dark page. Darken them to a subtle elevated surface with light-purple
+    // icons. Scoped :not(.selected):not(.selectedperm) so the active-tool / toggled
+    // highlight (purple bg + white icon) is preserved, and to the app/tool/aux
+    // families only — the digit-entry buttons use their own --controls-button-*
+    // purple and already read fine, so they're untouched.
+    css += `
+    body.setting-darkmode #controls .controls-app button:not(.selected):not(.selectedperm),
+    body.setting-darkmode #controls .controls-tool button:not(.selected):not(.selectedperm),
+    body.setting-darkmode #controls .controls-aux button:not(.selected):not(.selectedperm) {
+      background: #2a2a2e !important;
+      color: #b568e4 !important;
+    }
+    body.setting-darkmode #controls .controls-app button:not(.selected):not(.selectedperm):hover,
+    body.setting-darkmode #controls .controls-tool button:not(.selected):not(.selectedperm):hover,
+    body.setting-darkmode #controls .controls-aux button:not(.selected):not(.selectedperm):hover {
+      background: #3a3a42 !important;
     }`;
 
     return css;

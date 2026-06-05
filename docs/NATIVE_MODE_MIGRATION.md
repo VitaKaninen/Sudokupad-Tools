@@ -21,7 +21,7 @@ Re-base onto native, then **delete the DR code each step orphans** (don't defer 
 - [ ] Generalize/remove the `inDR` branches in `fixCageBox` (white-eraser repaint; restore-DR-var on borders-off).
 - [ ] **Amputate the restore-to-DR machinery** (`captureDrInline` / `restoreToDr` / `spdrDrFill` / `spdrDrStroke` and every `--darkreader-*` var dance). With DR gone there is nothing to restore to — on disable just clear our inline and let native CSS show.
 - [ ] Colour-picker `--cell-color-*` swatches under native (the `[data-darkreader-scheme]` specificity-bump rule is DR-only — confirm native handles them or add our own).
-- [ ] Bright control buttons — `#control-settings/-fullscreen/-rules` keep `background:#eee`; native themes only `#controls` text. Add one darkening rule.
+- [x] **Bright control buttons (v3.3.0)** — native themed only `#controls` *text*, leaving the app/tool/aux buttons on `#eee`. Added a buildCSS rule darkening `body.setting-darkmode #controls .controls-{app,tool,aux} button:not(.selected):not(.selectedperm)` to `#2a2a2e` bg + `#b568e4` icons (hover `#3a3a42`); `.selected`/`.selectedperm` highlight + the purple digit-entry buttons untouched. NB they're a *separate* family from `--controls-button-*` (those drive the digit buttons). On-screen killer-calc (`.killercalc-onscreen`, `#eee`/black) still bright — deferred (niche tool).
 - [ ] Gap-audit findings (DR-vs-native diff across catalog buckets) — fold results here.
 
 ## DR-reference cleanup — timing policy (the "don't forget" item)
