@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.0.1
+// @version      3.1.0
 // @description  Locks DarkReader out of SudokuPad and rides the site's own native dark mode, fixing the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -80,7 +80,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.0.1';
+  var SCRIPT_VERSION = '3.1.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -236,6 +236,71 @@
   function isDarkMode() {
     return isNativeDark() || isDarkReader();
   }
+
+  // ── Diagnostics: window.spdrGapScan() ──────────────────────────────────────
+  // Proactively surface native-dark-mode GAPS without visual inspection. A "gap"
+  // here is a board element that PAINTS something but renders at near-zero
+  // contrast against the page background (invisible on dark) AND that we did NOT
+  // fix (no !important inline of ours — object-shaded / label-bg'd elements carry
+  // our !important and are excluded). Run on any puzzle: spdrGapScan() → {gaps,
+  // flags}, also console.table'd. Catches the "gray/dark object you can't see"
+  // class. NB it does NOT catch wrong-but-VISIBLE shade mismatches (e.g. a circle
+  // that's light-gray where it should be near-black) — those have high contrast;
+  // use the DR-vs-native diff procedure in docs/NATIVE_MODE_MIGRATION.md for them.
+  function spdrGapScan(opts) {
+    opts = opts || {};
+    var TH = opts.threshold || 1.25;
+    var svg = document.getElementById('svgrenderer');
+    if (!svg) return { error: 'no #svgrenderer' };
+    function lum(r, g, b) {
+      function f(c) { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    }
+    function rgb(s) {
+      var m = /rgba?\(([^)]+)\)/.exec(s || ''); if (!m) return null;
+      var p = m[1].split(',').map(parseFloat);
+      return { r: p[0], g: p[1], b: p[2], a: p[3] == null ? 1 : p[3] };
+    }
+    var bg = rgb(getComputedStyle(document.body).backgroundColor) || { r: 26, g: 26, b: 26, a: 1 };
+    var bgL = lum(bg.r, bg.g, bg.b);
+    function over(c, xa) { // composite c (alpha c.a*xa) over the page bg, return contrast
+      var a = c.a * xa;
+      var r = c.r * a + bg.r * (1 - a), g = c.g * a + bg.g * (1 - a), b = c.b * a + bg.b * (1 - a);
+      var l = lum(r, g, b), k = (Math.max(l, bgL) + 0.05) / (Math.min(l, bgL) + 0.05);
+      return { a: a, c: k, eff: 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')' };
+    }
+    function paint(el) { // effective paint = the more-visible of fill / stroke
+      var cs = getComputedStyle(el), op = parseFloat(cs.opacity); if (!isFinite(op)) op = 1;
+      var best = null, w = null, c, o, r;
+      c = rgb(cs.fill); o = parseFloat(cs.fillOpacity); if (!isFinite(o)) o = 1;
+      if (c && cs.fill !== 'none') { r = over(c, o * op); if (r.a > 0.06) { best = r; w = 'fill'; } }
+      c = rgb(cs.stroke); o = parseFloat(cs.strokeOpacity); if (!isFinite(o)) o = 1;
+      var sw = parseFloat(cs.strokeWidth) || 0;
+      if (c && cs.stroke !== 'none' && sw > 0) { r = over(c, o * op); if (r.a > 0.06 && (!best || r.c > best.c)) { best = r; w = 'stroke'; } }
+      return best ? { best: best, which: w } : null;
+    }
+    function ours(el) { // did WE fix it? our fixes are inline !important
+      return el.style.getPropertyPriority('fill') === 'important' || el.style.getPropertyPriority('stroke') === 'important';
+    }
+    var sel = '#underlay rect,#underlay path,#overlay rect,#overlay path,#arrows path,#cages path,#cell-colors > *,#cell-grids path';
+    var els = [].slice.call(svg.querySelectorAll(sel));
+    var csz = (typeof getGridCellSize === 'function' && getGridCellSize(svg)) || 64;
+    var seen = {}, flags = [];
+    els.forEach(function (el) {
+      var p = paint(el); if (!p || p.best.c >= TH || ours(el)) return;
+      var center = null;
+      try { var b = el.getBBox(); center = 'R' + (Math.floor((b.y + b.height / 2) / csz) + 1) + 'C' + (Math.floor((b.x + b.width / 2) / csz) + 1); } catch (e) {}
+      var key = center + '|' + (el.getAttribute('fill') || '') + '|' + (el.getAttribute('stroke') || '') + '|' + p.which;
+      if (seen[key]) return; seen[key] = 1;
+      flags.push({ rc: center, layer: el.parentElement && el.parentElement.id, cls: el.getAttribute('class'),
+        fill: el.getAttribute('fill'), stroke: el.getAttribute('stroke'), via: p.which, eff: p.best.eff, contrast: +p.best.c.toFixed(2) });
+    });
+    var out = { url: location.pathname, edition: window.spdrEdition, nativeDark: isNativeDark(), scanned: els.length, gaps: flags.length, flags: flags };
+    if (!opts.quiet) { try { console.log('[spdrGapScan]', out.gaps, 'gap(s) /', out.scanned, 'scanned —', out.url); if (flags.length) console.table(flags); } catch (e) {} }
+    return out;
+  }
+  window.spdrGapScan = spdrGapScan;
+
   // Parse hex (3/4/6/8 digit) or rgb()/rgba() into {r,g,b,a}. Returns null on failure.
   function parseColor(str) {
     if (!str) return null;
