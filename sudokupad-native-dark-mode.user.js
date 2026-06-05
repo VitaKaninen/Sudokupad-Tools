@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.6.0
+// @version      3.7.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -90,16 +90,16 @@
 
   var FROZEN_DARK_CSS = `
   .spdr-dark {
-    --dm-black: #1a1a1a;
-    --dm-white: #eee;
+    --dm-black: #181A1B;
+    --dm-white: #e8e6e3;
     --dm-black-alpha: rgba(18,18,18,0.7);
     --dm-userblue: #5f95ec;
     --dm-rulesbg: #265016;
     --dm-button-color: #8522c3;
-    --dm-button-border: #eee;
+    --dm-button-border: #e8e6e3;
     --dm-button-bg: #242424;
     --dm-button-hover: #333;
-    --dm-button-dark: #6a1b9a;
+    --dm-button-dark: #55167B;
     --dm-button-dark-hover: #9f3cdd;
     --color-white: var(--dm-black);
     --color-black: var(--dm-white);
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.6.0';
+  var SCRIPT_VERSION = '3.7.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -608,7 +608,7 @@
     body.spdr-dark #controls .controls-app button:not(.selected):not(.selectedperm),
     body.spdr-dark #controls .controls-tool button:not(.selected):not(.selectedperm),
     body.spdr-dark #controls .controls-aux button:not(.selected):not(.selectedperm) {
-      background: #2a2a2e !important;
+      background: #222426 !important;
       color: #b568e4 !important;
     }
     body.spdr-dark #controls .controls-app button:not(.selected):not(.selectedperm):hover,
@@ -651,7 +651,7 @@
         if (!el.hasAttribute('data-spdr-orig-bg')) {
           el.setAttribute('data-spdr-orig-bg', el.style.getPropertyValue('background-color'));
         }
-        el.style.setProperty('background-color', '#2a2a2e', 'important');
+        el.style.setProperty('background-color', '#222426', 'important');
         el.style.setProperty('color', '#b568e4', 'important');
       } else if (el.hasAttribute('data-spdr-orig-bg')) {
         var ob = el.getAttribute('data-spdr-orig-bg');
@@ -1814,7 +1814,14 @@
     // the label-bg colour, or it goes dark-on-dark. (Issue: clover's "Diamond Ring".)
     if (isKropkiDotRect(rect)) return;
     if (settings.labelBgEnabled) {
-      var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity);
+      // Preserve the rect's OWN authored alpha so deliberately-translucent shapes
+      // stay see-through. Opaque label boxes (#FFFFFF, alpha 1) are unaffected;
+      // translucent endpoint discs like the between/lockout-line bulbs (#ffffff80,
+      // alpha 0.5) keep that 0.5 so the line reads through them — matching how
+      // DarkReader darkens a fill while preserving its alpha. We multiply rather
+      // than replace so labelBgOpacity still scales these proportionally.
+      var srcA = (fc && fc.a != null) ? fc.a : 1;
+      var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity * srcA);
       rect.style.setProperty('fill', bg, 'important');
       rect.removeAttribute('data-darkreader-inline-fill');
       rect.style.removeProperty('--darkreader-inline-fill');

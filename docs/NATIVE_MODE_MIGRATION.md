@@ -20,7 +20,7 @@ The pivot (branch `native-mode`, started 2026-06-05): **stop fighting DarkReader
 
 ## Functional migration (TODO)
 Re-base onto native, then **delete the DR code each step orphans** (don't defer dead code):
-- [ ] Re-base DR-sampled colour defaults (`#181A1B`, `#dddad6`, `#e8e6e3`, swatch palette) → native palette (`--dm-black:#1a1a1a`, `--dm-white:#eee`, …). Keep "enabling a section = no visible change".
+- [x] **Palette target = the DR-fix *look*, not raw DMA (decided 2026-06-05, v3.7.0).** The frozen-DMA palette is the *baseline* (predictable, ours, no DR fight); the desired *appearance* is the 2.x DR-fix look the user already likes. So we tuned the frozen vars toward DR's sampled values rather than away from them: `--dm-black #1a1a1a→#181A1B`, `--dm-white #eee→#e8e6e3` (+ `--dm-button-border`), `--dm-button-dark #6a1b9a→#55167B`, app/tool/aux button bg `#2a2a2e→#222426`. `givenColor`/`labelBgColor` were already DR values. NB this intentionally *reverses* the old "move off DR colours onto DMA" framing — don't re-flip them back.
 - [ ] Re-key the label-bg injected CSS branch from `body.setting-uitheme-purple` → `body.spdr-dark` (so it's theme-independent, not just purple).
 - [ ] Generalize/remove the `inDR` branches in `fixCageBox` (white-eraser repaint; restore-DR-var on borders-off).
 - [ ] **Amputate the restore-to-DR machinery** (`captureDrInline` / `restoreToDr` / `spdrDrFill` / `spdrDrStroke` and every `--darkreader-*` var dance). With DR gone there is nothing to restore to — on disable just clear our inline and let native CSS show.
