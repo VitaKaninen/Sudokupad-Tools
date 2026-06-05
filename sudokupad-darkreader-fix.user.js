@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – DarkReader Fix
 // @namespace    https://github.com/VitaKaninen
-// @version      2.195.0
+// @version      2.196.0
 // @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -80,7 +80,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.195.0';
+  var SCRIPT_VERSION = '2.196.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1531,7 +1531,14 @@
   // ── Part 4: cage label background rects ───────────────────────────────────
   // Note: white-fill rects are only treated as labels when they're NOT inside
   // #underlay. Underlay rects are shape backgrounds, not text labels.
-  var LABEL_RECT_SEL = 'rect.cage-label, rect.textbg, rect[fill="#FFFFFF"]:not(#underlay *), rect[fill="#ffffff"]:not(#underlay *), rect[fill="white"]:not(#underlay *)';
+  // The white arm is a case-insensitive PREFIX (`^="#ffffff"`) so it also catches
+  // TRANSLUCENT white (`#ffffff80`, `#ffffffXX`), not just opaque `#FFFFFF`. Those
+  // are between/lockout-line endpoint circles; DarkReader used to darken them, so
+  // under native dark mode nothing did and they rendered light-gray (R8C5/R9C7 on
+  // the test puzzle). fixLabelRect's internal guards still skip transparent (a===0),
+  // saturated, and Kropki dots — colored fills like #FF0000/#FFA575 don't share the
+  // #ffffff prefix, so only white-at-any-alpha is newly included.
+  var LABEL_RECT_SEL = 'rect.cage-label, rect.textbg, rect[fill^="#ffffff" i]:not(#underlay *), rect[fill="white" i]:not(#underlay *)';
 
   function fixLabelRect(rect) {
     // A label background is white/near-white (cage sums, little-killer clues, XV /
