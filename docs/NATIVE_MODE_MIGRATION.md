@@ -39,4 +39,5 @@ Re-base onto native, then **delete the DR code each step orphans** (don't defer 
   - [ ] `PROJECT_SUMMARY.md` — rewrite fresh (it's periodically rewritten anyway) once the migration settles.
   - [ ] Repo rename `Sudokupad-darkreader-fix` → TBD (decide later; affects all raw URLs).
   - [ ] **Remove the TEMP auto gap-scan badge** (the `GAPSCAN_AUTO` block + `startGapAutoScan`/`renderGapBadge` + the `buildAllUI` call). `window.spdrGapScan()` itself can stay as a manual helper or go.
+  - [ ] **Remove the A/B TEST HARNESS** (v3.6.0 / v2.196.0) — the fenced `A/B TEST HARNESS — REMOVE BEFORE RELEASE` block at the top of **both** files (right after `'use strict';`). Lets both scripts stay enabled in TM while only one runs per tab (hash-gated `#variant=a|b` + on-page radio bar); test-only. `grep -n "A/B TEST HARNESS"` finds it; delete the block in each. Once `native-mode` is the sole mainline this is pure dead weight.
   - [ ] **Merge `native-mode` → `main`**: reconcile `@name` / `@namespace` / `@updateURL` / filename for the mainline.
