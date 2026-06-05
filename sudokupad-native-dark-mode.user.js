@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.3.0
+// @version      3.4.0
 // @description  Locks DarkReader out of SudokuPad and rides the site's own native dark mode, fixing the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -80,7 +80,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.3.0';
+  var SCRIPT_VERSION = '3.4.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -473,7 +473,10 @@
     // icons. Scoped :not(.selected):not(.selectedperm) so the active-tool / toggled
     // highlight (purple bg + white icon) is preserved, and to the app/tool/aux
     // families only — the digit-entry buttons use their own --controls-button-*
-    // purple and already read fine, so they're untouched.
+    // purple and already read fine, so they're untouched. NOTE: this only reaches
+    // <button> elements; the Fill / Clear / Clear All <div>s in .controls-tool
+    // carry an inline !important light bg that no stylesheet can beat, so they're
+    // darkened imperatively in darkenInlineToolButtons() instead.
     css += `
     body.setting-darkmode #controls .controls-app button:not(.selected):not(.selectedperm),
     body.setting-darkmode #controls .controls-tool button:not(.selected):not(.selectedperm),
@@ -502,8 +505,41 @@
   rebuildStyleTag();
 
   var easyShadeSwatchRefresh = null; // set by buildEasyRegionShadeButton; keeps its swatches in sync with the palette
+
+  // Fill / Clear / Clear All sit in .controls-tool next to the real <button>s,
+  // but SudokuPad renders them as absolutely-positioned <div>s whose light #eee
+  // background is set INLINE with !important. The v3.3.0 stylesheet rule that
+  // darkens the app/tool/aux buttons can't reach them: it only matches <button>,
+  // and even a !important stylesheet rule loses to an inline !important one. So
+  // we override these imperatively. Only background + colour are touched (the
+  // 1px #ccc border is already what the real buttons keep), and the native bg is
+  // saved so turning native dark mode back off restores them.
+  function darkenInlineToolButtons() {
+    var els = document.querySelectorAll('#controls .controls-tool [data-collapsed-w]');
+    if (!els.length) return false;
+    var dark = document.body.classList.contains('setting-darkmode');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (dark) {
+        if (!el.hasAttribute('data-spdr-orig-bg')) {
+          el.setAttribute('data-spdr-orig-bg', el.style.getPropertyValue('background-color'));
+        }
+        el.style.setProperty('background-color', '#2a2a2e', 'important');
+        el.style.setProperty('color', '#b568e4', 'important');
+      } else if (el.hasAttribute('data-spdr-orig-bg')) {
+        var ob = el.getAttribute('data-spdr-orig-bg');
+        if (ob) el.style.setProperty('background-color', ob, 'important');
+        else el.style.removeProperty('background-color');
+        el.style.removeProperty('color');
+        el.removeAttribute('data-spdr-orig-bg');
+      }
+    }
+    return true;
+  }
+
   function applySettings() {
     rebuildStyleTag();
+    darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
     if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
@@ -6188,6 +6224,13 @@
       var timer2 = setInterval(function () {
         attempts2++;
         if (buildEasyRegionShadeButton() || attempts2 > 100) clearInterval(timer2);
+      }, 100);
+    }
+    if (!darkenInlineToolButtons()) {
+      var attempts3 = 0;
+      var timer3 = setInterval(function () {
+        attempts3++;
+        if (darkenInlineToolButtons() || attempts3 > 100) clearInterval(timer3);
       }, 100);
     }
   }
