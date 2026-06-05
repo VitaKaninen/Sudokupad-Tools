@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.7.0
+// @version      3.8.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.7.0';
+  var SCRIPT_VERSION = '3.8.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -615,6 +615,24 @@
     body.spdr-dark #controls .controls-tool button:not(.selected):not(.selectedperm):hover,
     body.spdr-dark #controls .controls-aux button:not(.selected):not(.selectedperm):hover {
       background: #3a3a42 !important;
+    }`;
+
+    // Purple buttons: the digit-entry pad and any selected/toggled highlight are
+    // painted by SudokuPad's purple theme via --main-color (#6a1b9a). DR darkens
+    // that to #55167B; match it so the digit pad + active-tool highlight read like
+    // the DR build. (Our --dm-button-dark edit can't reach these — the
+    // .setting-uitheme-purple rule overrides --controls-button-bg to var(--main-color)
+    // at a cascade level our .spdr-dark var loses to, so override the bg directly.)
+    // Borders: SudokuPad gives every control button a bright 1px #ccc border (bare
+    // `button{}` rule); DR darkens it to #3e4446. Darken all control buttons to match.
+    css += `
+    body.spdr-dark #controls .controls-main button.digit,
+    body.spdr-dark #controls button.selected,
+    body.spdr-dark #controls button.selectedperm {
+      background: #55167B !important;
+    }
+    body.spdr-dark #controls button {
+      border-color: #3e4446 !important;
     }`;
 
     return css;
