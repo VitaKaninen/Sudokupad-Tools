@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         SudokuPad – DarkReader Fix
-// @namespace    https://github.com/VitaKaninen
-// @version      2.196.0
-// @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
+// @name         SudokuPad – Native Dark Mode
+// @namespace    https://github.com/VitaKaninen/native-mode
+// @version      3.0.0
+// @description  Locks DarkReader out of SudokuPad and rides the site's own native dark mode, fixing the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
 // @match        https://beta.sudokupad.app/*
@@ -10,8 +10,8 @@
 // @match        https://crackingthecryptic.com/*
 // @grant        none
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
-// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
+// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/native-mode/sudokupad-darkreader-fix.user.js
+// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/native-mode/sudokupad-darkreader-fix.user.js
 // ==/UserScript==
 
 (function () {
@@ -80,10 +80,13 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.196.0';
+  var SCRIPT_VERSION = '3.0.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
+  // Distinguishes this native-mode edition from the 2.x DarkReader-fighting one
+  // when both are installed in TamperMonkey for A/B testing (enable one at a time).
+  window.spdrEdition = 'native';
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
