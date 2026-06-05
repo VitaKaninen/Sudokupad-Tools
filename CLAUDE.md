@@ -1,12 +1,13 @@
 # SudokuPad – DarkReader Fix
 
-TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on SudokuPad (`sudokupad.app` and related domains) and adds quality-of-life features. Single file: `sudokupad-darkreader-fix.user.js`. Tested on Chrome + TamperMonkey + DarkReader.
+TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on SudokuPad (`sudokupad.app` and related domains) and adds quality-of-life features. Single file: `sudokupad-native-dark-mode.user.js`. Tested on Chrome + TamperMonkey + DarkReader.
 
 ## Project knowledge — read before substantive work
 - [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — current state, architecture, features, terminology, testing setup, test-puzzle URLs.
 - [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) — what beats DarkReader and what doesn't, dead ends, removed features. **Check this before debugging a rendering issue** so we don't re-solve a solved problem.
 - [`docs/Catalog/`](docs/Catalog/) — inventory of 1890 real puzzles + their render buckets, for predicting side effects of broad changes. **See "Cross-referencing the puzzle catalog" below before consulting it — query it, never read it into context.**
 - [`docs/CATALOG_AUDIT.md`](docs/CATALOG_AUDIT.md) — open checklist of catalog buckets the script may not handle yet (Group A first; **fog last**). Resolve each to handled-or-acknowledged; record the decision inline as you go.
+- [`docs/NATIVE_MODE_MIGRATION.md`](docs/NATIVE_MODE_MIGRATION.md) — **active work**: the migration off DarkReader onto SudokuPad's native dark mode (branch `native-mode`). Open functional TODOs + the DR-reference cleanup checklist. Read this if working on the `native-mode` branch.
 
 **Finding code:** the script is one ~4,200-line IIFE with 120+ functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region.
 
@@ -24,7 +25,7 @@ When you add, rename, or remove a function listed in the Code map — or add a n
 
 ### Commit + push after every edit
 After every version bump, immediately and without asking:
-1. `git add sudokupad-darkreader-fix.user.js` (and any docs you changed)
+1. `git add sudokupad-native-dark-mode.user.js` (and any docs you changed)
 2. `git commit -m "vX.Y.Z: <short description>"`
 3. `git push`
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
-// @namespace    https://github.com/VitaKaninen/native-mode
-// @version      3.0.0
+// @namespace    https://github.com/VitaKaninen
+// @version      3.0.1
 // @description  Locks DarkReader out of SudokuPad and rides the site's own native dark mode, fixing the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -10,8 +10,8 @@
 // @match        https://crackingthecryptic.com/*
 // @grant        none
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/native-mode/sudokupad-darkreader-fix.user.js
-// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/native-mode/sudokupad-darkreader-fix.user.js
+// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/native-mode/sudokupad-native-dark-mode.user.js
+// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/native-mode/sudokupad-native-dark-mode.user.js
 // ==/UserScript==
 
 (function () {
@@ -80,7 +80,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.0.0';
+  var SCRIPT_VERSION = '3.0.1';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
