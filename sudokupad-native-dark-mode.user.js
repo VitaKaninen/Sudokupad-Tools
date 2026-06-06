@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.11.0
+// @version      3.12.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -1859,13 +1859,50 @@
         });
       });
     });
-    // Greedy coloring — always ≤ 4 colors for planar graphs.
+    // Region adjacency is orthogonal-edge-only, so the graph is planar and the
+    // four-colour theorem guarantees a proper 4-colouring EXISTS. Plain greedy in
+    // index order does NOT find it in general (it can spill to a 5th/6th colour,
+    // which then indexes past the 4-entry palette → undefined fill → black rects),
+    // so we do a fast greedy pass and fall back to backtracking when it overflows.
     var colors = new Array(n).fill(-1);
+
+    // Fast path: greedy. Always proper (avoids coloured neighbours); usually ≤ 4.
+    var greedyMax = -1;
     for (var i = 0; i < n; i++) {
       var used = new Set();
       adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
-      for (var k = 0; k < 5; k++) { if (!used.has(k)) { colors[i] = k; break; } }
+      for (var k = 0; k < 4; k++) { if (!used.has(k)) { colors[i] = k; break; } }
+      if (colors[i] > greedyMax) greedyMax = colors[i];
     }
+    // If greedy coloured everything within 0–3, we're done.
+    var greedyOk = true;
+    for (var i = 0; i < n; i++) { if (colors[i] < 0) { greedyOk = false; break; } }
+    if (greedyOk) return colors;
+
+    // Backtracking proper 4-colouring (guaranteed to succeed for a planar graph).
+    // Order vertices by descending degree first — fewer backtracks in practice.
+    var order = [];
+    for (var i = 0; i < n; i++) order.push(i);
+    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
+    var bt = new Array(n).fill(-1);
+    function assign(pos) {
+      if (pos === n) return true;
+      var v = order[pos];
+      for (var col = 0; col < 4; col++) {
+        var ok = true;
+        adj[v].forEach(function (j) { if (bt[j] === col) ok = false; });
+        if (!ok) continue;
+        bt[v] = col;
+        if (assign(pos + 1)) return true;
+        bt[v] = -1;
+      }
+      return false;
+    }
+    if (assign(0)) return bt;
+
+    // Should be unreachable for a planar graph, but never return an out-of-palette
+    // index: clamp the greedy result into 0–3 so a region can't render black.
+    for (var i = 0; i < n; i++) { if (colors[i] < 0 || colors[i] > 3) colors[i] = 0; }
     return colors;
   }
 
