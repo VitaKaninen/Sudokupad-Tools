@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.13.0
+// @version      3.14.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -1948,18 +1948,36 @@
       });
     });
 
+    // Which groups are DISJOINT (a logical region whose cells form >1 orthogonally
+    // connected component — the scattered/disjoint-subset case). We want these
+    // pinned to the LAST palette colour (index 3) so the common regions keep the
+    // earlier colours: red (0) most common, then blue (1), then green (2), with the
+    // scattered region taking orange (3). Counting components from the cells (not
+    // the geo split) is the robust test for "appears as separate areas".
+    var groupCells = [];
+    for (var i = 0; i < numGroups; i++) groupCells.push([]);
+    regions.forEach(function (cells, ri) {
+      var g = groupOf[ri];
+      cells.forEach(function (rc) { groupCells[g].push(rc); });
+    });
+    var pinned = new Array(numGroups).fill(-1), anyDisjoint = false;
+    for (var g = 0; g < numGroups; g++) {
+      if (countComponents(groupCells[g]) > 1) { pinned[g] = 3; anyDisjoint = true; }
+    }
+
     // For ordinary (connected) regions the graph is planar and the four-colour
     // theorem guarantees a proper 4-colouring. Forcing a DISCONNECTED region to a
-    // single group can in theory push the requirement past 4 — so we try hard
-    // (greedy → backtracking) and, if no proper 4-colouring of the groups exists,
-    // fall back to UNGROUPED colouring (always 4-colourable), trading the
-    // disjoint-match for a guaranteed clash-free result. Plain greedy alone never
-    // suffices: it can spill to a 5th colour (index 4) → past the 4-entry palette
-    // → undefined fill → black borders.
-    var groupColors = colourGraph(numGroups, adj);
+    // single group — and further pinning it to colour 3 — can in theory exceed 4,
+    // so we degrade in priority order:
+    //   1. grouped + disjoint pinned to colour 3 (the desired look),
+    //   2. grouped, unpinned (disjoint still one colour, just maybe not orange),
+    //   3. ungrouped geometry colouring (always 4-colourable; clash-free).
+    // Plain greedy alone never suffices anyway: it can spill to a 5th colour
+    // (index 4) → past the 4-entry palette → undefined fill → black borders.
+    var groupColors = anyDisjoint ? colourGraph(numGroups, adj, pinned) : null;
+    if (!groupColors) groupColors = colourGraph(numGroups, adj, null);
     if (!groupColors && groupOf.some(function (g, i) { return g !== i; })) {
-      // Grouped colouring impossible — retry with identity grouping (geometry only).
-      return computeRegion4Colors(regions);
+      return computeRegion4Colors(regions);   // grouped impossible → geometry only
     }
     if (!groupColors) {
       // Identity grouping that still failed (shouldn't happen for planar input):
@@ -1969,12 +1987,51 @@
     return regions.map(function (_, ri) { return groupColors[groupOf[ri]]; });
   }
 
-  // Proper ≤4-colouring of a graph given adjacency sets. Greedy fast path, then
-  // descending-degree backtracking. Returns a colour array (0–3) or null if no
-  // proper 4-colouring exists.
-  function colourGraph(n, adj) {
+  // Number of orthogonally connected components in a list of [r,c] cells.
+  function countComponents(cells) {
+    if (cells.length <= 1) return cells.length;
+    var inSet = {};
+    cells.forEach(function (rc) { inSet[rc[0] + ',' + rc[1]] = true; });
+    var seen = {}, comps = 0;
+    cells.forEach(function (rc) {
+      var key0 = rc[0] + ',' + rc[1];
+      if (seen[key0]) return;
+      comps++;
+      var stack = [rc];
+      while (stack.length) {
+        var cur = stack.pop(), k = cur[0] + ',' + cur[1];
+        if (seen[k]) continue;
+        seen[k] = true;
+        var r = cur[0], c = cur[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var nk = nb[0] + ',' + nb[1];
+          if (inSet[nk] && !seen[nk]) stack.push(nb);
+        });
+      }
+    });
+    return comps;
+  }
+
+  // Proper ≤4-colouring of a graph given adjacency sets. `pinned[i]` (optional)
+  // forces node i to a fixed colour (0–3); pass -1 / omit for free nodes. Greedy
+  // fast path, then descending-degree backtracking over the free nodes. Returns a
+  // colour array (0–3) or null if no proper 4-colouring honouring the pins exists.
+  function colourGraph(n, adj, pinned) {
+    // Reject mutually-clashing pins up front (backtracking can't move them).
+    if (pinned) {
+      for (var i = 0; i < n; i++) {
+        if (pinned[i] < 0) continue;
+        var bad = false;
+        adj[i].forEach(function (j) { if (pinned[j] === pinned[i]) bad = true; });
+        if (bad) return null;
+      }
+    }
+
     var colors = new Array(n).fill(-1), ok = true;
+    if (pinned) for (var i = 0; i < n; i++) if (pinned[i] >= 0) colors[i] = pinned[i];
+    // Greedy over the free nodes (prefers low colours → red most common).
     for (var i = 0; i < n; i++) {
+      if (colors[i] >= 0) continue;
       var used = new Set();
       adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
       for (var k = 0; k < 4; k++) { if (!used.has(k)) { colors[i] = k; break; } }
@@ -1982,12 +2039,14 @@
     }
     if (ok) return colors;
 
+    // Backtracking over free nodes only; pins stay fixed.
     var order = [];
-    for (var i = 0; i < n; i++) order.push(i);
+    for (var i = 0; i < n; i++) if (!pinned || pinned[i] < 0) order.push(i);
     order.sort(function (a, b) { return adj[b].size - adj[a].size; });
     var bt = new Array(n).fill(-1);
+    if (pinned) for (var i = 0; i < n; i++) if (pinned[i] >= 0) bt[i] = pinned[i];
     function assign(pos) {
-      if (pos === n) return true;
+      if (pos === order.length) return true;
       var v = order[pos];
       for (var col = 0; col < 4; col++) {
         var clash = false;
