@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.12.0
+// @version      3.13.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -1842,45 +1842,146 @@
   // non-overlapping filled rect borders on each side of every region boundary —
   // one in each neighboring region's color — with no gaps and no overlaps.
 
-  function computeRegion4Colors(regions) {
+  // ── Logical-region (disjoint-subset) support ──────────────────────────────
+  // Some puzzles define a sudoku region whose cells are NOT contiguous (e.g.
+  // clover's "Scattered", https://sudokupad.app/2xjf6aw4m2 — one region is 9
+  // single cells spread across the grid). They are ONE region for digit logic,
+  // so all the pieces should share ONE colour. Geometry alone can't know this
+  // (the pieces don't touch), so we read the puzzle model: SudokuPad exposes the
+  // resolved regions as `app.puzzle.currentPuzzle.cages` entries with
+  // `type === 'region'` and a comma-separated RC-notation `cells` string
+  // (1-indexed, e.g. "r2c2,r5c8,..."). We cache a { 'r,c': logicalId } map keyed
+  // by the URL path, refresh it asynchronously (getApp() is async; the render
+  // path is sync), and repaint once when it lands. When unavailable (normal
+  // sudoku has no explicit region cages, or model not ready) → null, and region
+  // colouring falls back to pure geometry exactly as before.
+  var _modelRegionCache   = { key: null, map: null };
+  var _modelRegionPending = false;
+
+  function buildModelRegionMap(app) {
+    try {
+      var cp = app && app.puzzle && app.puzzle.currentPuzzle;
+      if (!cp || !Array.isArray(cp.cages)) return null;
+      var regs = cp.cages.filter(function (c) {
+        return c && c.type === 'region' && typeof c.cells === 'string' && c.cells;
+      });
+      if (regs.length < 2) return null;   // no explicit regions → use geometry
+      var map = {};
+      regs.forEach(function (cage, idx) {
+        cage.cells.split(',').forEach(function (rc) {
+          var m = /r(\d+)c(\d+)/i.exec(rc.trim());
+          if (m) map[(parseInt(m[1], 10) - 1) + ',' + (parseInt(m[2], 10) - 1)] = idx;
+        });
+      });
+      return map;
+    } catch (e) { return null; }
+  }
+
+  // Synchronous accessor for the current puzzle's logical-region map. Returns the
+  // cached map (possibly null = "known to have none") when fresh, else kicks off
+  // an async refresh and returns null for now; the refresh repaints when done.
+  function modelRegionCacheKey() { return location.pathname + location.search; }
+  function getModelRegionMap() {
+    var key = modelRegionCacheKey();
+    if (_modelRegionCache.key === key) return _modelRegionCache.map;
+    if (!_modelRegionPending && typeof Framework !== 'undefined' && Framework.getApp) {
+      _modelRegionPending = true;
+      Promise.resolve(Framework.getApp()).then(function (app) {
+        _modelRegionCache   = { key: modelRegionCacheKey(), map: buildModelRegionMap(app) };
+        _modelRegionPending = false;
+        var svg = document.getElementById('svgrenderer');
+        if (svg) drawRegionSplitBorders(svg);   // repaint with the now-known map
+      }).catch(function () { _modelRegionPending = false; });
+    }
+    return null;
+  }
+
+  // Map each geometric region (connected cell group) to a logical group id. With
+  // a model map, geometric pieces sharing the same logical region id collapse to
+  // one group (so disjoint pieces colour alike); without it, identity (each piece
+  // its own group, = original behaviour).
+  function buildRegionGroups(regions, modelMap) {
     var n = regions.length;
-    var adj = [];
-    for (var i = 0; i < n; i++) adj.push(new Set());
-    var cellRegion = {};
+    var groupOf = new Array(n);
+    if (!modelMap) { for (var i = 0; i < n; i++) groupOf[i] = i; return { groupOf: groupOf, numGroups: n }; }
+    var keyToIdx = {}, G = 0;
+    for (var i = 0; i < n; i++) {
+      // Dominant model id among this geometric region's cells.
+      var counts = {}, best = null, bestCount = -1;
+      for (var j = 0; j < regions[i].length; j++) {
+        var rc = regions[i][j], mid = modelMap[rc[0] + ',' + rc[1]];
+        if (mid === undefined) continue;
+        counts[mid] = (counts[mid] || 0) + 1;
+        if (counts[mid] > bestCount) { bestCount = counts[mid]; best = mid; }
+      }
+      var key = (best !== null) ? ('m' + best) : ('g' + i);   // no model info → own group
+      if (keyToIdx[key] === undefined) keyToIdx[key] = G++;
+      groupOf[i] = keyToIdx[key];
+    }
+    return { groupOf: groupOf, numGroups: G };
+  }
+
+  // 4-colour the regions. Colours are assigned per logical GROUP (so disjoint
+  // pieces of one region match) and returned per geometric region. groupOf maps
+  // geometric-region index → group index; omit for identity (each region alone).
+  function computeRegion4Colors(regions, groupOf, numGroups) {
+    var n = regions.length;
+    if (!groupOf) { groupOf = []; for (var gi = 0; gi < n; gi++) groupOf.push(gi); numGroups = n; }
+
+    // Adjacency between GROUPS (two groups touch if any of their cells are
+    // orthogonally adjacent across the group boundary).
+    var cellGroup = {};
     regions.forEach(function (cells, ri) {
-      cells.forEach(function (rc) { cellRegion[rc[0] + ',' + rc[1]] = ri; });
+      var g = groupOf[ri];
+      cells.forEach(function (rc) { cellGroup[rc[0] + ',' + rc[1]] = g; });
     });
+    var adj = [];
+    for (var i = 0; i < numGroups; i++) adj.push(new Set());
     regions.forEach(function (cells, ri) {
+      var g = groupOf[ri];
       cells.forEach(function (rc) {
         var r = rc[0], c = rc[1];
         [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
-          var rj = cellRegion[nb[0] + ',' + nb[1]];
-          if (rj !== undefined && rj !== ri) adj[ri].add(rj);
+          var g2 = cellGroup[nb[0] + ',' + nb[1]];
+          if (g2 !== undefined && g2 !== g) adj[g].add(g2);
         });
       });
     });
-    // Region adjacency is orthogonal-edge-only, so the graph is planar and the
-    // four-colour theorem guarantees a proper 4-colouring EXISTS. Plain greedy in
-    // index order does NOT find it in general (it can spill to a 5th/6th colour,
-    // which then indexes past the 4-entry palette → undefined fill → black rects),
-    // so we do a fast greedy pass and fall back to backtracking when it overflows.
-    var colors = new Array(n).fill(-1);
 
-    // Fast path: greedy. Always proper (avoids coloured neighbours); usually ≤ 4.
-    var greedyMax = -1;
+    // For ordinary (connected) regions the graph is planar and the four-colour
+    // theorem guarantees a proper 4-colouring. Forcing a DISCONNECTED region to a
+    // single group can in theory push the requirement past 4 — so we try hard
+    // (greedy → backtracking) and, if no proper 4-colouring of the groups exists,
+    // fall back to UNGROUPED colouring (always 4-colourable), trading the
+    // disjoint-match for a guaranteed clash-free result. Plain greedy alone never
+    // suffices: it can spill to a 5th colour (index 4) → past the 4-entry palette
+    // → undefined fill → black borders.
+    var groupColors = colourGraph(numGroups, adj);
+    if (!groupColors && groupOf.some(function (g, i) { return g !== i; })) {
+      // Grouped colouring impossible — retry with identity grouping (geometry only).
+      return computeRegion4Colors(regions);
+    }
+    if (!groupColors) {
+      // Identity grouping that still failed (shouldn't happen for planar input):
+      // clamp so nothing renders black.
+      groupColors = new Array(numGroups).fill(0);
+    }
+    return regions.map(function (_, ri) { return groupColors[groupOf[ri]]; });
+  }
+
+  // Proper ≤4-colouring of a graph given adjacency sets. Greedy fast path, then
+  // descending-degree backtracking. Returns a colour array (0–3) or null if no
+  // proper 4-colouring exists.
+  function colourGraph(n, adj) {
+    var colors = new Array(n).fill(-1), ok = true;
     for (var i = 0; i < n; i++) {
       var used = new Set();
       adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
       for (var k = 0; k < 4; k++) { if (!used.has(k)) { colors[i] = k; break; } }
-      if (colors[i] > greedyMax) greedyMax = colors[i];
+      if (colors[i] < 0) { ok = false; break; }
     }
-    // If greedy coloured everything within 0–3, we're done.
-    var greedyOk = true;
-    for (var i = 0; i < n; i++) { if (colors[i] < 0) { greedyOk = false; break; } }
-    if (greedyOk) return colors;
+    if (ok) return colors;
 
-    // Backtracking proper 4-colouring (guaranteed to succeed for a planar graph).
-    // Order vertices by descending degree first — fewer backtracks in practice.
     var order = [];
     for (var i = 0; i < n; i++) order.push(i);
     order.sort(function (a, b) { return adj[b].size - adj[a].size; });
@@ -1889,21 +1990,16 @@
       if (pos === n) return true;
       var v = order[pos];
       for (var col = 0; col < 4; col++) {
-        var ok = true;
-        adj[v].forEach(function (j) { if (bt[j] === col) ok = false; });
-        if (!ok) continue;
+        var clash = false;
+        adj[v].forEach(function (j) { if (bt[j] === col) clash = true; });
+        if (clash) continue;
         bt[v] = col;
         if (assign(pos + 1)) return true;
         bt[v] = -1;
       }
       return false;
     }
-    if (assign(0)) return bt;
-
-    // Should be unreachable for a planar graph, but never return an out-of-palette
-    // index: clamp the greedy result into 0–3 so a region can't render black.
-    for (var i = 0; i < n; i++) { if (colors[i] < 0 || colors[i] > 3) colors[i] = 0; }
-    return colors;
+    return assign(0) ? bt : null;
   }
 
   // Returns { regions, cellSize, rows, cols } derived from the live SVG, or null.
@@ -2110,7 +2206,12 @@
       hexToRgba(settings.regionColorPalette2 || '#52a84e', fillOp),
       hexToRgba(settings.regionColorPalette3 || '#e8a030', fillOp),
     ];
-    var regionColors = computeRegion4Colors(regions);
+    // Group geometric regions by logical region id (merges disjoint pieces of one
+    // sudoku region so they share a colour); falls back to per-piece when the
+    // model isn't available.
+    var modelRegionMap = getModelRegionMap();
+    var regionGroups   = buildRegionGroups(regions, modelRegionMap);
+    var regionColors   = computeRegion4Colors(regions, regionGroups.groupOf, regionGroups.numGroups);
     var SW = parseFloat(settings.regionColorStripeWidth) || 3;
     // cellRegion already built above.
 
