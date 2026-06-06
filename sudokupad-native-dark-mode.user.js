@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.10.0
+// @version      3.11.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.10.0';
+  var SCRIPT_VERSION = '3.11.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -494,31 +494,29 @@
     // below #underlay (z=3), so circles/pills appear above it. No CSS rule needed.
 
     // Given digits & overlay text are applied via inline fill (see fixAllGivens)
-    // to bypass DarkReader's CSS-rule colour shifting — same approach as the
-    // center/corner pencilmarks.
+    // so the native theme's CSS rules can't shift their colour — same approach as
+    // the center/corner pencilmarks.
 
+    // Label-bg pre-paint. The authoritative fix is the inline !important fill in
+    // fixLabelRect (which also skips saturated / kropki / preserves alpha); this
+    // CSS just darkens the boxes the instant they appear, before the JS scan runs.
+    // Keyed on .spdr-dark so it's theme-independent (was purple-theme-only).
     if (s.labelBgEnabled) {
       var bg = hexToRgba(s.labelBgColor, s.labelBgOpacity);
       css += `
-      html[data-darkreader-scheme="dark"] #svgrenderer rect.cage-label,
-      html[data-darkreader-scheme="dark"] #svgrenderer rect.textbg:not([fill="none"]),
-      html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
-      html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
-      html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="white"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.textbg:not([fill="none"]),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.cage-label,
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="white"]:not(#underlay *) {
+      body.spdr-dark #svgrenderer rect.cage-label,
+      body.spdr-dark #svgrenderer rect.textbg:not([fill="none"]),
+      body.spdr-dark #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
+      body.spdr-dark #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
+      body.spdr-dark #svgrenderer rect[fill="white"]:not(#underlay *) {
         fill: ${bg} !important;
       }`;
     }
 
     // Note: center/corner pencilmark *colours* are applied via inline style on
-    // each element (see fixCenterTspan / fixCornerText below). This bypasses
-    // DarkReader's CSS-rule colour conversion that would otherwise lift our
-    // values into a different shade. Hide-invalid stays as CSS because
-    // display:none isn't affected by DR.
+    // each element (see fixCenterTspan / fixCornerText below) so the native theme's
+    // CSS rules can't re-tint them. Hide-invalid stays as CSS because display:none
+    // needs no per-element override.
     if (s.centerEnabled && s.centerHideInvalid) {
       css += `
       #cell-candidates tspan.conflict { display: none !important; }`;
@@ -553,46 +551,11 @@
       #cell-colors { opacity: ${s.cellColorsOpacity} !important; }`;
     }
 
-    // Always-on: colour-swatch palette restoration (DR overrides --cell-color-N).
-    // The selector repeats the attribute ([…][data-darkreader-scheme]) to raise
-    // specificity to (0,2,1), above DarkReader's own (0,1,1) --cell-color rules.
-    // (This is a load-timing race — DR can momentarily win while it processes; a
-    // reload clears it. We don't try to keep our <style> last: DR inserts a
-    // darkreader--sync sheet after EVERY <style> including ours, so that fight is
-    // unwinnable and only causes thrash.)
-    css += `
-    html[data-darkreader-scheme="dark"][data-darkreader-scheme] {
-      --cell-color-0: transparent !important;
-      --cell-color-1: rgb(214, 214, 214) !important;
-      --cell-color-2: rgb(124, 124, 124) !important;
-      --cell-color-3: rgb(0, 0, 0) !important;
-      --cell-color-4: rgb(179, 229, 106) !important;
-      --cell-color-5: rgb(232, 124, 241) !important;
-      --cell-color-6: rgb(228, 150, 50) !important;
-      --cell-color-7: rgb(245, 58, 55) !important;
-      --cell-color-8: rgb(252, 235, 63) !important;
-      --cell-color-9: rgb(61, 153, 245) !important;
-      --cell-color-a: transparent !important;
-      --cell-color-b: rgb(204, 51, 17) !important;
-      --cell-color-c: rgb(17, 119, 51) !important;
-      --cell-color-d: rgb(0, 68, 196) !important;
-      --cell-color-e: rgb(238, 153, 170) !important;
-      --cell-color-f: rgb(255, 255, 25) !important;
-      --cell-color-g: rgb(240, 70, 240) !important;
-      --cell-color-h: rgb(160, 90, 30) !important;
-      --cell-color-i: rgb(51, 187, 238) !important;
-      --cell-color-j: rgb(145, 30, 180) !important;
-      --cell-color-k: transparent !important;
-      --cell-color-l: rgb(245, 58, 55) !important;
-      --cell-color-m: rgb(76, 175, 80) !important;
-      --cell-color-n: rgb(61, 153, 245) !important;
-      --cell-color-o: rgb(249, 136, 134) !important;
-      --cell-color-p: rgb(149, 208, 151) !important;
-      --cell-color-q: rgb(158, 204, 250) !important;
-      --cell-color-r: rgb(170, 12, 9) !important;
-      --cell-color-s: rgb(47, 106, 49) !important;
-      --cell-color-t: rgb(9, 89, 170) !important;
-    }`;
+    // (Removed v3.11.0: a DR-only --cell-color-* palette override keyed on
+    // html[data-darkreader-scheme="dark"]. It never matched under native mode, so
+    // the colour-picker swatches + #cell-colors already take their palette from
+    // SudokuPad's own base CSS. If they ever read wrong under native, add a
+    // .spdr-dark override here — see NATIVE_MODE_MIGRATION.md.)
 
     // Native dark mode leaves SudokuPad's app/tool/aux control buttons on their
     // light #eee background (it themes only #controls TEXT), so they glare against
@@ -2679,18 +2642,9 @@
 
     function refreshSwatch() {
       var op = opacityKey ? settings[opacityKey] : 1;
-      // !important beats DarkReader's external [data-darkreader-inline-bgcolor] rule
       swatchInner.style.setProperty('background-color', hexToRgba(settings[colorKey], op), 'important');
-      // Strip DR's own attributes so it doesn't try to override on its next pass
-      swatchInner.removeAttribute('data-darkreader-inline-bgcolor');
-      swatchInner.style.removeProperty('--darkreader-inline-bgcolor');
     }
     refreshSwatch();
-
-    // Re-strip if DR keeps re-adding its variables
-    new MutationObserver(refreshSwatch).observe(swatchInner, {
-      attributes: true, attributeFilter: ['data-darkreader-inline-bgcolor', 'style'],
-    });
 
     swatch.addEventListener('click', function (e) { e.stopPropagation(); colorInput.click(); });
     colorInput.addEventListener('input', function () {
@@ -4677,8 +4631,8 @@
     var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
                       ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
     // Literal theme purple (not a snapshot of colorRefStyle.color): a captured
-    // computed colour races DR's build-time conversion and can load grey, and
-    // also lets DR ping-pong our label on hover. A literal + watchDR is stable.
+    // computed colour can load grey if read before the theme settles. A literal
+    // + !important is stable.
     var textColor = 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
@@ -4689,17 +4643,6 @@
 
     function applyColors(el, props) {
       Object.keys(props).forEach(function (p) { el.style.setProperty(p, props[p], 'important'); });
-    }
-    function watchDR(el, props) {
-      new MutationObserver(function (mutations) {
-        var hit = false;
-        mutations.forEach(function (m) {
-          if (m.attributeName && m.attributeName.indexOf('darkreader') !== -1) {
-            el.removeAttribute(m.attributeName); hit = true;
-          }
-        });
-        if (hit) applyColors(el, props);
-      }).observe(el, { attributes: true });
     }
 
     // Wrapper: fills the grid cell (100%×100%) so sizing matches neighboring buttons
@@ -4732,7 +4675,6 @@
     // the button from collapsing to a stale (pre-CSS-load) smaller size.
     clipper.dataset.collapsedW = btnW;
     applyColors(clipper, { 'background-color': bgColor, 'border': '1px solid ' + borderCol });
-    watchDR(clipper,     { 'background-color': bgColor, 'border': '1px solid ' + borderCol });
 
     // Calculate padding-left so the short label appears centered in btnW.
     // Both collapsed and expanded text use the same paddingLeft, so they share the same x position.
@@ -4768,7 +4710,6 @@
       zIndex:         '2',
     });
     applyColors(label, { 'color': textColor });
-    watchDR(label,     { 'color': textColor });
     label.textContent = opts.shortLabel;
 
     clipper.appendChild(label);
@@ -4835,9 +4776,9 @@
                    document.querySelector('[data-control="centre"]') || ref;
     var colorCs = getComputedStyle(colorRef);
     var bg = colorCs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? colorCs.backgroundColor : null;
-    // Text colour is a fixed literal (set in buildActionButton) + held by watchDR —
-    // we deliberately do NOT re-read/re-apply a live colour here, which used to
-    // re-introduce the snapshot race.
+    // Text colour is a fixed literal (set in buildActionButton) — we deliberately
+    // do NOT re-read/re-apply a live colour here, which used to re-introduce the
+    // snapshot race.
     ['sp-fill-btn-wrap', 'sp-clear-btn-wrap', 'sp-clearall-btn-wrap'].forEach(function(id) {
       var wrap = document.getElementById(id);
       if (!wrap || !wrap.firstElementChild) return;
@@ -5859,9 +5800,8 @@
 
     // Four swatches mirroring the current Multi-color border palette
     // (regionColorPalette0-3). They are plain coloured <div>s, not icons, so they
-    // always reflect the chosen colours. setProperty !important + stripping DR's
-    // markers keeps DarkReader from darkening them; refreshSwatches re-asserts on
-    // palette change (via applySettings) and on DR rewrites (via the observer).
+    // always reflect the chosen colours. setProperty !important keeps them at the
+    // chosen colour; refreshSwatches re-asserts on palette change (via applySettings).
     var swatches = document.createElement('div');
     Object.assign(swatches.style, { display: 'flex', gap: '2px', pointerEvents: 'none' });
     var swatchEls = [];
@@ -5876,13 +5816,10 @@
                  settings.regionColorPalette2, settings.regionColorPalette3];
       swatchEls.forEach(function (sq, i) {
         sq.style.setProperty('background-color', pal[i] || '#888', 'important');
-        sq.removeAttribute('data-darkreader-inline-bgcolor');
-        sq.style.removeProperty('--darkreader-inline-bgcolor');
       });
     }
     refreshSwatches();
     easyShadeSwatchRefresh = refreshSwatches; // let applySettings keep them current
-    // (DR re-assertion for swatches is handled by the subtree observer on btn below.)
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
@@ -5915,7 +5852,7 @@
       fontFamily:  'system-ui, -apple-system, sans-serif',
     });
 
-    var cardTextEls = [];  // text nodes whose colour we hold against DR (see refreshCardText)
+    var cardTextEls = [];  // text nodes we hold at the accent purple (see refreshCardText)
 
     var noteDiv = document.createElement('div');
     noteDiv.textContent = 'Colors can be changed in Settings under "Multi-color borders"';
@@ -5966,14 +5903,11 @@
     card.appendChild(shadedOp.row);
     document.body.appendChild(card);
 
-    // Hold the card text at the accent purple against DarkReader. A literal
-    // colour + !important + stripping DR's marker is stable (DR doesn't come back
-    // — unlike the var/observer approaches that flickered). Re-asserted on show.
+    // Hold the card text at the accent purple. A literal colour + !important keeps
+    // it stable. Re-asserted on show.
     function refreshCardText() {
       cardTextEls.forEach(function (el) {
         el.style.setProperty('color', accentCol, 'important');
-        el.removeAttribute('data-darkreader-inline-color');
-        el.style.removeProperty('--darkreader-inline-color');
       });
     }
     refreshCardText();
@@ -6026,30 +5960,14 @@
       } else {
         modeLbl.style.display = 'none';
       }
-      // Force the text colour on the button AND its child text divs — DarkReader
-      // converts child text nodes independently, so the label would otherwise go
-      // grey while btn's own colour stays purple. Literal + !important + strip = stable.
+      // Force the text colour on the button AND its child text divs (each is a
+      // separate element, so set them all).
       [btn, lbl, modeLbl].forEach(function (el) {
         el.style.setProperty('color', accentCol, 'important');
-        el.removeAttribute('data-darkreader-inline-color');
-        el.style.removeProperty('--darkreader-inline-color');
       });
       // Keep sliders in sync with settings (e.g. after a reset).
       regionOp.sync(); shadedOp.sync();
     }
-
-    // DarkReader may rewrite inline styles on the button OR its children (text
-    // divs, swatches) — restore ours when it does. Subtree so child mutations fire.
-    new MutationObserver(function (mutations) {
-      var hit = false;
-      mutations.forEach(function (m) {
-        if (m.attributeName && m.attributeName.indexOf('darkreader') !== -1) {
-          if (m.target.removeAttribute) m.target.removeAttribute(m.attributeName);
-          hit = true;
-        }
-      });
-      if (hit) { applyToggleStyle(); refreshSwatches(); }
-    }).observe(btn, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-color', 'data-darkreader-inline-bgcolor'] });
 
     btn.addEventListener('click', function () {
       var reg = !!settings.regionColorFillEnabled;
