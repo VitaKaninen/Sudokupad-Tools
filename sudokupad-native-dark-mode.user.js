@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.8.0
+// @version      3.9.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.8.0';
+  var SCRIPT_VERSION = '3.9.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -996,21 +996,16 @@
     });
   }
 
-  // ── Inline colour application for pencilmarks (DR-immune) ─────────────────
-  // DR converts colours inside <style> rules but leaves inline-style values
-  // alone when set with !important. Applying fill directly to each element
-  // means our chosen colour renders exactly as picked.
+  // ── Inline colour application for pencilmarks ─────────────────────────────
+  // Apply fill directly to each element with !important so our chosen colour
+  // beats the frozen native dark-theme stylesheet (FROZEN_DARK_CSS) and the
+  // element's own raw colour attribute, rendering exactly as picked.
 
   function applyInlineFill(el, desired) {
     var current = el.style.getPropertyValue('fill');
     if (current !== desired) {
       el.style.setProperty('fill', desired, 'important');
     }
-    // Always strip DR's attribute markers in case it re-added them
-    el.removeAttribute('data-darkreader-inline-color');
-    el.removeAttribute('data-darkreader-inline-fill');
-    el.style.removeProperty('--darkreader-inline-color');
-    el.style.removeProperty('--darkreader-inline-fill');
   }
 
   function fixCenterTspan(t) {
@@ -1026,15 +1021,14 @@
     cc.querySelectorAll('text.cell-candidate, #cell-candidates tspan').forEach(fixCenterTspan);
   }
 
-  // Cell shading. Per-puzzle coloured regions that DR otherwise converts
-  // toward near-white. Covers:
+  // Cell shading. Per-puzzle coloured regions (bright author pastels read poorly
+  // on the dark substrate). Covers:
   //   - #underlay rect:  per-cell shading rects
   //   - #cages path[fill]: cage-shape shadings (killer/region overlays, e.g.
   //     class="cage-fpColumnIndexer")
-  // We parse each element's original `fill`, optionally flip its lightness
-  // (HSL) by the `underlayInvert` strength to make light pastels darker AND
-  // dark colours lighter for dark-mode visibility, then apply the opacity
-  // multiplier. Hue and saturation are preserved — colour identity intact.
+  // Each element's original `fill` is routed through computeObjectShade (gray vs
+  // coloured sliders): hue is preserved, lightness is remapped to the slider's
+  // absolute HSL value (saturation forced to pure hue), then opacity is applied.
 
   // Shared lightness transform. Returns [r,g,b] from an original colour, mapped
   // by the Brightness slider L (0..1): pure hue (saturation forced to 1) at
@@ -1060,9 +1054,10 @@
   // through the Gray brightness/opacity sliders and coloured ones through the
   // Color brightness/opacity sliders (each pair is locked together by a single
   // combined slider when "Control opacity and brightness separately" is off). Returns
-  // { rgb:[r,g,b], a:alpha } to apply, or null meaning "leave it to DarkReader"
-  // (the relevant control(s) are disabled). Does NOT cover shape outlines — those
-  // keep their own independent Border-brightness slider via applyShapeStroke.
+  // { rgb:[r,g,b], a:alpha } to apply, or null when the relevant control(s) are
+  // disabled (caller clears our override so the native dark theme repaints it).
+  // Does NOT cover shape outlines — those keep their own independent
+  // Border-brightness slider via applyShapeStroke.
   function computeObjectShade(c) {
     var bKey, bEn, oKey, oEn;
     if (isGrayColor(c)) {
@@ -1081,70 +1076,18 @@
     return { rgb: rgb, a: a };
   }
 
-  // ── Restoring DarkReader's look when our Object-shading is turned off ──────
-  // Once we set an `!important` inline colour, DarkReader gives up on the element
-  // and CLEARS its own `--darkreader-inline-*` var (verified). So when shading is
-  // disabled we can't lean on DR to re-darken — it would fall back to the raw,
-  // bright attribute colour. We must repaint DR's dark value ourselves.
-  //
-  // CRITICAL: store a RESOLVED LITERAL (e.g. "rgb(51,55,57)"), never DR's var
-  // EXPRESSION. The v2.145 bug stored the expression `var(--darkreader-background-
-  // cfcfcf,#333739)` and set it as `style.fill`; DR's observer then saw the `#333739`
-  // hex and re-converted it into a *text*-colour var (light!), nesting deeper and
-  // drifting brighter on every toggle. A literal gives DR nothing to re-nest.
-  // Resolve a colour expression to a literal rgb via a throwaway element (DR's vars
-  // are defined on :root, so var() references resolve synchronously through the
-  // cascade — independent of DR clearing the element's own inline var).
-  function resolveCssColor(expr) {
-    var p = document.createElement('span');
-    p.style.color = expr; p.style.display = 'none';
-    document.documentElement.appendChild(p);
-    var c = getComputedStyle(p).color;
-    p.remove();
-    return c;
-  }
-  // Capture DR's converted colour as a literal — once. The element's original
-  // colour never changes, so the first clean capture (DR's untouched var, seen via
-  // the data-marker observer on load) is authoritative; don't overwrite it later
-  // with a value DR may have re-derived from our own fill.
-  function captureDrInline(el, prop) { // prop: 'fill' | 'stroke'
-    var key = prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill';
-    if (el.dataset[key]) return;
-    var lit = '';
-    var v = el.style.getPropertyValue('--darkreader-inline-' + prop);
-    if (v) {
-      lit = resolveCssColor(v);                 // DR's own var (most accurate)
-    } else {
-      // Deterministic fallback — no dependency on DR having set the element's
-      // inline var yet (avoids a scan-vs-DR ordering race). DR publishes its
-      // converted colours as :root vars `--darkreader-<kind>-<hex>` keyed by the
-      // element's STABLE original colour attribute (fills convert as background,
-      // strokes as text). Falls back to the raw colour if DR hasn't defined it.
-      var orig = el.getAttribute(prop);
-      var c = orig && parseColor(orig);
-      if (c) {
-        var hex = ((1 << 24) + (c.r << 16) + (c.g << 8) + c.b).toString(16).slice(1);
-        var kind = prop === 'stroke' ? 'text' : 'background';
-        lit = resolveCssColor('var(--darkreader-' + kind + '-' + hex + ', ' + orig + ')');
-      }
-    }
-    if (lit && lit !== 'none') el.dataset[key] = lit;
-  }
-  // Remove our override and restore DR's converted look: paint the captured literal
-  // if we have one (DR-independent), else fall back to letting DR / the raw
-  // attribute take over. Never touches DR's data attribute, so the observer in
-  // startLabelRectPatch won't re-fire.
-  function restoreToDr(el, prop) {
-    captureDrInline(el, prop);               // grab DR's value if it's present now
+  // ── Clearing our inline override (Object-shading off for an element) ───────
+  // When a shading control is disabled we simply drop our inline fill/stroke and
+  // let the frozen native dark theme (FROZEN_DARK_CSS) repaint the element. There
+  // is nothing to "restore to" — DarkReader is locked out, so the native CSS plus
+  // the element's own attributes are the only layers beneath ours.
+  function clearInline(el, prop) {  // prop: 'fill' | 'stroke'
+    el.style.removeProperty(prop);
     el.style.removeProperty(prop + '-opacity');
-    var saved = el.dataset[prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill'];
-    if (saved) el.style.setProperty(prop, saved, 'important');
-    else el.style.removeProperty(prop);
   }
 
   // Fill only — called when Cell shading section is enabled.
   function applyShadingFill(el) {
-    captureDrInline(el, 'fill');
     var c = parseColor(el.getAttribute('fill') || '');
     if (!c || c.a === 0) {
       // No fill or layout-helper rect (fill="#FFFFFF00") — leave it transparent.
@@ -1154,15 +1097,13 @@
     }
     var sh = computeObjectShade(c);
     if (!sh) {
-      // Both controls for this colour group are off — hand the element back to
-      // DarkReader's converted look (captured), not the raw bright attribute.
-      restoreToDr(el, 'fill');
+      // Both controls for this colour group are off — drop our override and let
+      // the native dark theme repaint it.
+      clearInline(el, 'fill');
       return;
     }
     el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
     el.style.setProperty('fill-opacity', String(sh.a), 'important');
-    el.removeAttribute('data-darkreader-inline-fill');
-    el.style.removeProperty('--darkreader-inline-fill');
   }
 
   // Stroke (shape outline) — gated by the Object Shading section's enable + its
@@ -1171,11 +1112,10 @@
   // the element's hue via shadingTransform; opacity is now configurable too
   // (was hardcoded 1.0 before v2.143).
   function applyShapeStroke(el) {
-    captureDrInline(el, 'stroke');
     var doSL = settings.underlayStrokeLightnessEnabled;
     var doSO = settings.underlayStrokeOpacityEnabled;
     if (!settings.underlayEnabled || (!doSL && !doSO)) {
-      restoreToDr(el, 'stroke');
+      clearInline(el, 'stroke');
       return;
     }
     var strokeAttr = el.getAttribute('stroke');
@@ -1191,7 +1131,6 @@
     if (sa < 0) sa = 0; else if (sa > 1) sa = 1;
     el.style.setProperty('stroke', 'rgb(' + srgb[0] + ',' + srgb[1] + ',' + srgb[2] + ')', 'important');
     el.style.setProperty('stroke-opacity', String(sa), 'important');
-    el.style.removeProperty('--darkreader-inline-stroke');
   }
 
   function fixUnderlayRect(rect) {
@@ -1199,7 +1138,7 @@
     if (settings.underlayEnabled) {
       applyShadingFill(rect);
     } else {
-      restoreToDr(rect, 'fill');
+      clearInline(rect, 'fill');
     }
     // Stroke (Region borders section)
     applyShapeStroke(rect);
@@ -1234,8 +1173,8 @@
         fixUnderlayRect(r);
         r.dataset.spdrOverlayShaded = '1';
       } else if (r.dataset.spdrOverlayShaded) {
-        restoreToDr(r, 'fill');
-        restoreToDr(r, 'stroke');
+        clearInline(r, 'fill');
+        clearInline(r, 'stroke');
         delete r.dataset.spdrOverlayShaded;
       }
     });
@@ -1255,15 +1194,13 @@
   // a region feature is active we instead draw a clone of each one INSIDE mainGroup
   // (drawRegionSplitBorders), below the border strips — coloured if shaded mode is
   // on, otherwise the same grey Object-shaded look. So here we hide the original
-  // #cages path so it doesn't paint over the borders. Re-asserted on DR rewrites.
+  // #cages path so it doesn't paint over the borders. Re-asserted on board re-render.
   function extraRegionsMovedBelowBorders() {
     return regionFeatureActive() && puzzleHasShadedRegions();
   }
   function applyExtraRegionFill(path) {
     path.style.setProperty('fill', 'transparent', 'important');
     path.style.removeProperty('fill-opacity');
-    path.removeAttribute('data-darkreader-inline-fill');
-    path.style.removeProperty('--darkreader-inline-fill');
   }
   function fixCagePath(path) {
     if (path.classList.contains('cage-extraregion') && extraRegionsMovedBelowBorders()) {
@@ -1274,7 +1211,7 @@
     if (settings.underlayEnabled) {
       applyShadingFill(path);
     } else {
-      restoreToDr(path, 'fill');
+      clearInline(path, 'fill');
     }
     applyShapeStroke(path);
   }
@@ -1351,30 +1288,27 @@
 
   // Line constraints. Every line-type clue — thermo shafts, palindromes, renban,
   // whispers, region-sum lines, arrow-sudoku arrow lines — renders as a stroked
-  // <path> in #arrows (fill=none). DR leaves these near-white in dark mode while
-  // any matching bulb/underlay shape is shaded dark — a mismatch. We shade the
-  // line STROKE through the same object-shading transform used for fills
-  // (computeObjectShade): gray lines (e.g. #CFCFCF thermos/palindromes) follow
-  // the linked Gray slider, coloured lines the Brightness/Opacity sliders. Scope
-  // is broad on purpose — ALL stroked #arrows paths, not just bulb-matched shafts
-  // (was the v2.122 thermo-only rule; bulbless line puzzles like 9p6eahqmux fell
-  // through to DR before v2.140). Stroke width is never touched.
+  // <path> in #arrows (fill=none). We shade the line STROKE through the same
+  // object-shading transform used for fills (computeObjectShade): gray lines (e.g.
+  // #CFCFCF thermos/palindromes) follow the linked Gray slider, coloured lines the
+  // Brightness/Opacity sliders. Scope is broad on purpose — ALL stroked #arrows
+  // paths, not just bulb-matched shafts (was the v2.122 thermo-only rule; bulbless
+  // line puzzles like 9p6eahqmux were missed before v2.140). Stroke width is never
+  // touched.
   function applyLineStroke(el) {
-    captureDrInline(el, 'stroke');
     var c = parseColor(el.getAttribute('stroke') || '');
     if (!c || c.a === 0) return;
     if (!settings.underlayEnabled) {
-      restoreToDr(el, 'stroke');
+      clearInline(el, 'stroke');
       return;
     }
     var sh = computeObjectShade(c);
     if (!sh) {
-      restoreToDr(el, 'stroke');
+      clearInline(el, 'stroke');
       return;
     }
     el.style.setProperty('stroke', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
     el.style.setProperty('stroke-opacity', String(sh.a), 'important');
-    el.style.removeProperty('--darkreader-inline-stroke');
   }
   function isLineStroke(el) {
     if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
