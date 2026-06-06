@@ -32,6 +32,13 @@ After every version bump, immediately and without asking:
 ### Version bumps
 Bump `@version` in the `==UserScript==` header for every change — semver minor increments (e.g. 2.119.0 → 2.120.0). **Also bump the internal `SCRIPT_VERSION` constant (≈line 209) to match** — it drives `window.spdrVersion`, the only reliable "which build is live" signal in-browser. It silently drifted (stuck at 3.11.0 while the header advanced); keep them identical.
 
+### Distribution & dev environment
+- These userscripts are hosted on public GitHub for **cross-machine update propagation** — that's a second reason the `@version` bump above is mandatory: a stale `@version` means no update is pushed to the user's other machines.
+- Keep the `@updateURL` / `@downloadURL` headers pointing at the **raw GitHub URLs** so the managers can poll for updates.
+- **Browser split:** edit in **ViolentMonkey on Brave**; test in **TamperMonkey on Chrome** (the Chrome/TM tab is the one driven in "Testing in Chrome" below).
+- **LibreWolf** can't watch files on disk (no `FileSystemObserver`) — when using it, serve the script via the **localhost HTTP server** instead of a file path.
+- Write functionality **fresh under the user's own name (VitaKaninen)** — don't derive from or copy existing third-party scripts.
+
 ### Testing in Chrome (standing permission)
 
 **Diagnosing up front is yours; the first "does it work now" test is the user's.** Connect Claude in Chrome any time it helps you *diagnose* a problem — don't ask. Say upfront when the browser would answer better than guessing (e.g. pixel-level rendering). If you need a screenshot to understand an issue, take it yourself: the cost is in *analysing* the image, not capturing it, so having the user paste one in saves nothing.
