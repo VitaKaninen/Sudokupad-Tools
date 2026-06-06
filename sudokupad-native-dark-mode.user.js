@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.9.0
+// @version      3.10.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.9.0';
+  var SCRIPT_VERSION = '3.10.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1321,19 +1321,15 @@
     });
   }
 
-  // Given digits — apply colour via inline fill so DR doesn't re-convert it.
-  // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
-  // they have no cell-given class. Grayscale overlay markers are handled
-  // separately by fixOverlayMarkerText (gray object-shading sliders); coloured
-  // overlay text is left to DarkReader.
+  // Given digits — apply colour via inline !important fill so the native dark
+  // theme can't re-tint it. Overlay texts (constraint labels, rank markers, etc.)
+  // are NOT touched here; they have no cell-given class. Grayscale overlay markers
+  // are handled separately by fixOverlayMarkerText (gray object-shading sliders);
+  // coloured overlay text is left to the native theme.
   function fixGivenText(t) {
     if (settings.givenEnabled) {
       var color = hexToRgba(settings.givenColor, settings.givenOpacity);
       t.style.setProperty('fill', color, 'important');
-      t.removeAttribute('data-darkreader-inline-color');
-      t.removeAttribute('data-darkreader-inline-fill');
-      t.style.removeProperty('--darkreader-inline-color');
-      t.style.removeProperty('--darkreader-inline-fill');
     } else {
       t.style.removeProperty('fill');
     }
@@ -1342,15 +1338,11 @@
     svg.querySelectorAll('#cell-givens text, text.cell-given').forEach(fixGivenText);
   }
   // User-entered (placed) digits — the values the solver types into cells
-  // (#cell-values text). Same inline-fill approach as givens so DR can't re-convert.
+  // (#cell-values text). Same inline-!important-fill approach as givens.
   function fixUserText(t) {
     if (settings.userDigitEnabled) {
       var color = hexToRgba(settings.userDigitColor, settings.userDigitOpacity);
       t.style.setProperty('fill', color, 'important');
-      t.removeAttribute('data-darkreader-inline-color');
-      t.removeAttribute('data-darkreader-inline-fill');
-      t.style.removeProperty('--darkreader-inline-color');
-      t.style.removeProperty('--darkreader-inline-fill');
     } else {
       t.style.removeProperty('fill');
     }
@@ -1360,8 +1352,8 @@
   }
   // Overlay marker text — author-drawn grayscale <text> in #overlay (e.g. the
   // "#N" rank markers in clover's Rank Sudoku, or the X/O letters in Counting
-  // Neighbours). The author sets a dim gray inline fill (#AAA / #CCC) and DR
-  // passes it through nearly unchanged, so it isn't covered by any of our digit
+  // Neighbours). The author sets a dim gray inline fill (#AAA / #CCC) that the
+  // native theme leaves nearly unchanged, so it isn't covered by any of our digit
   // controls. We route the GRAY ones through the same Gray object-shading sliders
   // as gray shapes (computeObjectShade's gray branch), so they track that single
   // brightness/opacity control. We deliberately do NOT recolour these to a fixed
@@ -1369,7 +1361,7 @@
   // near-white givenColor made them far brighter than the author intended); the
   // shading transform scales the author's gray instead, preserving the dim look.
   // Skips: Kropki labels (author '#000'/'#fff' text or our injected labels — owned
-  // by the Kropki fix) and any COLOURED overlay text (left to DarkReader).
+  // by the Kropki fix) and any COLOURED overlay text (left to the native theme).
   function fixOverlayMarkerText(t) {
     if (t.dataset.spdrKropkiText !== undefined) return;   // existing author Kropki label
     if (t.dataset.spdrKropkiLabel !== undefined) return;  // our injected Kropki label
@@ -1384,13 +1376,9 @@
     if (sh) {
       t.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
       t.style.setProperty('fill-opacity', String(sh.a), 'important');
-      t.removeAttribute('data-darkreader-inline-fill');
-      t.removeAttribute('data-darkreader-inline-color');
-      t.style.removeProperty('--darkreader-inline-fill');
-      t.style.removeProperty('--darkreader-inline-color');
     } else {
-      // Section off / both gray sliders off → hand back to the author's colour
-      // (non-important, exactly as it shipped) so DarkReader reasserts its look.
+      // Section off / both gray sliders off → restore the author's original fill
+      // (non-important, exactly as it shipped) so the native theme shows it as authored.
       if (orig) t.style.setProperty('fill', orig);
       else t.style.removeProperty('fill');
       t.style.removeProperty('fill-opacity');
@@ -1401,9 +1389,10 @@
   }
 
   // ── Kropki dot color fix ──────────────────────────────────────────────────────
-  // DarkReader inverts Kropki dots: white-fill (consecutive) → black, black-fill
-  // (2:1 ratio) → white. Restore correct colors via inline style so DR can't
-  // re-convert them. Optionally overlay a ":" / "~" label on each bare dot.
+  // Force Kropki dots to their correct colours via inline !important style so the
+  // native dark theme can't re-tint them: white-fill (consecutive) stays white,
+  // black-fill (2:1 ratio) stays black, each with an optional contrasting outline.
+  // Optionally overlay a ":" / "~" label on each bare dot.
   //
   // Robust detection rule (3 independent signals, ALL required):
   //   1. SHAPE  — a true circle: feature-kropki class (authoritative), OR a square
@@ -1424,8 +1413,8 @@
   // as bare <rect> circles), filtered down by the fill + position gates.
   //
   // Labeled Kropki-type circles (Difference/Ratio Sudoku etc.) pass isKropkiCircle
-  // but not isKropkiRect. Their circle fill and adjacent text color are DR-proofed,
-  // but we don't inject our own labels on top of the existing text.
+  // but not isKropkiRect. Their circle fill and adjacent text colour are pinned via
+  // inline !important, but we don't inject our own labels on top of the existing text.
   // data-spdr-kropki-text marks such texts so the MutationObserver can re-fix them.
 
   // Returns the non-spdr text immediately following a Kropki circle rect, if it has
@@ -1492,7 +1481,7 @@
   // section is their sole controller — otherwise a black Kropki dot reads as a "gray
   // object" (highlight + shading) and a white dot gets flattened to the label-bg
   // colour. Unconditional (ignores kropkiFixEnabled): a Kropki dot is never an
-  // object-shading / label-bg target; when the Kropki fix is off it falls to DR.
+  // object-shading / label-bg target; when the Kropki fix is off it falls to the native theme.
   // Takes ONLY the rect — cs is computed internally so this is safe to pass straight
   // to Array.filter (which would otherwise feed the array index in as a 2nd arg and
   // wreck isOnCellBorder by using a 1px cell size).
@@ -1510,7 +1499,7 @@
     if (!isWhite && !isBlack) return;
     // Real edge clues (Kropki / X-V / operator dots) sit ON a cell border — a
     // gridline in one axis, mid-cell in the other. Circles elsewhere are NOT
-    // Kropki and are left to DarkReader: a quadruple sits on a grid CORNER
+    // Kropki and are left to the native theme: a quadruple sits on a grid CORNER
     // (gridline in both axes), arrow bulbs / cosmetic circles at a cell CENTRE,
     // line endpoints wherever a path ends. Black dots are gated the same way (a
     // solid-black circle off a border is cosmetic, not Kropki).
@@ -1541,16 +1530,12 @@
       // so fixed dots are solid; stash the original to restore on disable.
       if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
       rect.style.setProperty('fill-opacity', '1', 'important');
-      rect.removeAttribute('data-darkreader-inline-fill');
-      rect.style.removeProperty('--darkreader-inline-fill');
-      // For labeled Kropki circles, also DR-proof the existing text color.
+      // For labeled Kropki circles, also pin the existing text colour.
       // White circle → black text; black circle → white text.
       if (adjText) {
         var textColor = isWhite ? '#000000' : '#ffffff';
         adjText.setAttribute('data-spdr-kropki-text', textColor);
         adjText.style.setProperty('fill', textColor, 'important');
-        adjText.removeAttribute('data-darkreader-inline-color');
-        adjText.style.removeProperty('--darkreader-inline-color');
       }
     } else {
       rect.style.removeProperty('fill');
@@ -1578,30 +1563,14 @@
   }
 
   function fixKropkiLabel(t) {
-    // Keep our injected Kropki labels at their intended colour regardless of
-    // DarkReader. The fill is stored in the data-spdr-kropki-label attribute:
+    // Keep our injected Kropki labels at their intended colour. The fill is stored
+    // in the data-spdr-kropki-label attribute:
     //   '#ffffff'  → white text on a black (2:1 ratio) dot
     //   '#000000'  → black text on a white (consecutive) dot
     //   '1'        → legacy format (pre-v2.64.0) — treat as white
     var color = t.getAttribute('data-spdr-kropki-label') || '#ffffff';
     if (color === '1') color = '#ffffff';
     t.style.setProperty('fill', color, 'important');
-    t.removeAttribute('data-darkreader-inline-color');
-    t.removeAttribute('data-darkreader-inline-fill');
-    t.style.removeProperty('--darkreader-inline-color');
-    t.style.removeProperty('--darkreader-inline-fill');
-  }
-  function fixKropkiText(t) {
-    // Re-apply the stored color for an existing label text inside a labeled
-    // Kropki-type circle (data-spdr-kropki-text holds '#000000' or '#ffffff').
-    // Called by the MutationObserver when DarkReader re-inverts this text.
-    var color = t.getAttribute('data-spdr-kropki-text');
-    if (!color) return;
-    t.style.setProperty('fill', color, 'important');
-    t.removeAttribute('data-darkreader-inline-color');
-    t.removeAttribute('data-darkreader-inline-fill');
-    t.style.removeProperty('--darkreader-inline-color');
-    t.style.removeProperty('--darkreader-inline-fill');
   }
 
   // Returns the grid cell size (px) by parsing path.cell-grid, or 0 if not available.
@@ -1754,9 +1723,8 @@
     // use a textbg rect purely to position a label (e.g. a little-killer "12" sitting
     // over an arrow outside the grid). There is no background to darken; painting it
     // our label-bg colour turns an invisible anchor into an opaque box that covers the
-    // arrow beneath it. DR leaves these alone too (no data-darkreader-inline-fill), so
-    // skip them entirely. (Distinct from the white/grey label boxes below, which DO
-    // need darkening.)
+    // arrow beneath it — so skip them entirely. (Distinct from the white/grey label
+    // boxes below, which DO need darkening.)
     var fillAttr = (rect.getAttribute('fill') || '').trim().toLowerCase();
     var fc = parseColor(fillAttr);
     if (fillAttr === 'none' || (fc && fc.a === 0)) return;
@@ -1775,12 +1743,9 @@
       var srcA = (fc && fc.a != null) ? fc.a : 1;
       var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity * srcA);
       rect.style.setProperty('fill', bg, 'important');
-      rect.removeAttribute('data-darkreader-inline-fill');
-      rect.style.removeProperty('--darkreader-inline-fill');
     } else {
+      // Drop our inline fill so the native dark theme repaints the label box.
       rect.style.removeProperty('fill');
-      // Let DR re-process. It re-adds data-darkreader-inline-fill when it
-      // observes the style mutation.
     }
   }
   function fixAllLabelRects(svg) { svg.querySelectorAll(LABEL_RECT_SEL).forEach(fixLabelRect); }
@@ -1799,39 +1764,14 @@
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
+    // Re-apply our fixes when SudokuPad re-renders the board (puzzle load, fog
+    // reveal, etc. — all add fresh SVG nodes). We only need to watch childList:
+    // with DarkReader locked out, nothing mutates our inline colours in place.
     new MutationObserver(function (mutations) {
       var needsFullScan = false;
       for (var i = 0; i < mutations.length; i++) {
         var m = mutations[i];
-        if (m.type === 'attributes') {
-          var el = m.target;
-          if (m.attributeName === 'data-darkreader-inline-fill') {
-            if (el.tagName === 'rect') {
-              if (el.matches(LABEL_RECT_SEL)) fixLabelRect(el);
-              if (el.closest('#underlay') && !isKropkiDotRect(el)) fixUnderlayRect(el);
-              if (isKropkiCircle(el)) fixKropkiDot(el);
-            } else if (el.tagName === 'path') {
-              if (el.closest('#cages') && el.matches(CAGE_FILL_SEL)) fixCagePath(el);
-            } else if (el.tagName === 'text') {
-              if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
-              else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
-              else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
-              else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
-              else if (el.closest('#overlay')) { fixOverlayMarkerText(el); }
-            }
-          } else if (m.attributeName === 'data-darkreader-inline-color') {
-            if (el.tagName === 'text') {
-              if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
-              else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
-              else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
-              else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
-              else if (el.closest('#overlay')) { fixOverlayMarkerText(el); }
-            }
-          } else if (m.attributeName === 'data-darkreader-inline-stroke') {
-            // Lines: DR re-converts the stroke after our scan.
-            if (isLineStroke(el)) applyLineStroke(el);
-          }
-        } else if (m.type === 'childList' && m.addedNodes.length > 0) {
+        if (m.type === 'childList' && m.addedNodes.length > 0) {
           // Ignore childList mutations caused by our own label insertions to avoid
           // an infinite loop (rebuildKropkiLabels inserts nodes → observer fires →
           // rebuildKropkiLabels again → ...).
@@ -1844,7 +1784,7 @@
         }
       }
       if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
-    }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
+    }).observe(svg, { childList: true, subtree: true });
   }
 
   function waitForDRAndSVG() {
@@ -1865,16 +1805,14 @@
   // instead. Both live in #cell-grids. We target all paths there except
   // path.cell-grid (the thin cell-divider grid lines).
   //
-  // When our stroke/width is NOT being applied, restore DR's expected inline
-  // stroke variable so DR's converted colour shows correctly. This fixes the
-  // "second disable makes the border disappear" issue.
+  // When our stroke/width is NOT being applied we drop any inline stroke so the
+  // native cage-box outline (FROZEN_DARK_CSS) shows.
 
   function isCageBoxPath(el) {
     return el.tagName === 'path' && !!el.closest('#cell-grids') && !el.classList.contains('cell-grid');
   }
 
   function fixCageBox(el) {
-    var inDR = isDarkReader();
     var centerActive = settings.regionBorderCenterEnabled;
     var multiActive  = settings.regionBorderMultiEnabled;
 
@@ -1882,19 +1820,13 @@
     // stroke laid over a grid line to HIDE it (invisible white-on-white in light
     // mode — used for irregular outer shapes / merged cells, e.g. Gattai puzzles).
     // They are NOT the dark 3x3 box outlines this function was written for, so the
-    // normal logic is wrong both ways (suppressing reveals the line the author hid;
-    // restoring DR's text colour paints a BRIGHT line). Under DR, repaint them the
-    // dark background so they keep erasing the now-light grid line beneath — the
-    // same thing SudokuPad's own dark mode does ([stroke="#FFFFFF"]->var(--dm-black)).
+    // normal logic is wrong both ways (suppressing reveals the line the author hid).
+    // Drop any inline stroke so FROZEN_DARK_CSS repaints them the dark background
+    // ([stroke="#FFFFFF"]→var(--dm-black)), keeping them erasing the grid line.
     var sc = parseColor(el.getAttribute('stroke'));
     if (sc && sc.a !== 0 && sc.r >= 240 && sc.g >= 240 && sc.b >= 240) {
-      if (inDR) {
-        el.style.setProperty('stroke', 'var(--darkreader-background-ffffff, #181a1b)', 'important');
-      } else {
-        el.style.removeProperty('stroke');
-      }
+      el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-width');          // keep the author's native width
-      el.style.removeProperty('--darkreader-inline-stroke');
       return;
     }
 
@@ -1904,15 +1836,11 @@
       // stroke so it doesn't double-render above #underlay elements.
       el.style.setProperty('stroke', 'none', 'important');
       el.style.setProperty('stroke-width', '0', 'important');
-      el.style.removeProperty('--darkreader-inline-stroke');
     } else {
-      // Neither border type is active — restore to default.
+      // Neither border type is active — drop our inline stroke so the native
+      // cage-box outline (FROZEN_DARK_CSS) shows.
       el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-width');
-      if (inDR) {
-        // Restore DR's managed stroke variable so DR's converted colour renders.
-        el.style.setProperty('--darkreader-inline-stroke', 'var(--darkreader-text-000000, #e8e6e3)');
-      }
     }
   }
   function fixAllCageBoxes(svg) { svg.querySelectorAll('#cell-grids path:not(.cell-grid)').forEach(fixCageBox); }
@@ -2427,15 +2355,12 @@
         cgClone.setAttribute('d', parts.join(''));
       }
 
-      // Cell borders: recolor the thin grid lines to the chosen colour/opacity.
-      // Set an !important inline stroke and strip DR's marker so DarkReader leaves
-      // it alone (the clone is recreated fresh each draw, so no need to restore).
+      // Cell borders: recolor the thin grid lines to the chosen colour/opacity
+      // via an !important inline stroke (the clone is recreated fresh each draw).
       if (needCellColor) {
         cgClone.style.setProperty('stroke', hexToRgba(settings.regionBorderCellColor, settings.regionBorderCellOpacity), 'important');
         var cellW = parseFloat(settings.regionBorderCellWidth);
         if (!isNaN(cellW)) cgClone.style.setProperty('stroke-width', cellW + 'px', 'important');
-        cgClone.removeAttribute('data-darkreader-inline-stroke');
-        cgClone.style.removeProperty('--darkreader-inline-stroke');
       }
 
       mainGroup.insertBefore(cgClone, mainGroup.firstChild);
@@ -2582,12 +2507,12 @@
       for (var i = 0; i < mutations.length; i++) {
         var m = mutations[i];
         if (m.type === 'childList') { needsUpdate = true; break; }
-        if (m.type === 'attributes' && (m.attributeName === 'class' || m.attributeName === 'data-darkreader-inline-color' || m.attributeName === 'data-darkreader-inline-fill')) {
+        if (m.type === 'attributes' && m.attributeName === 'class') {
           needsUpdate = true; break;
         }
       }
       if (needsUpdate) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
-    }).observe(cc, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-darkreader-inline-color', 'data-darkreader-inline-fill'] });
+    }).observe(cc, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   }
   function waitForCellCandidates() {
     if (document.getElementById('cell-candidates')) { startCandidateSortPatch(); return; }
@@ -2659,13 +2584,12 @@
         var m = mutations[i];
         if (m.type === 'childList') { needsUpdate = true; break; }
         if (m.type === 'attributes' &&
-            (m.attributeName === 'class' || m.attributeName === 'x' || m.attributeName === 'y' ||
-             m.attributeName === 'data-darkreader-inline-color' || m.attributeName === 'data-darkreader-inline-fill')) {
+            (m.attributeName === 'class' || m.attributeName === 'x' || m.attributeName === 'y')) {
           needsUpdate = true; break;
         }
       }
       if (needsUpdate) { reorderAllCornerCells(cp); fixAllCornerTexts(cp); }
-    }).observe(cp, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'x', 'y', 'data-darkreader-inline-color', 'data-darkreader-inline-fill'] });
+    }).observe(cp, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'x', 'y'] });
   }
   function waitForCellPencilmarks() {
     if (document.getElementById('cell-pencilmarks')) { startCornerReflowPatch(); return; }
@@ -3131,7 +3055,6 @@
     // on-screen width via non-scaling-stroke.
     function styleNode(node, m, paint) {
       node.removeAttribute('id'); node.removeAttribute('class');
-      node.removeAttribute('data-darkreader-inline-stroke'); node.removeAttribute('data-darkreader-inline-fill');
       if (node.querySelectorAll) Array.prototype.forEach.call(node.querySelectorAll('*'), function (d) { d.removeAttribute('id'); d.removeAttribute('class'); });
       node.setAttribute('transform', 'matrix(' + m.a + ',' + m.b + ',' + m.c + ',' + m.d + ',' + m.e + ',' + m.f + ')');
       node.setAttribute('vector-effect', 'non-scaling-stroke');
