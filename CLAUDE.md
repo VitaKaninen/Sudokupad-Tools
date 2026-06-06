@@ -30,7 +30,7 @@ After every version bump, immediately and without asking:
 3. `git push`
 
 ### Version bumps
-Bump `@version` in the `==UserScript==` header for every change — semver minor increments (e.g. 2.119.0 → 2.120.0).
+Bump `@version` in the `==UserScript==` header for every change — semver minor increments (e.g. 2.119.0 → 2.120.0). **Also bump the internal `SCRIPT_VERSION` constant (≈line 209) to match** — it drives `window.spdrVersion`, the only reliable "which build is live" signal in-browser. It silently drifted (stuck at 3.11.0 while the header advanced); keep them identical.
 
 ### Testing in Chrome (standing permission)
 
