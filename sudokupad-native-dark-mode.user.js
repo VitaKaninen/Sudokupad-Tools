@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.18.0
+// @version      3.19.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.18.0';
+  var SCRIPT_VERSION = '3.19.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4495,6 +4495,8 @@
     var app = await Framework.getApp();
     var cellByKey = {};
     app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
+    var originalSelection = Array.from(app.puzzle.selectedCells || []);
+    var preOpSnap = snapshotPencilmarks();   // baseline for atomic rollback
 
     var totalTargets = targets.length;
     var failures = [];
@@ -4503,8 +4505,7 @@
     // Group by (type, digit). Each group = ONE api-select + ONE app.act toggle.
     // app.act({type:'candidates'|'pencilmarks', arg:digit}) toggles the mark on
     // the selected cells directly — no tool-mode switch and no digit-button
-    // click, so nothing flickers. Selection restore + the single undo-group are
-    // handled by the multi-pass wrapper that calls us.
+    // click, so nothing flickers.
     var byModeDigit = { corner: new Map(), centre: new Map() };
     targets.forEach(function(t) {
       var map = byModeDigit[t.type];
@@ -4514,6 +4515,12 @@
 
     var actionFor = { corner: 'pencilmarks', centre: 'candidates' };
 
+    // Open the undo-group ONLY now — *after* collecting targets above. SudokuPad
+    // strips the .conflict CSS classes while an edit-group is open (restoring
+    // them on groupend), so collecting conflicts with a group already open would
+    // always find zero. Removals all live in this one group → a single undo.
+    app.act({ type: 'groupstart' });
+    try {
     for (var mi = 0; mi < 2; mi++) {
       var mode = mi === 0 ? 'corner' : 'centre';
       var digitMap = byModeDigit[mode];
@@ -4547,21 +4554,31 @@
         var after = snapshotPencilmarks();
         var diff = diffSnapshots(before, after);
 
-        // Safety: additions or value/color changes are always wrong here. We
-        // don't roll back per-group — the multi-pass wrapper reverts the whole
-        // undo-group atomically when we report aborted.
+        // Safety: additions or value/color changes are always wrong here →
+        // close the group and roll the whole sweep back atomically (one undo).
         var criticalUnexpected = diff.added.corner.length + diff.added.centre.length +
                                  diff.added.values.length + diff.added.colors.length +
                                  diff.removed.values.length + diff.removed.colors.length;
         if (criticalUnexpected > 0) {
           console.error('[spDR-fix] REMOVE unexpected change for', mode, digit, diff);
+          app.act({ type: 'groupend' });
+          var undoBtn = getModeButton('undo');
+          var rollbackOk = false;
+          if (undoBtn) {
+            dispatchClickEl(undoBtn);
+            for (var att = 0; att < 8; att++) {
+              await sleep(25);
+              if (diffEmpty(diffSnapshots(preOpSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
+            }
+          }
           return {
-            totalTargets: totalTargets, removed: removedCount,
+            totalTargets: totalTargets, removed: 0,
             skippedExcluded: skippedExcluded, aborted: true,
             abortReason: 'unexpected-diff',
             abortTarget: { type: mode, digit: digit,
                            cellX: String(cellObjs[0].col * 64 + 32),
                            cellY: String(cellObjs[0].row * 64 + 32) },
+            rollbackOk: rollbackOk,
             elapsedMs: performance.now() - startTime, failures: failures,
           };
         }
@@ -4577,10 +4594,16 @@
       }
     }
 
+    app.act({ type: 'groupend' });
     return {
       totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded,
       aborted: false, elapsedMs: performance.now() - startTime, failures: failures,
     };
+    } finally {
+      // Restore the caller's selection on every exit path.
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
+    }
   }
 
 
@@ -4669,66 +4692,47 @@
     var allFailures = [];
     var passCount = 0;
 
-    // Wrap every pass in a single undo-group so the whole sweep collapses to one
-    // undo step (same as a SudokuPad paste). Capture the selection up front and
-    // restore it on every exit path.
-    var app = await Framework.getApp();
-    var originalSelection = Array.from(app.puzzle.selectedCells || []);
-    var preOpSnap = snapshotPencilmarks();
-    app.act({ type: 'groupstart' });
-    try {
-      for (var pass = 0; pass < MAX_PASSES; pass++) {
-        var r = await _removeInvalidPencilmarksInternal(opts);
-        passCount++;
-        totalRemoved += r.removed || 0;
-        totalTargets += r.totalTargets || 0;
-        totalSkippedExcluded += r.skippedExcluded || 0;
-        totalElapsedMs += r.elapsedMs || 0;
-        if (r.failures && r.failures.length) Array.prototype.push.apply(allFailures, r.failures);
+    // Each pass = one _removeInvalidPencilmarksInternal call, which owns its own
+    // undo-group (opened only after it collects conflicts, because groupstart
+    // hides the .conflict classes). The common case is a single pass = one undo.
+    // Extra passes (digit set wider than the cell renders) add one undo each.
+    for (var pass = 0; pass < MAX_PASSES; pass++) {
+      var r = await _removeInvalidPencilmarksInternal(opts);
+      passCount++;
+      totalRemoved += r.removed || 0;
+      totalTargets += r.totalTargets || 0;
+      totalSkippedExcluded += r.skippedExcluded || 0;
+      totalElapsedMs += r.elapsedMs || 0;
+      if (r.failures && r.failures.length) Array.prototype.push.apply(allFailures, r.failures);
 
-        // Abort — close the group and roll the entire sweep back atomically with
-        // a single undo, then report (removed: 0, since nothing survives).
-        if (r.aborted) {
-          app.act({ type: 'groupend' });
-          var undoBtn = getModeButton('undo');
-          var rollbackOk = false;
-          if (undoBtn) {
-            dispatchClickEl(undoBtn);
-            for (var att = 0; att < 8; att++) {
-              await sleep(25);
-              if (diffEmpty(diffSnapshots(preOpSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
-            }
-          }
-          return {
-            totalTargets: totalTargets, removed: 0,
-            skippedExcluded: totalSkippedExcluded,
-            aborted: true, abortReason: r.abortReason, abortTarget: r.abortTarget,
-            rollbackOk: rollbackOk,
-            elapsedMs: totalElapsedMs, failures: allFailures,
-            passCount: passCount,
-          };
-        }
-
-        // Stop if no more conflicts visible — done.
-        var remainingConflicts = countVisibleConflicts(opts && opts.cellFilter);
-        if (remainingConflicts === 0) break;
-
-        // Stop if this pass removed nothing — further passes won't help.
-        if ((r.removed || 0) === 0) break;
+      // Abort — propagate immediately with combined totals so the user sees the
+      // partial counts (the internal pass already rolled its own group back).
+      if (r.aborted) {
+        return {
+          totalTargets: totalTargets, removed: totalRemoved,
+          skippedExcluded: totalSkippedExcluded,
+          aborted: true, abortReason: r.abortReason, abortTarget: r.abortTarget,
+          rollbackOk: r.rollbackOk,
+          elapsedMs: totalElapsedMs, failures: allFailures,
+          passCount: passCount,
+        };
       }
 
-      app.act({ type: 'groupend' });
-      return {
-        totalTargets: totalTargets, removed: totalRemoved,
-        skippedExcluded: totalSkippedExcluded,
-        aborted: false,
-        elapsedMs: totalElapsedMs, failures: allFailures,
-        passCount: passCount,
-      };
-    } finally {
-      app.deselect();
-      if (originalSelection.length > 0) app.select(originalSelection);
+      // Stop if no more conflicts visible — done.
+      var remainingConflicts = countVisibleConflicts(opts && opts.cellFilter);
+      if (remainingConflicts === 0) break;
+
+      // Stop if this pass removed nothing — further passes won't help.
+      if ((r.removed || 0) === 0) break;
     }
+
+    return {
+      totalTargets: totalTargets, removed: totalRemoved,
+      skippedExcluded: totalSkippedExcluded,
+      aborted: false,
+      elapsedMs: totalElapsedMs, failures: allFailures,
+      passCount: passCount,
+    };
   }
 
   function removeInvalidPencilmarks() {
