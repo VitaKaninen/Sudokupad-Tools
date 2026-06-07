@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.16.4
+// @version      3.17.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.16.4';
+  var SCRIPT_VERSION = '3.17.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1931,30 +1931,60 @@
     return null;
   }
 
-  // ── DOM-sourced "extra regions" (shaded-region recolour, underlay case) ───────
-  // The Shaded mode normally clones #cages path.cage-extraregion. But an extra
-  // region can ALSO be authored as a hidden, sum-less, unique KILLER cage, which
-  // SudokuPad renders as plain grey #underlay rects with NO cage-extraregion path
-  // to clone (e.g. "We Live Here" https://sudokupad.app/zax289niwv — 4 hidden
-  // unique cages drawn as grey cells; a repeat inside one is a real conflict).
+  // ── Shaded "extra regions" drawn as grey #underlay cells (recolour) ───────────
+  // Shaded mode normally clones #cages path.cage-extraregion. But an extra region
+  // can ALSO be authored as a hidden, sum-less, unique cage (the Extra-Region tool
+  // or the hidden-killer trick), which SudokuPad renders as plain grey #underlay
+  // rects with NO cage-extraregion path to clone (e.g. "We Live Here"
+  // https://sudokupad.app/zax289niwv — 4 hidden unique cages drawn as grey cells).
   //
-  // We detect these PURELY FROM THE DOM — the grey underlay rects themselves — and
-  // do NOT read the puzzle model. ⚠️ This is deliberate: reading the model needs
-  // `Framework.getApp()`, and touching that anywhere near load intermittently breaks
-  // SudokuPad's own init (the whole userscript then aborts before buildAllUI — no
-  // buttons, grey/black board). v3.15 read the model from the hot paint path and hit
-  // this hard; deferring getApp (even to after the load event) was still racy. So we
-  // avoid Framework entirely. Cost: we group cells by geometry (flood-fill), so two
-  // DISTINCT logical regions that happen to touch share one colour — fine for the
-  // "highlight the shaded areas" goal, and never worth reintroducing the getApp risk.
+  // Two sources, on purpose (this is the v3.15→v3.16→v3.17 lesson):
+  //   • DETECTION ("does this puzzle have such regions?") is PURELY DOM — the grey
+  //     underlay rects themselves. puzzleHasShadedRegions() runs early/often during
+  //     SudokuPad's init, so it must stay Framework-free.
+  //   • GROUPING (which cell → which region, so two regions that TOUCH get DIFFERENT
+  //     colours) reads the puzzle MODEL, but SYNCHRONOUSLY via the pure getter
+  //     Framework.app (`get(){ return __app; }` — zero side effects), NEVER via
+  //     Framework.getApp()/promises. v3.15's init break was the async
+  //     `.then(applySettings)` re-entering the pipeline mid-load, NOT the model read
+  //     itself; a guarded sync read returns null before the app exists (→ flood-fill
+  //     fallback) and the real regions after. v3.16 over-corrected to DOM-only,
+  //     which can't separate two distinct regions that touch (flood-fill merges
+  //     them into one colour) — the bug this restores the fix for.
   //
-  // Signature: an #underlay rect whose ORIGINAL attribute fill is grayscale (our
-  // object-shading overwrites the inline style, not the attribute), non-white, and
-  // that covers ~a whole cell defines a shaded cell. We flood-fill those cells into
-  // regions, 4-colour, and map cell → palette idx. Recolour then hits every grey
-  // rect (full cells AND inset border strips) whose centre lands in a shaded cell.
+  // The grey rect detection (below): an #underlay rect whose ORIGINAL attribute fill
+  // is grayscale (our object-shading overwrites the inline style, not the attribute),
+  // non-white, ~a whole cell, defines a shaded cell. Recolour then hits every grey
+  // rect (full cells AND inset border strips) whose centre lands in a mapped cell.
   // Cached by URL + underlay-rect count so the per-rect hot path is O(1).
-  var _domShadedCache = { key: null, count: -1, map: null };
+  var _domShadedCache  = { key: null, count: -1, map: null, final: false };
+  var _domShadedNudged = null;   // URL we've already scheduled a model-upgrade retry for
+
+  // Hidden / sum-less unique cages = invisible "must contain 1-9" regions. Read
+  // SYNCHRONOUSLY from the already-parsed model (Framework.app is a side-effect-free
+  // getter). Returns an array of [r,c] cell lists (0-indexed), or null before the app
+  // is ready / on hosts without Framework.app / when the puzzle has none.
+  function readModelExtraRegions() {
+    try {
+      var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+        ? Framework.app.puzzle.currentPuzzle : null;
+      if (!cp || !Array.isArray(cp.cages)) return null;
+      var extras = cp.cages.filter(function (c) {
+        return c && c.unique === true && c.type !== 'region' && c.type !== 'rowcol'
+          && (c.style === 'extraregion' || (c.hidden === true && c.sum == null && c.value == null));
+      });
+      if (!extras.length) return null;
+      var regions = extras.map(function (c) {
+        var cells = [];
+        String(c.cells || '').split(',').forEach(function (rc) {
+          var m = /r(\d+)c(\d+)/i.exec(rc.trim());
+          if (m) cells.push([parseInt(m[1], 10) - 1, parseInt(m[2], 10) - 1]);
+        });
+        return cells;
+      }).filter(function (cells) { return cells.length; });
+      return regions.length ? regions : null;
+    } catch (e) { return null; }
+  }
 
   function computeDomShadedRegionMap(svg, rects) {
    try {
@@ -1977,42 +2007,73 @@
       member[rr + ',' + cc] = true; any = true;
     }
     if (!any) return null;
-    // Flood-fill member cells into contiguous regions.
-    var regions = [], seen = {};
-    Object.keys(member).forEach(function (k) {
-      if (seen[k]) return;
-      var start = k.split(',').map(Number);
-      var cells = [], queue = [start]; seen[k] = true;
-      while (queue.length) {
-        var cur = queue.shift(); cells.push(cur);
-        [[cur[0]-1,cur[1]],[cur[0]+1,cur[1]],[cur[0],cur[1]-1],[cur[0],cur[1]+1]].forEach(function (nb) {
-          var nk = nb[0] + ',' + nb[1];
-          if (member[nk] && !seen[nk]) { seen[nk] = true; queue.push(nb); }
-        });
-      }
-      regions.push(cells);
-    });
+
+    // Prefer model regions so two distinct logical regions that TOUCH get different
+    // colours (flood-fill can't tell them apart). Require overlap with the detected
+    // grey cells, so we only act when the model's hidden-unique cages are the ones
+    // actually shaded grey. Fall back to a geometry flood-fill when the model isn't
+    // readable yet (getDomShadedRegionMap schedules an upgrade-on-land retry).
+    var regions, fromModel = false;
+    var modelRegions = readModelExtraRegions();
+    if (modelRegions && modelRegions.some(function (cells) {
+          return cells.some(function (rc) { return member[rc[0] + ',' + rc[1]]; });
+        })) {
+      regions = modelRegions; fromModel = true;
+    } else {
+      regions = []; var seen = {};
+      Object.keys(member).forEach(function (k) {
+        if (seen[k]) return;
+        var start = k.split(',').map(Number);
+        var cells = [], queue = [start]; seen[k] = true;
+        while (queue.length) {
+          var cur = queue.shift(); cells.push(cur);
+          [[cur[0]-1,cur[1]],[cur[0]+1,cur[1]],[cur[0],cur[1]-1],[cur[0],cur[1]+1]].forEach(function (nb) {
+            var nk = nb[0] + ',' + nb[1];
+            if (member[nk] && !seen[nk]) { seen[nk] = true; queue.push(nb); }
+          });
+        }
+        regions.push(cells);
+      });
+    }
+
     var colors = computeRegion4Colors(regions, null, regions.length);
     var map = {};
     regions.forEach(function (cells, i) {
       var idx = (colors[i] != null) ? colors[i] : 0;
       cells.forEach(function (rc) { map[rc[0] + ',' + rc[1]] = idx; });
     });
-    return map;
+    return { map: map, fromModel: fromModel };
    } catch (e) { return null; }   // never let region detection abort the paint path
   }
 
-  // Cached accessor (cell → palette idx, or null). Pure DOM, synchronous, no
-  // Framework — safe to call from the hot paint path and from puzzleHasShadedRegions.
+  // Cached accessor (cell → palette idx, or null). DOM detection is Framework-free;
+  // model grouping is a guarded SYNCHRONOUS read (no getApp/promises). Safe from the
+  // hot paint path and from puzzleHasShadedRegions.
   function getDomShadedRegionMap() {
     var svg = document.getElementById('svgrenderer');
     if (!svg) return null;
     var rects = svg.querySelectorAll('#underlay rect');
     var key = modelRegionCacheKey(), count = rects.length;
-    if (_domShadedCache.key === key && _domShadedCache.count === count) return _domShadedCache.map;
-    var map = computeDomShadedRegionMap(svg, rects);
-    _domShadedCache = { key: key, count: count, map: map };
-    return map;
+    if (_domShadedCache.key === key && _domShadedCache.count === count && _domShadedCache.final)
+      return _domShadedCache.map;
+    var res = computeDomShadedRegionMap(svg, rects);   // null | { map, fromModel }
+    var modelReadable = (typeof Framework !== 'undefined' && Framework.app
+      && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
+    // Final (cacheable) once we know the answer won't improve: no shaded regions,
+    // a model-grouped result, or the model is readable but didn't match (flood-fill
+    // is then the best we'll do). Only a flood-fill taken because the model wasn't
+    // ready yet stays non-final → recomputed, plus a one-shot re-apply to upgrade.
+    var final = (res === null) || res.fromModel === true || modelReadable;
+    _domShadedCache = { key: key, count: count, map: res ? res.map : null, final: final };
+    if (!final && _domShadedNudged !== key) {
+      _domShadedNudged = key;
+      setTimeout(function () {
+        _domShadedCache = { key: null, count: -1, map: null, final: false };
+        var s = document.getElementById('svgrenderer');
+        if (s) fixAllUnderlays(s);
+      }, 250);
+    }
+    return _domShadedCache.map;
   }
 
   // Map each geometric region (connected cell group) to a logical group id. With
