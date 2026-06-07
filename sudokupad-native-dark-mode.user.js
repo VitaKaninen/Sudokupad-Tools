@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.20.0
+// @version      3.21.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.20.0';
+  var SCRIPT_VERSION = '3.21.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1956,6 +1956,26 @@
   // non-white, ~a whole cell, defines a shaded cell. Recolour then hits every grey
   // rect (full cells AND inset border strips) whose centre lands in a mapped cell.
   // Cached by URL + underlay-rect count so the per-rect hot path is O(1).
+  //
+  // What QUALIFIES a region for recolour (v3.21 — was "any hidden unique cage that
+  // overlaps a grey cell", which wrongly grabbed e.g. a hidden-unique MAIN DIAGONAL
+  // and recoloured stray objects sitting in its cells — pbwqsppuho). A region is
+  // recoloured ONLY when it is a deliberately-shaded full no-repeat region:
+  //   1. SIZE — exactly `settings.digitSet.length` cells (the count of digits used
+  //      in the puzzle, user-confirmed/scanned). Drops sub-size cages (3-cell
+  //      killers, partial regions) — a cage is not a colourable region.
+  //   2. CONTIGUOUS — orthogonally connected (the diagonal touches only at corners,
+  //      so it fails here too; belt-and-suspenders with rule 3).
+  //   3. FULLY + CONSISTENTLY SHADED — EVERY cell carries a shading rect of one
+  //      consistent colour. A region only partly shaded (the diagonal: 2/9 stray
+  //      grey cells) is not a deliberate shaded region → skipped.
+  //   4. GREY only — if that consistent colour is a REAL colour (red/blue/…), leave
+  //      the author's shading untouched: the author may use colour to distinguish
+  //      regions, and recolouring would erase that meaning. Grey regions (hard to
+  //      see in dark mode) are the ones we recolour to the palette.
+  // Model regions still drive GROUPING (so two qualifying regions that touch get
+  // different colours); the grey flood-fill fallback (model not ready yet) applies
+  // the same size rule per connected component.
   var _domShadedCache  = { key: null, count: -1, map: null, final: false };
   var _domShadedNudged = null;   // URL we've already scheduled a model-upgrade retry for
 
@@ -1990,37 +2010,73 @@
     var cs = getGridCellSize();
     var N  = detectGridSize();
     if (!cs || cs < 4 || !N || N < 2) return null;
-    var member = {}, any = false;
+
+    // Per-cell author shading colour, read from the ATTRIBUTE fill (our object-
+    // shading only sets the inline STYLE, so the attribute keeps the original).
+    // Only ~full-cell rects define a cell's shade; inset border strips are ignored.
+    // shade['r,c'] = { r,g,b, gray }.
+    var shade = {}, any = false;
     for (var i = 0; i < rects.length; i++) {
       var r = rects[i];
       var c = parseColor(r.getAttribute('fill') || '');
       if (!c || c.a === 0) continue;
-      if (!isGrayColor(c)) continue;
       if (c.r >= 240 && c.g >= 240 && c.b >= 240) continue;   // skip white/near-white
       var w = parseFloat(r.getAttribute('width')), h = parseFloat(r.getAttribute('height'));
       var x = parseFloat(r.getAttribute('x')),     y = parseFloat(r.getAttribute('y'));
       if (!isFinite(w) || !isFinite(h) || !isFinite(x) || !isFinite(y)) continue;
-      if (w < cs * 0.75 || h < cs * 0.75) continue;           // only ~full-cell rects define membership
+      if (w < cs * 0.75 || h < cs * 0.75) continue;           // only ~full-cell rects define a cell's shade
       var cc = Math.floor((x + w / 2) / cs), rr = Math.floor((y + h / 2) / cs);
       if (rr < 0 || rr >= N || cc < 0 || cc >= N) continue;
-      member[rr + ',' + cc] = true; any = true;
+      var k = rr + ',' + cc;
+      if (!shade[k]) { shade[k] = { r: c.r, g: c.g, b: c.b, gray: isGrayColor(c) }; any = true; }
     }
     if (!any) return null;
 
+    // Target region size = number of digits used in the puzzle (rule 1).
+    var want = (settings.digitSet && settings.digitSet.length) ? settings.digitSet.length : N;
+
+    // Rule 2: orthogonally connected.
+    function isContiguous(cells) {
+      if (cells.length <= 1) return true;
+      var set = {}; cells.forEach(function (rc) { set[rc[0] + ',' + rc[1]] = true; });
+      var seen = {}, q = [cells[0]], cnt = 0; seen[cells[0][0] + ',' + cells[0][1]] = true;
+      while (q.length) {
+        var cur = q.shift(); cnt++;
+        [[cur[0]-1,cur[1]],[cur[0]+1,cur[1]],[cur[0],cur[1]-1],[cur[0],cur[1]+1]].forEach(function (nb) {
+          var nk = nb[0] + ',' + nb[1];
+          if (set[nk] && !seen[nk]) { seen[nk] = true; q.push(nb); }
+        });
+      }
+      return cnt === cells.length;
+    }
+    // Rules 3+4: every cell shaded with one consistent GREY colour (≤24/channel
+    // spread). Returns false if any cell is unshaded, or the shade is a real colour.
+    function isFullyGreyShaded(cells) {
+      var base = null;
+      for (var j = 0; j < cells.length; j++) {
+        var sc = shade[cells[j][0] + ',' + cells[j][1]];
+        if (!sc || !sc.gray) return false;
+        if (!base) base = sc;
+        else if (Math.abs(sc.r - base.r) > 24 || Math.abs(sc.g - base.g) > 24 || Math.abs(sc.b - base.b) > 24) return false;
+      }
+      return true;
+    }
+
     // Prefer model regions so two distinct logical regions that TOUCH get different
-    // colours (flood-fill can't tell them apart). Require overlap with the detected
-    // grey cells, so we only act when the model's hidden-unique cages are the ones
-    // actually shaded grey. Fall back to a geometry flood-fill when the model isn't
-    // readable yet (getDomShadedRegionMap schedules an upgrade-on-land retry).
-    var regions, fromModel = false;
+    // colours (flood-fill can't tell them apart). Each model region must pass all
+    // four rules. Fall back to a grey flood-fill (same size rule per component) when
+    // the model isn't readable yet (getDomShadedRegionMap schedules an upgrade retry).
+    var regions = [], fromModel = false;
     var modelRegions = readModelExtraRegions();
-    if (modelRegions && modelRegions.some(function (cells) {
-          return cells.some(function (rc) { return member[rc[0] + ',' + rc[1]]; });
-        })) {
-      regions = modelRegions; fromModel = true;
+    if (modelRegions) {
+      fromModel = true;
+      modelRegions.forEach(function (cells) {
+        if (cells.length === want && isContiguous(cells) && isFullyGreyShaded(cells)) regions.push(cells);
+      });
     } else {
-      regions = []; var seen = {};
-      Object.keys(member).forEach(function (k) {
+      var grey = {}, seen = {};
+      Object.keys(shade).forEach(function (k) { if (shade[k].gray) grey[k] = true; });
+      Object.keys(grey).forEach(function (k) {
         if (seen[k]) return;
         var start = k.split(',').map(Number);
         var cells = [], queue = [start]; seen[k] = true;
@@ -2028,12 +2084,14 @@
           var cur = queue.shift(); cells.push(cur);
           [[cur[0]-1,cur[1]],[cur[0]+1,cur[1]],[cur[0],cur[1]-1],[cur[0],cur[1]+1]].forEach(function (nb) {
             var nk = nb[0] + ',' + nb[1];
-            if (member[nk] && !seen[nk]) { seen[nk] = true; queue.push(nb); }
+            if (grey[nk] && !seen[nk]) { seen[nk] = true; queue.push(nb); }
           });
         }
-        regions.push(cells);
+        if (cells.length === want) regions.push(cells);
       });
     }
+
+    if (!regions.length) return { map: null, fromModel: fromModel };   // nothing qualifies (still cacheable once model is readable)
 
     var colors = computeRegion4Colors(regions, null, regions.length);
     var map = {};
