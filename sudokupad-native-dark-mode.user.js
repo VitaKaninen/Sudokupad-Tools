@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.21.0
+// @version      3.22.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.21.0';
+  var SCRIPT_VERSION = '3.22.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1118,6 +1118,20 @@
     return hexToRgba(pal[idx % 4], op);
   }
 
+  // Crisp (no anti-alias) edges for shaded-cell rects so the many tiled pieces a
+  // region is built from (full cells + bridging strips) meet seamlessly on the dark
+  // canvas — the AA fuzz at each edge otherwise reads as faint seams that the
+  // original's white background hid. ONLY for axis-aligned, square-cornered rects:
+  // crispEdges would jag rotated (diamond) or rounded (lucky-charm) shapes, so those
+  // keep anti-aliasing. Removed (→ default AA) when we stop shading the rect.
+  function applyCrispEdges(el) {
+    var axisAligned = el.tagName === 'rect'
+      && !el.getAttribute('transform')
+      && !(el.transform && el.transform.baseVal && el.transform.baseVal.length)
+      && !el.getAttribute('rx') && !el.getAttribute('ry');
+    if (axisAligned) el.style.setProperty('shape-rendering', 'crispEdges', 'important');
+    else el.style.removeProperty('shape-rendering');
+  }
   function fixUnderlayRect(rect) {
     // Shaded extra-region recolour takes priority: a grey underlay cell that is
     // part of a DOM-detected shaded region becomes its palette colour (overrides
@@ -1126,14 +1140,17 @@
     if (erc) {
       rect.style.setProperty('fill', erc, 'important');
       rect.style.removeProperty('fill-opacity');   // alpha is baked into the rgba
+      applyCrispEdges(rect);
       applyShapeStroke(rect);
       return;
     }
     // Fill (Cell shading section)
     if (settings.underlayEnabled) {
       applyShadingFill(rect);
+      applyCrispEdges(rect);
     } else {
       clearInline(rect, 'fill');
+      rect.style.removeProperty('shape-rendering');
     }
     // Stroke (Region borders section)
     applyShapeStroke(rect);
@@ -1963,13 +1980,14 @@
   // recoloured ONLY when it is a deliberately-shaded full no-repeat region:
   //   1. SIZE — exactly `settings.digitSet.length` cells (the count of digits used
   //      in the puzzle, user-confirmed/scanned). Drops sub-size cages (3-cell
-  //      killers, partial regions) — a cage is not a colourable region.
-  //   2. CONTIGUOUS — orthogonally connected (the diagonal touches only at corners,
-  //      so it fails here too; belt-and-suspenders with rule 3).
-  //   3. FULLY + CONSISTENTLY SHADED — EVERY cell carries a shading rect of one
+  //      killers, partial regions) — a cage is not a colourable region. NOT a
+  //      contiguity check: a deliberately-shaded NON-contiguous full region (e.g. a
+  //      staircase "these 9 cells hold 1-9", clover-style) is valid and IS coloured.
+  //   2. FULLY + CONSISTENTLY SHADED — EVERY cell carries a shading rect of one
   //      consistent colour. A region only partly shaded (the diagonal: 2/9 stray
-  //      grey cells) is not a deliberate shaded region → skipped.
-  //   4. GREY only — if that consistent colour is a REAL colour (red/blue/…), leave
+  //      grey cells) is not a deliberate shaded region → skipped. (This — not
+  //      contiguity — is what excludes the diagonal: it's barely shaded.)
+  //   3. GREY only — if that consistent colour is a REAL colour (red/blue/…), leave
   //      the author's shading untouched: the author may use colour to distinguish
   //      regions, and recolouring would erase that meaning. Grey regions (hard to
   //      see in dark mode) are the ones we recolour to the palette.
@@ -2035,21 +2053,7 @@
     // Target region size = number of digits used in the puzzle (rule 1).
     var want = (settings.digitSet && settings.digitSet.length) ? settings.digitSet.length : N;
 
-    // Rule 2: orthogonally connected.
-    function isContiguous(cells) {
-      if (cells.length <= 1) return true;
-      var set = {}; cells.forEach(function (rc) { set[rc[0] + ',' + rc[1]] = true; });
-      var seen = {}, q = [cells[0]], cnt = 0; seen[cells[0][0] + ',' + cells[0][1]] = true;
-      while (q.length) {
-        var cur = q.shift(); cnt++;
-        [[cur[0]-1,cur[1]],[cur[0]+1,cur[1]],[cur[0],cur[1]-1],[cur[0],cur[1]+1]].forEach(function (nb) {
-          var nk = nb[0] + ',' + nb[1];
-          if (set[nk] && !seen[nk]) { seen[nk] = true; q.push(nb); }
-        });
-      }
-      return cnt === cells.length;
-    }
-    // Rules 3+4: every cell shaded with one consistent GREY colour (≤24/channel
+    // Rules 2+3: every cell shaded with one consistent GREY colour (≤24/channel
     // spread). Returns false if any cell is unshaded, or the shade is a real colour.
     function isFullyGreyShaded(cells) {
       var base = null;
@@ -2071,7 +2075,7 @@
     if (modelRegions) {
       fromModel = true;
       modelRegions.forEach(function (cells) {
-        if (cells.length === want && isContiguous(cells) && isFullyGreyShaded(cells)) regions.push(cells);
+        if (cells.length === want && isFullyGreyShaded(cells)) regions.push(cells);
       });
     } else {
       var grey = {}, seen = {};
@@ -2185,68 +2189,44 @@
       });
     });
 
-    // Which groups are DISJOINT (a logical region whose cells form >1 orthogonally
-    // connected component — the scattered/disjoint-subset case). We want these
-    // pinned to the LAST palette colour (index 3) so the common regions keep the
-    // earlier colours: red (0) most common, then blue (1), then green (2), with the
-    // scattered region taking orange (3). Counting components from the cells (not
-    // the geo split) is the robust test for "appears as separate areas".
-    var groupCells = [];
-    for (var i = 0; i < numGroups; i++) groupCells.push([]);
-    regions.forEach(function (cells, ri) {
-      var g = groupOf[ri];
-      cells.forEach(function (rc) { groupCells[g].push(rc); });
-    });
-    var pinned = new Array(numGroups).fill(-1), anyDisjoint = false;
-    for (var g = 0; g < numGroups; g++) {
-      if (countComponents(groupCells[g]) > 1) { pinned[g] = 3; anyDisjoint = true; }
-    }
-
-    // For ordinary (connected) regions the graph is planar and the four-colour
-    // theorem guarantees a proper 4-colouring. Forcing a DISCONNECTED region to a
-    // single group — and further pinning it to colour 3 — can in theory exceed 4,
-    // so we degrade in priority order:
-    //   1. grouped + disjoint pinned to colour 3 (the desired look),
-    //   2. grouped, unpinned (disjoint still one colour, just maybe not orange),
-    //   3. ungrouped geometry colouring (always 4-colourable; clash-free).
-    // Plain greedy alone never suffices anyway: it can spill to a 5th colour
-    // (index 4) → past the 4-entry palette → undefined fill → black borders.
-    var groupColors = anyDisjoint ? colourGraph(numGroups, adj, pinned) : null;
+    // Colour to MAXIMISE distinct palette colours while staying proper (no two
+    // touching groups share a colour). ≤4 groups → each gets its OWN colour; >4 →
+    // spread across all four, repeating only across non-touching groups. The
+    // "least-used allowed colour" greedy (highest-degree first, colourSpread) does
+    // both: a fresh colour is preferred until all four are in play, and a
+    // neighbour's colour is never reused. Backtracking (colourGraph) is the fallback
+    // guaranteeing a proper ≤4 colouring if the greedy paints itself into a corner
+    // (planar region graphs are always 4-colourable); a final geometry-only pass
+    // covers a grouped graph that somehow can't be 4-coloured.
+    var groupColors = colourSpread(numGroups, adj);
     if (!groupColors) groupColors = colourGraph(numGroups, adj, null);
     if (!groupColors && groupOf.some(function (g, i) { return g !== i; })) {
       return computeRegion4Colors(regions);   // grouped impossible → geometry only
     }
-    if (!groupColors) {
-      // Identity grouping that still failed (shouldn't happen for planar input):
-      // clamp so nothing renders black.
-      groupColors = new Array(numGroups).fill(0);
-    }
+    if (!groupColors) groupColors = new Array(numGroups).fill(0);   // shouldn't happen for planar input
     return regions.map(function (_, ri) { return groupColors[groupOf[ri]]; });
   }
 
-  // Number of orthogonally connected components in a list of [r,c] cells.
-  function countComponents(cells) {
-    if (cells.length <= 1) return cells.length;
-    var inSet = {};
-    cells.forEach(function (rc) { inSet[rc[0] + ',' + rc[1]] = true; });
-    var seen = {}, comps = 0;
-    cells.forEach(function (rc) {
-      var key0 = rc[0] + ',' + rc[1];
-      if (seen[key0]) return;
-      comps++;
-      var stack = [rc];
-      while (stack.length) {
-        var cur = stack.pop(), k = cur[0] + ',' + cur[1];
-        if (seen[k]) continue;
-        seen[k] = true;
-        var r = cur[0], c = cur[1];
-        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
-          var nk = nb[0] + ',' + nb[1];
-          if (inSet[nk] && !seen[nk]) stack.push(nb);
-        });
-      }
-    });
-    return comps;
+  // Greedy proper colouring that SPREADS across all four palette colours: process
+  // highest-degree groups first; each takes the allowed colour (not used by an
+  // already-coloured neighbour) that is currently least-used overall (ties → lowest
+  // index). So non-adjacent groups get DIFFERENT colours and all four are used
+  // before any colour repeats. Returns a proper colour array, or null if some group
+  // has all four colours blocked by neighbours (≥5 mutually adjacent — non-planar;
+  // caller falls back to backtracking).
+  function colourSpread(n, adj) {
+    var order = []; for (var i = 0; i < n; i++) order.push(i);
+    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
+    var colors = new Array(n).fill(-1), usage = [0, 0, 0, 0];
+    for (var oi = 0; oi < order.length; oi++) {
+      var v = order[oi], blocked = {};
+      adj[v].forEach(function (j) { if (colors[j] >= 0) blocked[colors[j]] = true; });
+      var pick = -1, pickUse = Infinity;
+      for (var k = 0; k < 4; k++) { if (blocked[k]) continue; if (usage[k] < pickUse) { pickUse = usage[k]; pick = k; } }
+      if (pick < 0) return null;
+      colors[v] = pick; usage[pick]++;
+    }
+    return colors;
   }
 
   // Proper ≤4-colouring of a graph given adjacency sets. `pinned[i]` (optional)
