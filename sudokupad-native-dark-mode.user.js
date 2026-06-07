@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.17.0
+// @version      3.18.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.17.0';
+  var SCRIPT_VERSION = '3.18.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4184,26 +4184,6 @@
       el.dispatchEvent(new MouseEvent(t, init));
     });
   }
-  function getDigitButton(d) {
-    return document.querySelector('[data-control="value"][data-value="' + String(d) + '"]');
-  }
-  // Ensure number mode is active (data-value="1"-"9"/"0" buttons visible).
-  // Letter mode (data-value="A"-"I"/"O") is active when the toggleletter button
-  // is selected; detect by checking whether the "1" button exists.
-  async function ensureNumberMode() {
-    if (document.querySelector('[data-value="1"]')) return true;
-    var btn = document.querySelector('[data-control="toggleletter"]');
-    if (!btn) return false;
-    dispatchClickEl(btn);
-    for (var i = 0; i < 6; i++) {
-      await sleep(20);
-      if (document.querySelector('[data-value="1"]')) return true;
-    }
-    return false;
-  }
-  function isLetterModeActive() {
-    return !document.querySelector('[data-value="1"]');
-  }
   function getModeButton(mode) {
     // mode: 'normal' | 'corner' | 'centre' | 'colour' | 'pen'
     return document.querySelector('[data-control="' + mode + '"]');
@@ -4516,114 +4496,91 @@
     var cellByKey = {};
     app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
 
-    var originalMode = getCurrentMode();
-    var originalSelection = Array.from(app.puzzle.selectedCells || []);
-    var wasLetterMode = isLetterModeActive();
-    if (wasLetterMode) await ensureNumberMode();
     var totalTargets = targets.length;
     var failures = [];
     var removedCount = 0;
 
-    try {
+    // Group by (type, digit). Each group = ONE api-select + ONE app.act toggle.
+    // app.act({type:'candidates'|'pencilmarks', arg:digit}) toggles the mark on
+    // the selected cells directly — no tool-mode switch and no digit-button
+    // click, so nothing flickers. Selection restore + the single undo-group are
+    // handled by the multi-pass wrapper that calls us.
+    var byModeDigit = { corner: new Map(), centre: new Map() };
+    targets.forEach(function(t) {
+      var map = byModeDigit[t.type];
+      if (!map.has(t.digit)) map.set(t.digit, []);
+      map.get(t.digit).push(t);
+    });
 
-      // Group by (type, digit). Each group gets ONE api-select + ONE button click.
-      var byModeDigit = { corner: new Map(), centre: new Map() };
-      targets.forEach(function(t) {
-        var map = byModeDigit[t.type];
-        if (!map.has(t.digit)) map.set(t.digit, []);
-        map.get(t.digit).push(t);
-      });
+    var actionFor = { corner: 'pencilmarks', centre: 'candidates' };
 
-      for (var mi = 0; mi < 2; mi++) {
-        var mode = mi === 0 ? 'corner' : 'centre';
-        var digitMap = byModeDigit[mode];
-        if (digitMap.size === 0) continue;
+    for (var mi = 0; mi < 2; mi++) {
+      var mode = mi === 0 ? 'corner' : 'centre';
+      var digitMap = byModeDigit[mode];
+      if (digitMap.size === 0) continue;
 
-        var modeOk = await ensureMode(mode);
-        if (!modeOk) { failures.push('mode-switch-failed:' + mode); continue; }
+      var iter = digitMap.entries();
+      var step;
+      while (!(step = iter.next()).done) {
+        var digit = step.value[0];
+        var targetsForDigit = step.value[1];
 
-        var iter = digitMap.entries();
-        var step;
-        while (!(step = iter.next()).done) {
-          var digit = step.value[0];
-          var targetsForDigit = step.value[1];
+        // Re-filter to targets still present in DOM.
+        var preSnap = snapshotPencilmarks();
+        var stillPresent = targetsForDigit.filter(function(t) {
+          return preSnap[mode].has(t.cellKey + ',' + t.digit);
+        });
+        if (stillPresent.length === 0) continue;
 
-          var digitBtn = getDigitButton(digit);
-          if (!digitBtn) { skippedExcluded += targetsForDigit.length; continue; }
+        // Build cell objects for these targets.
+        var cellObjs = stillPresent.map(function(t) { return cellByKey[t.cellKey]; }).filter(Boolean);
+        if (cellObjs.length === 0) continue;
 
-          // Re-filter to targets still present in DOM.
-          var preSnap = snapshotPencilmarks();
-          var stillPresent = targetsForDigit.filter(function(t) {
-            return preSnap[mode].has(t.cellKey + ',' + t.digit);
-          });
-          if (stillPresent.length === 0) continue;
+        // Select exactly these cells via the API (no drag, no extras).
+        app.deselect();
+        app.select(cellObjs);
 
-          // Build cell objects for these targets.
-          var cellObjs = stillPresent.map(function(t) { return cellByKey[t.cellKey]; }).filter(Boolean);
-          if (cellObjs.length === 0) continue;
+        // All selected cells have digit in this mode → one toggle removes it from all.
+        var before = snapshotPencilmarks();
+        app.act({ type: actionFor[mode], arg: digit });
+        await sleep(20);
+        var after = snapshotPencilmarks();
+        var diff = diffSnapshots(before, after);
 
-          // Select exactly these cells via the API (no drag, no extras).
-          app.deselect();
-          app.select(cellObjs);
-          await sleep(10);
+        // Safety: additions or value/color changes are always wrong here. We
+        // don't roll back per-group — the multi-pass wrapper reverts the whole
+        // undo-group atomically when we report aborted.
+        var criticalUnexpected = diff.added.corner.length + diff.added.centre.length +
+                                 diff.added.values.length + diff.added.colors.length +
+                                 diff.removed.values.length + diff.removed.colors.length;
+        if (criticalUnexpected > 0) {
+          console.error('[spDR-fix] REMOVE unexpected change for', mode, digit, diff);
+          return {
+            totalTargets: totalTargets, removed: removedCount,
+            skippedExcluded: skippedExcluded, aborted: true,
+            abortReason: 'unexpected-diff',
+            abortTarget: { type: mode, digit: digit,
+                           cellX: String(cellObjs[0].col * 64 + 32),
+                           cellY: String(cellObjs[0].row * 64 + 32) },
+            elapsedMs: performance.now() - startTime, failures: failures,
+          };
+        }
 
-          // All selected cells have digit in this mode → clicking removes it from all.
-          var before = snapshotPencilmarks();
-          dispatchClickEl(digitBtn);
-          await sleep(50);
-          var after = snapshotPencilmarks();
-          var diff = diffSnapshots(before, after);
-
-          // Safety: additions or value/color changes are always wrong here → undo + abort.
-          var criticalUnexpected = diff.added.corner.length + diff.added.centre.length +
-                                   diff.added.values.length + diff.added.colors.length +
-                                   diff.removed.values.length + diff.removed.colors.length;
-          if (criticalUnexpected > 0) {
-            console.error('[spDR-fix] REMOVE unexpected change for', mode, digit, diff);
-            var undoBtn = getModeButton('undo');
-            var rollbackOk = false;
-            if (undoBtn) {
-              dispatchClickEl(undoBtn);
-              for (var att = 0; att < 8; att++) {
-                await sleep(25);
-                if (diffEmpty(diffSnapshots(before, snapshotPencilmarks()))) { rollbackOk = true; break; }
-              }
-            }
-            return {
-              totalTargets: totalTargets, removed: removedCount,
-              skippedExcluded: skippedExcluded, aborted: true,
-              abortReason: 'unexpected-diff',
-              abortTarget: { type: mode, digit: digit,
-                             cellX: String(cellObjs[0].col * 64 + 32),
-                             cellY: String(cellObjs[0].row * 64 + 32) },
-              rollbackOk: rollbackOk,
-              elapsedMs: performance.now() - startTime, failures: failures,
-            };
-          }
-
-          // Count correct removals.
-          var expectedKeys = new Set(stillPresent.map(function(t) { return t.cellKey + ',' + t.digit; }));
-          var correctRemoved = diff.removed[mode].filter(function(k) { return expectedKeys.has(k); }).length;
-          removedCount += correctRemoved;
-          if (correctRemoved < stillPresent.length) {
-            failures.push('partial-removal:' + mode + ':' + digit +
-                          ':expected=' + stillPresent.length + ':got=' + correctRemoved);
-          }
+        // Count correct removals.
+        var expectedKeys = new Set(stillPresent.map(function(t) { return t.cellKey + ',' + t.digit; }));
+        var correctRemoved = diff.removed[mode].filter(function(k) { return expectedKeys.has(k); }).length;
+        removedCount += correctRemoved;
+        if (correctRemoved < stillPresent.length) {
+          failures.push('partial-removal:' + mode + ':' + digit +
+                        ':expected=' + stillPresent.length + ':got=' + correctRemoved);
         }
       }
-
-      return {
-        totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded,
-        aborted: false, elapsedMs: performance.now() - startTime, failures: failures,
-      };
-
-    } finally {
-      // Restore original selection and mode on every exit path.
-      app.deselect();
-      if (originalSelection.length > 0) app.select(originalSelection);
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      if (originalMode && originalMode !== getCurrentMode()) await ensureMode(originalMode);
     }
+
+    return {
+      totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded,
+      aborted: false, elapsedMs: performance.now() - startTime, failures: failures,
+    };
   }
 
 
@@ -4712,43 +4669,66 @@
     var allFailures = [];
     var passCount = 0;
 
-    for (var pass = 0; pass < MAX_PASSES; pass++) {
-      var r = await _removeInvalidPencilmarksInternal(opts);
-      passCount++;
-      totalRemoved += r.removed || 0;
-      totalTargets += r.totalTargets || 0;
-      totalSkippedExcluded += r.skippedExcluded || 0;
-      totalElapsedMs += r.elapsedMs || 0;
-      if (r.failures && r.failures.length) Array.prototype.push.apply(allFailures, r.failures);
+    // Wrap every pass in a single undo-group so the whole sweep collapses to one
+    // undo step (same as a SudokuPad paste). Capture the selection up front and
+    // restore it on every exit path.
+    var app = await Framework.getApp();
+    var originalSelection = Array.from(app.puzzle.selectedCells || []);
+    var preOpSnap = snapshotPencilmarks();
+    app.act({ type: 'groupstart' });
+    try {
+      for (var pass = 0; pass < MAX_PASSES; pass++) {
+        var r = await _removeInvalidPencilmarksInternal(opts);
+        passCount++;
+        totalRemoved += r.removed || 0;
+        totalTargets += r.totalTargets || 0;
+        totalSkippedExcluded += r.skippedExcluded || 0;
+        totalElapsedMs += r.elapsedMs || 0;
+        if (r.failures && r.failures.length) Array.prototype.push.apply(allFailures, r.failures);
 
-      // Abort — propagate immediately with combined totals so the user sees
-      // the partial removal counts.
-      if (r.aborted) {
-        return {
-          totalTargets: totalTargets, removed: totalRemoved,
-          skippedExcluded: totalSkippedExcluded,
-          aborted: true, abortReason: r.abortReason, abortTarget: r.abortTarget,
-          rollbackOk: r.rollbackOk,
-          elapsedMs: totalElapsedMs, failures: allFailures,
-          passCount: passCount,
-        };
+        // Abort — close the group and roll the entire sweep back atomically with
+        // a single undo, then report (removed: 0, since nothing survives).
+        if (r.aborted) {
+          app.act({ type: 'groupend' });
+          var undoBtn = getModeButton('undo');
+          var rollbackOk = false;
+          if (undoBtn) {
+            dispatchClickEl(undoBtn);
+            for (var att = 0; att < 8; att++) {
+              await sleep(25);
+              if (diffEmpty(diffSnapshots(preOpSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
+            }
+          }
+          return {
+            totalTargets: totalTargets, removed: 0,
+            skippedExcluded: totalSkippedExcluded,
+            aborted: true, abortReason: r.abortReason, abortTarget: r.abortTarget,
+            rollbackOk: rollbackOk,
+            elapsedMs: totalElapsedMs, failures: allFailures,
+            passCount: passCount,
+          };
+        }
+
+        // Stop if no more conflicts visible — done.
+        var remainingConflicts = countVisibleConflicts(opts && opts.cellFilter);
+        if (remainingConflicts === 0) break;
+
+        // Stop if this pass removed nothing — further passes won't help.
+        if ((r.removed || 0) === 0) break;
       }
 
-      // Stop if no more conflicts visible — done.
-      var remainingConflicts = countVisibleConflicts(opts && opts.cellFilter);
-      if (remainingConflicts === 0) break;
-
-      // Stop if this pass removed nothing — further passes won't help.
-      if ((r.removed || 0) === 0) break;
+      app.act({ type: 'groupend' });
+      return {
+        totalTargets: totalTargets, removed: totalRemoved,
+        skippedExcluded: totalSkippedExcluded,
+        aborted: false,
+        elapsedMs: totalElapsedMs, failures: allFailures,
+        passCount: passCount,
+      };
+    } finally {
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
     }
-
-    return {
-      totalTargets: totalTargets, removed: totalRemoved,
-      skippedExcluded: totalSkippedExcluded,
-      aborted: false,
-      elapsedMs: totalElapsedMs, failures: allFailures,
-      passCount: passCount,
-    };
   }
 
   function removeInvalidPencilmarks() {
@@ -4773,32 +4753,21 @@
   }
 
   // Fill missing centre candidates (from settings.digitSet) into each selected
-  // cell. Uses Framework.getApp() → app.select() to select exactly the cells
-  // missing each digit, then clicks the digit button once — N digits = N clicks,
-  // not N×M per-cell iterations. Caller runs a final _removeInvalidPencilmarksInternal
-  // sweep to strip any conflicts introduced.
+  // cell. Mechanism: SudokuPad's own paste path — app.act({type:'candidates',
+  // arg:d}) toggles a centre mark on the api-selected cells with NO tool-mode
+  // switch and no digit-button click, so there's no UI flicker. The whole fill
+  // is wrapped in one groupstart/groupend pair (like FeatureCellPaste) so it
+  // collapses to a single undo step. Additive: for each digit only the cells
+  // *missing* it are selected, so existing marks are preserved; given/value
+  // cells are skipped. Caller runs a removal sweep afterwards.
   async function _fillSelectedInternal(cells) {
     var startTime = performance.now();
 
-    // Get the SudokuPad app API and build a col,row → cell object lookup.
     var app = await Framework.getApp();
     var cellByKey = {};
     app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
-
-    var originalMode = getCurrentMode();
     var originalSelection = Array.from(app.puzzle.selectedCells || []);
-    var wasLetterMode = isLetterModeActive();
-    if (wasLetterMode) { var nmOk = await ensureNumberMode(); if (!nmOk) wasLetterMode = false; }
-    var modeOk = await ensureMode('centre');
-    if (!modeOk) {
-      // Restore state before returning — this path is outside the try/finally block.
-      app.deselect();
-      if (originalSelection.length > 0) app.select(originalSelection);
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      return { addedCount: 0, removedCount: 0, skippedCount: 0, wasLetterMode: wasLetterMode,
-               aborted: true, abortReason: 'mode-switch-failed', elapsedMs: performance.now() - startTime };
-    }
-    try {
+
     // Pre-filter: skip cells with given/value (immutable), keep the rest.
     var fillable = [];
     var skippedCount = 0;
@@ -4811,101 +4780,74 @@
         if (cell) fillable.push({ key: key, cell: cell });
       }
     });
-
     if (fillable.length === 0) {
       return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
-               wasLetterMode: wasLetterMode, aborted: false,
-               elapsedMs: performance.now() - startTime };
+               wasLetterMode: false, aborted: false, elapsedMs: performance.now() - startTime };
     }
 
+    // Build the plan from a single pre-snapshot: for each digit in the set, the
+    // fillable cells that don't already show it as a centre mark.
+    var preSnap = snapshotPencilmarks();
     var digitList = settings.digitSet.split('');
-
-    // For each digit, select all fillable cells missing it and click once.
-    var addedCount = 0;
+    var plan = [];
     for (var di = 0; di < digitList.length; di++) {
       var d = digitList[di];
-      var digitBtn = getDigitButton(d);
-      if (!digitBtn) continue;
-
-      var cmOk = await ensureMode('centre');
-      if (!cmOk) {
-        return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-                 wasLetterMode: wasLetterMode, aborted: true,
-                 abortReason: 'mode-switch-failed',
-                 elapsedMs: performance.now() - startTime };
-      }
-
-      // Find fillable cells that don't already have this digit as a centre mark.
-      var preSnap = snapshotPencilmarks();
-      var targetsForD = fillable.filter(function(c) {
-        return !preSnap.centre.has(c.key + ',' + d);
-      });
-      if (targetsForD.length === 0) continue;
-
-      // Select exactly these cells via the API and click the digit button once.
+      var targets = fillable.filter(function(c) { return !preSnap.centre.has(c.key + ',' + d); });
+      if (targets.length) plan.push({ digit: d, cells: targets.map(function(c) { return c.cell; }) });
+    }
+    if (plan.length === 0) {
       app.deselect();
-      app.select(targetsForD.map(function(c) { return c.cell; }));
-      await sleep(10);
+      if (originalSelection.length > 0) app.select(originalSelection);
+      return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
+               wasLetterMode: false, aborted: false, elapsedMs: performance.now() - startTime };
+    }
 
-      var expectedAddKeys = new Set(targetsForD.map(function(t) { return t.key + ',' + d; }));
-      var beforeBatch = snapshotPencilmarks();
-      dispatchClickEl(digitBtn);
-      await sleep(50);
-      var afterBatch = snapshotPencilmarks();
-      var diffBatch = diffSnapshots(beforeBatch, afterBatch);
+    try {
+      // One undo-group for the whole fill.
+      app.act({ type: 'groupstart' });
+      for (var i = 0; i < plan.length; i++) {
+        app.deselect();
+        app.select(plan[i].cells);
+        // Every cell here lacks the digit, so one toggle adds it to each.
+        app.act({ type: 'candidates', arg: plan[i].digit });
+      }
+      app.act({ type: 'groupend' });
+      await sleep(20);   // let the render settle before verifying
 
-      if (diffEmpty(diffBatch)) continue;  // All already had it — no-op.
-
-      // Allow incidental non-digitSet centre removals (SudokuPad auto-clears letter marks).
-      var unexpectedRemovedCentre = diffBatch.removed.centre.filter(function(entry) {
-        return settings.digitSet.includes(entry.split(',')[2]);
-      });
-      var batchValid = (
-        diffBatch.removed.corner.length === 0 &&
-        diffBatch.removed.values.length === 0 &&
-        diffBatch.removed.colors.length === 0 &&
-        diffBatch.added.corner.length   === 0 &&
-        diffBatch.added.values.length   === 0 &&
-        diffBatch.added.colors.length   === 0 &&
-        unexpectedRemovedCentre.length  === 0 &&
-        diffBatch.added.centre.length   === targetsForD.length &&
-        diffBatch.added.centre.every(function(k) { return expectedAddKeys.has(k); })
-      );
-
-      if (batchValid) {
-        addedCount += targetsForD.length;
-      } else {
-        console.warn('[spDR-fix] FILL unexpected diff for digit', d, diffBatch);
+      // Verify: the only legitimate changes are added centre marks (digitSet).
+      // SudokuPad clears letter centre marks when a numeric one is added, so we
+      // tolerate removals of non-digitSet centre marks. Anything else (lost
+      // values/colours/corners, stray additions) → roll the whole group back
+      // with a single undo and abort.
+      var diff = diffSnapshots(preSnap, snapshotPencilmarks());
+      var badCentreRemovals = diff.removed.centre.filter(function(k) {
+        return settings.digitSet.includes(k.split(',')[2]);
+      }).length;
+      var unexpected = diff.removed.corner.length + badCentreRemovals +
+                       diff.removed.values.length + diff.removed.colors.length +
+                       diff.added.corner.length + diff.added.values.length + diff.added.colors.length;
+      if (unexpected > 0) {
+        console.warn('[spDR-fix] FILL unexpected diff', diff);
         var undoBtn = getModeButton('undo');
         var rollbackOk = false;
         if (undoBtn) {
           dispatchClickEl(undoBtn);
-          for (var attempt = 0; attempt < 8; attempt++) {
+          for (var att = 0; att < 8; att++) {
             await sleep(25);
-            if (diffEmpty(diffSnapshots(beforeBatch, snapshotPencilmarks()))) { rollbackOk = true; break; }
+            if (diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
           }
         }
-        return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-                 wasLetterMode: wasLetterMode, aborted: true,
-                 abortReason: 'unexpected-diff',
-                 abortTarget: { type: 'centre', digit: String(d),
-                                cellX: String(targetsForD[0].cell.col * 64 + 32),
-                                cellY: String(targetsForD[0].cell.row * 64 + 32) },
-                 rollbackOk: rollbackOk,
-                 elapsedMs: performance.now() - startTime };
+        return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
+                 wasLetterMode: false, aborted: true, abortReason: 'unexpected-diff',
+                 rollbackOk: rollbackOk, elapsedMs: performance.now() - startTime };
       }
-    }
 
-    return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-             wasLetterMode: wasLetterMode, aborted: false,
-             elapsedMs: performance.now() - startTime };
-
+      return { addedCount: diff.added.centre.length, removedCount: 0, skippedCount: skippedCount,
+               wasLetterMode: false, aborted: false, elapsedMs: performance.now() - startTime };
     } finally {
-      // Restore original selection and mode on every exit path.
+      // Restore original selection on every exit path.
       app.deselect();
       if (originalSelection.length > 0) app.select(originalSelection);
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      if (originalMode && originalMode !== getCurrentMode()) await ensureMode(originalMode);
     }
   }
 
