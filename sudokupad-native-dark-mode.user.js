@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.19.0
+// @version      3.20.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.19.0';
+  var SCRIPT_VERSION = '3.20.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1795,7 +1795,6 @@
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-darkreader-scheme'] });
     obs.observe(document.body || document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   }
-  waitForDRAndSVG();
 
   // ── Part 4b: region borders ───────────────────────────────────────────────
   // Standard puzzles use path.cage-box for region outlines. Some irregular-
@@ -6486,5 +6485,17 @@
   }
   if (document.body) buildAllUI();
   else document.addEventListener('DOMContentLoaded', buildAllUI);
+
+  // Kick off the dark-fix SVG pipeline LAST. waitForDRAndSVG() can run
+  // startLabelRectPatch() synchronously (when the board is already present on a
+  // fast load), and that chain touches module state declared throughout this IIFE
+  // (e.g. _domShadedCache ~L1960, _modelRegionCache). Invoking it mid-file (its
+  // former spot ~L1798) raced var-initialization: a fast puzzle load (e.g.
+  // fetchPuzzle ~19ms on a cached puzzle) aborted the whole IIFE with "Cannot read
+  // properties of undefined (reading 'key')" in getDomShadedRegionMap — black
+  // board, no buttons, no panel. Running it here, after every declaration, removes
+  // the race. (Only surfaced with Shaded mode enabled; extraRegionRectColor
+  // early-returns otherwise.)
+  waitForDRAndSVG();
 
 })();
