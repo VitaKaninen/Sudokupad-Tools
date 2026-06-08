@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.44.0
+// @version      3.45.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.44.0';
+  var SCRIPT_VERSION = '3.45.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7064,7 +7064,15 @@
   // the mouse (the runner renders it at start; the mouseleave handler + fsShowOnHover
   // both leave it alone while fsState.running). Replaced by the result toast at the end.
   function fsRenderRunning() {
-    fsRenderToast('warning', 'Auto-fill is running…\n\nClick the Stop button to abort.', {});
+    fsRenderToast('warning', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.', {});
+    var t = document.getElementById('sp-fs-toast');
+    if (t) {
+      t.style.cursor = 'pointer';
+      t.title = 'Click to stop the auto-fill';
+      // Clicking anywhere on the toast aborts, same as pressing Stop. Guarded by
+      // fsState.running so a debug-preview of this popup (no live run) is inert.
+      t.addEventListener('click', function () { if (fsState.running) fsState.aborted = true; });
+    }
   }
   // Post-run message text per terminal kind — shared by the runner and the debug
   // cycler so they never drift. The broken case names the offending cell.
