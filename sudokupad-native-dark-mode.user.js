@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.35.0
+// @version      3.36.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.35.0';
+  var SCRIPT_VERSION = '3.36.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1747,6 +1747,14 @@
     // A circle ON a border is a real edge dot — fixKropkiDot owns those; only claim
     // OFF-border circles (corners / centres) here. Diamonds are claimed anywhere.
     if (circle && !diamond && isOnCellBorder(rect, cs)) return false;
+    // A shape backing a MULTI-character value (e.g. clover "Quadrille" 63u3k65z7e:
+    // a small white circle behind a 3–4 digit clue that OVERFLOWS it) is a text
+    // background, not a dot/dial. Forcing the disc a solid colour + recolouring the
+    // whole string makes the overflow vanish, so leave it to label-bg (darkens the
+    // disc) + the native off-white text. Single-char glyphs (a clock dial's ↻/↺, a
+    // lone digit) fit the disc and ARE claimed.
+    var g = getCenteredKropkiText(rect);
+    if (g && g.textContent.trim().length > 1) return false;
     return true;
   }
   // Render one clue shape PRESERVING the author's black/white, with an outline for
