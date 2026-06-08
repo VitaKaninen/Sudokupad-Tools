@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.22.0
+// @version      3.23.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -206,7 +206,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.22.0';
+  var SCRIPT_VERSION = '3.23.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1267,37 +1267,11 @@
       }
       return cells;
     });
-    // Build the touch-adjacency graph between regions.
-    var cellReg = {};
-    sets.forEach(function (s, i) { s.forEach(function (rc) { cellReg[rc[0] + ',' + rc[1]] = i; }); });
-    var n = sets.length, adj = [];
-    for (var i = 0; i < n; i++) adj.push(new Set());
-    sets.forEach(function (s, i) {
-      s.forEach(function (rc) {
-        var r = rc[0], c = rc[1];
-        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
-          var j = cellReg[nb[0] + ',' + nb[1]];
-          if (j !== undefined && j !== i) { adj[i].add(j); adj[j].add(i); }
-        });
-      });
-    });
-    // Greedy colour, most-constrained (highest degree) first → 4 colours suffice
-    // for the planar touch graph; if ever exceeded, reuse the least-clashing one.
-    var order = []; for (var i = 0; i < n; i++) order.push(i);
-    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
-    var colors = new Array(n).fill(-1);
-    order.forEach(function (i) {
-      var used = new Set();
-      adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
-      var pick = -1;
-      for (var k = 0; k < 4; k++) { if (!used.has(k)) { pick = k; break; } }
-      if (pick < 0) {
-        var cnt = [0,0,0,0];
-        adj[i].forEach(function (j) { if (colors[j] >= 0) cnt[colors[j]]++; });
-        pick = cnt.indexOf(Math.min.apply(null, cnt));
-      }
-      colors[i] = pick;
-    });
+    // Colour to MAXIMISE distinct palette colours (shaded-region policy): ≤4 regions
+    // each get their own colour (so two non-touching grey regions differ, not both
+    // red — e.g. 5tplfif6te's two staircases), >4 spread across all four with no two
+    // touching alike. Same helper as the underlay shaded-region path.
+    var colors = colourShadedRegions(sets);
     paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
@@ -2097,7 +2071,7 @@
 
     if (!regions.length) return { map: null, fromModel: fromModel };   // nothing qualifies (still cacheable once model is readable)
 
-    var colors = computeRegion4Colors(regions, null, regions.length);
+    var colors = colourShadedRegions(regions);   // max distinct colours (shaded-region policy)
     var map = {};
     regions.forEach(function (cells, i) {
       var idx = (colors[i] != null) ? colors[i] : 0;
@@ -2189,31 +2163,80 @@
       });
     });
 
-    // Colour to MAXIMISE distinct palette colours while staying proper (no two
-    // touching groups share a colour). ≤4 groups → each gets its OWN colour; >4 →
-    // spread across all four, repeating only across non-touching groups. The
-    // "least-used allowed colour" greedy (highest-degree first, colourSpread) does
-    // both: a fresh colour is preferred until all four are in play, and a
-    // neighbour's colour is never reused. Backtracking (colourGraph) is the fallback
-    // guaranteeing a proper ≤4 colouring if the greedy paints itself into a corner
-    // (planar region graphs are always 4-colourable); a final geometry-only pass
-    // covers a grouped graph that somehow can't be 4-coloured.
-    var groupColors = colourSpread(numGroups, adj);
+    // Which groups are DISJOINT (a logical region whose cells form >1 orthogonally
+    // connected component — the scattered/disjoint-subset case). We want these
+    // pinned to the LAST palette colour (index 3) so the common regions keep the
+    // earlier colours: red (0) most common, then blue (1), then green (2), with the
+    // scattered region taking orange (3). Counting components from the cells (not
+    // the geo split) is the robust test for "appears as separate areas".
+    var groupCells = [];
+    for (var i = 0; i < numGroups; i++) groupCells.push([]);
+    regions.forEach(function (cells, ri) {
+      var g = groupOf[ri];
+      cells.forEach(function (rc) { groupCells[g].push(rc); });
+    });
+    var pinned = new Array(numGroups).fill(-1), anyDisjoint = false;
+    for (var g = 0; g < numGroups; g++) {
+      if (countComponents(groupCells[g]) > 1) { pinned[g] = 3; anyDisjoint = true; }
+    }
+
+    // For ordinary (connected) regions the graph is planar and the four-colour
+    // theorem guarantees a proper 4-colouring. Forcing a DISCONNECTED region to a
+    // single group — and further pinning it to colour 3 — can in theory exceed 4,
+    // so we degrade in priority order:
+    //   1. grouped + disjoint pinned to colour 3 (the desired look),
+    //   2. grouped, unpinned (disjoint still one colour, just maybe not orange),
+    //   3. ungrouped geometry colouring (always 4-colourable; clash-free).
+    // Plain greedy alone never suffices anyway: it can spill to a 5th colour
+    // (index 4) → past the 4-entry palette → undefined fill → black borders.
+    var groupColors = anyDisjoint ? colourGraph(numGroups, adj, pinned) : null;
     if (!groupColors) groupColors = colourGraph(numGroups, adj, null);
     if (!groupColors && groupOf.some(function (g, i) { return g !== i; })) {
       return computeRegion4Colors(regions);   // grouped impossible → geometry only
     }
-    if (!groupColors) groupColors = new Array(numGroups).fill(0);   // shouldn't happen for planar input
+    if (!groupColors) {
+      // Identity grouping that still failed (shouldn't happen for planar input):
+      // clamp so nothing renders black.
+      groupColors = new Array(numGroups).fill(0);
+    }
     return regions.map(function (_, ri) { return groupColors[groupOf[ri]]; });
   }
 
-  // Greedy proper colouring that SPREADS across all four palette colours: process
-  // highest-degree groups first; each takes the allowed colour (not used by an
-  // already-coloured neighbour) that is currently least-used overall (ties → lowest
-  // index). So non-adjacent groups get DIFFERENT colours and all four are used
-  // before any colour repeats. Returns a proper colour array, or null if some group
-  // has all four colours blocked by neighbours (≥5 mutually adjacent — non-planar;
-  // caller falls back to backtracking).
+  // Number of orthogonally connected components in a list of [r,c] cells.
+  function countComponents(cells) {
+    if (cells.length <= 1) return cells.length;
+    var inSet = {};
+    cells.forEach(function (rc) { inSet[rc[0] + ',' + rc[1]] = true; });
+    var seen = {}, comps = 0;
+    cells.forEach(function (rc) {
+      var key0 = rc[0] + ',' + rc[1];
+      if (seen[key0]) return;
+      comps++;
+      var stack = [rc];
+      while (stack.length) {
+        var cur = stack.pop(), k = cur[0] + ',' + cur[1];
+        if (seen[k]) continue;
+        seen[k] = true;
+        var r = cur[0], c = cur[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var nk = nb[0] + ',' + nb[1];
+          if (inSet[nk] && !seen[nk]) stack.push(nb);
+        });
+      }
+    });
+    return comps;
+  }
+
+  // Greedy proper colouring that SPREADS across all four palette colours, used ONLY
+  // for SHADED regions (Easy Shade "Shaded" mode — `computeDomShadedRegionMap` and
+  // `assignExtraRegionColors`). NOT for region borders / region fill: those keep the
+  // minimise-then-pin-disjoint-orange policy in `computeRegion4Colors` above. Policy:
+  // ≤4 regions each get their OWN colour; >4 spread across all four, repeating only
+  // across non-touching regions. Process highest-degree first; each takes the allowed
+  // colour (not used by an already-coloured neighbour) that is currently least-used
+  // overall (ties → lowest index). Returns a proper colour array, or null if some
+  // node has all four colours blocked (≥5 mutually adjacent — non-planar; caller
+  // falls back to colourGraph backtracking).
   function colourSpread(n, adj) {
     var order = []; for (var i = 0; i < n; i++) order.push(i);
     order.sort(function (a, b) { return adj[b].size - adj[a].size; });
@@ -2227,6 +2250,29 @@
       colors[v] = pick; usage[pick]++;
     }
     return colors;
+  }
+
+  // Colour a list of SHADED regions (each an array of [r,c] cells) maximising
+  // distinct palette colours, proper across touching regions. Builds region
+  // touch-adjacency, then colourSpread (→ colourGraph backtracking fallback →
+  // all-0 clamp). Returns a colour idx per region. Shared by both shaded-region
+  // paths (computeDomShadedRegionMap, assignExtraRegionColors); region borders /
+  // fill deliberately do NOT use this (they keep computeRegion4Colors).
+  function colourShadedRegions(regions) {
+    var n = regions.length;
+    var cellReg = {};
+    regions.forEach(function (cells, i) { cells.forEach(function (rc) { cellReg[rc[0] + ',' + rc[1]] = i; }); });
+    var adj = []; for (var i = 0; i < n; i++) adj.push(new Set());
+    regions.forEach(function (cells, i) {
+      cells.forEach(function (rc) {
+        var r = rc[0], c = rc[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var j = cellReg[nb[0] + ',' + nb[1]];
+          if (j !== undefined && j !== i) { adj[i].add(j); adj[j].add(i); }
+        });
+      });
+    });
+    return colourSpread(n, adj) || colourGraph(n, adj, null) || new Array(n).fill(0);
   }
 
   // Proper ≤4-colouring of a graph given adjacency sets. `pinned[i]` (optional)
