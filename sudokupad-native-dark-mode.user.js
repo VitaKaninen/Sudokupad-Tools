@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.25.0
+// @version      3.26.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -139,11 +139,6 @@
   .spdr-dark mask [fill="#000" i], .spdr-dark mask [fill="#000000" i] { fill: #000; }
   .spdr-dark mask [stroke="#fff" i], .spdr-dark mask [stroke="#ffffff" i] { stroke: #fff; }
   .spdr-dark mask [stroke="#000" i], .spdr-dark mask [stroke="#000000" i] { stroke: #000; }
-  /* Cell selection (cage mode): SudokuPad hardcodes a translucent-WHITE fill
-     (rgba(255,255,255,0.4)) inline on path.cage-selectioncage; on the dark canvas
-     that reads as a grey block. DarkReader inverted it away, leaving just the blue
-     border — match that: clear the fill so only the blue selection outline shows. */
-  .spdr-dark .cage-selectioncage { fill: transparent; }
   .spdr-dark .cell-given, .spdr-dark .cell-pencilmark.givenCornermark, .spdr-dark .cell-candidate .given { color: var(--dm-white); fill: var(--dm-white); }
   .spdr-dark rect.textbg[fill="#FFF"], .spdr-dark rect.textbg[fill="#FFFFFF"], .spdr-dark rect.textbg[fill="#fff"], .spdr-dark rect.textbg[fill="#ffffff"], .spdr-dark rect.feature-xv[fill="#FFF"], .spdr-dark rect.feature-xv[fill="#FFFFFF"], .spdr-dark rect.feature-xv[fill="#fff"], .spdr-dark rect.feature-xv[fill="#ffffff"] { fill: var(--dm-black); }
   .spdr-dark rect.feature-kropki[fill="#000" i], .spdr-dark rect.feature-kropki[fill="#000000" i] { stroke: var(--dm-white); fill: var(--dm-black); }
@@ -220,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.25.0';
+  var SCRIPT_VERSION = '3.26.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -313,10 +308,11 @@
     kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
-    selectionColorEnabled:        false,
+    selectionColorEnabled:        true,    // on by default: gives the brighter selection border (#3399ff @0.7) + the no-grey-fill look; disabling reverts to SudokuPad's native selection (rawer blue + translucent-white fill)
     selectionColor:               '#3399ff',
     selectionOpacity:             0.7,
     selectionWidth:               '8',
+    selectionHideBackground:      true,    // (section sub-option) clear the native translucent-white fill on the selection cage so only the border shows (no grey block)
     selectionBorderMode:          'inside',  // 'inside' | 'outside'
     selectionBorderOffset:        '0',       // displayed value; baseline shift is mode-specific (see computeSelectionShift)
 
@@ -557,10 +553,15 @@
       var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
       var sw = parseFloat(s.selectionWidth);
       if (!isFinite(sw) || sw < 0) sw = 8;
+      // "Remove gray background" sub-option: clear SudokuPad's hardcoded inline
+      // translucent-white cage fill (rgba(255,255,255,0.4)) so only the border
+      // shows. Gated here so disabling the section restores the native grey block.
+      var fillRule = s.selectionHideBackground ? `
+        fill: transparent !important;` : '';
       css += `
       #cell-highlights path.cage-selectioncage {
         stroke: ${sc} !important;
-        stroke-width: ${sw}px !important;
+        stroke-width: ${sw}px !important;${fillRule}
       }`;
     }
 
@@ -1056,6 +1057,19 @@
   }
 
   function fixCenterTspan(t) {
+    // Given candidates (author-provided pencilmarks, tspan.given) are part of the
+    // puzzle like given digits, so they're always white to distinguish them from
+    // the solver's own centre marks — independent of the centre-mark colour
+    // controls below. Forced via inline !important rather than the CSS variable
+    // --puzzle-givenCandidate, because that variable route did NOT apply in
+    // LibreWolf (worked in Chrome/Brave/Firefox); an inline !important fill wins in
+    // every engine. Conflicts fall through to SudokuPad's own pencilmark-error red,
+    // so a given candidate still turns red when a placed digit clashes with it.
+    if (t.classList.contains('given')) {
+      if (t.classList.contains('conflict')) t.style.removeProperty('fill');
+      else applyInlineFill(t, '#e8e6e3');   // --dm-white
+      return;
+    }
     if (!settings.centerEnabled) { t.style.removeProperty('fill'); return; }
     var isC = t.classList.contains('conflict');
     var color = isC ? settings.centerInvalidColor   : settings.centerValidColor;
@@ -5941,7 +5955,7 @@
       hilite: 'selection', hiliteTitle: 'Highlight the selection border (select cells first)',
       hasColor: false,
       resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth',
-                  'selectionBorderMode', 'selectionBorderOffset'],
+                  'selectionHideBackground', 'selectionBorderMode', 'selectionBorderOffset'],
       subBuilder: function (wrap) {
         // Migrate any leftover 'center' value from a previous version of this
         // script to 'inside' (the new default), so the radio row has a
@@ -5952,6 +5966,7 @@
         }
         wrap.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
         wrap.appendChild(makeWidthRow('selectionWidth'));
+        wrap.appendChild(makeSubCheckbox('selectionHideBackground', 'Remove gray background'));
         wrap.appendChild(makeRadioRow('Grow', 'selectionBorderMode', [
           { value: 'inside',  label: 'Inside'  },
           { value: 'outside', label: 'Outside' },
