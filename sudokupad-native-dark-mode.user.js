@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.39.0
+// @version      3.40.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.39.0';
+  var SCRIPT_VERSION = '3.40.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6966,14 +6966,17 @@
     if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one valid candidate yet.'); return; }
     fsRenderToast('success', base + '\n\nReady — click to run.');
   }
+  // Render the current sticky result toast (no running-guard — used both for the
+  // auto-popup the moment a stop condition fires AND for re-show on hover).
+  function fsRenderResult() {
+    var r = fsState.result;
+    if (!r) return;
+    var col = r.kind === 'complete' ? 'success' : (r.kind === 'broken' ? 'error' : 'warning');
+    fsRenderToast(col, r.message, { undo: r.canUndo });
+  }
   async function fsShowOnHover() {
     if (fsState.running) return;                      // button reads "Stop"; no popup mid-run
-    if (fsState.result) {                             // a sticky result is available → re-show it
-      var r = fsState.result;
-      var col = r.kind === 'complete' ? 'success' : (r.kind === 'broken' ? 'error' : 'warning');
-      fsRenderToast(col, r.message, { undo: r.canUndo });
-      return;
-    }
+    if (fsState.result) { fsRenderResult(); return; } // a sticky result is available → re-show it
     var app = await Framework.getApp();
     fsRenderExplainer(fsAnalyse(app));
   }
@@ -6996,7 +6999,7 @@
     fsState.result = { kind: kind, message: message, canUndo: !!canUndo };
     fsState.resultPinned = true;
     fsStartRevokeObserver();
-    fsShowOnHover();   // render it now
+    fsRenderResult();   // auto-show now (running may still be true here, so don't route via fsShowOnHover)
   }
   function fsClearResult() {
     fsState.result = null;
@@ -7151,12 +7154,12 @@
     btn.style.setProperty('background-color', bgColor, 'important');
     btn.style.setProperty('color', textColor, 'important');
     btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
-    fsSetButtonLabel('idle');   // sets the 4-line label + font/white-space
     spdrFxButton(btn);          // hover-brighten + active-depress + click flash
     btn.addEventListener('click', function (e) { e.stopPropagation(); fillSingleCandidates(); });
     btn.addEventListener('mouseenter', function () { fsShowOnHover(); });
     btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned) fsHideToast(); });
     document.body.appendChild(btn);
+    fsSetButtonLabel('idle');   // sets the 4-line label + font/white-space — AFTER append (it looks the button up by id)
 
     // A click anywhere outside the button + its toast unpins a sticky result
     // (it stays available on re-hover until the puzzle is edited).
