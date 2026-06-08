@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.37.0
+// @version      3.38.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.37.0';
+  var SCRIPT_VERSION = '3.38.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4646,6 +4646,10 @@
     if (panel && panel.style.display !== 'none') {
       return (56 + panel.offsetHeight + 8) + 'px';
     }
+    // Otherwise clear the floating "Fill single candid." button (sits at
+    // bottom:56px above the gear) so toasts don't cover it.
+    var fsBtn = document.getElementById('sp-fill-single-btn');
+    if (fsBtn && fsBtn.offsetHeight > 0) return (56 + fsBtn.offsetHeight + 8) + 'px';
     return '56px';
   }
 
@@ -5412,6 +5416,7 @@
 
     // Interaction: clipper is the visible mouse target
     clipper.addEventListener('click', function (e) { e.stopPropagation(); opts.onClick(); });
+    spdrFxButton(clipper);   // hover-brighten + active-depress + click flash (matches the floating Fill-single button + native buttons)
 
     var expandTimer, collapseEndTimer;
     clipper.addEventListener('mouseenter', function () {
@@ -5425,7 +5430,7 @@
         label.style.paddingRight   = '12px';
         label.style.whiteSpace     = 'nowrap';
         label.textContent          = opts.fullLabel;
-        clipper.style.transition   = 'width ' + EXPAND_S + ' ease';
+        clipper.style.transition   = 'width ' + EXPAND_S + ' ease, filter .18s ease';
         clipper.style.width        = EXPANDED_W + 'px';
       }, DELAY_MS);
     });
@@ -5435,7 +5440,7 @@
       // Read the live collapsed width (syncClipperOffsets keeps this current
       // after CSS settles); avoids collapsing to the stale build-time value.
       var cw = parseInt(clipper.dataset.collapsedW, 10) || btnW;
-      clipper.style.transition = 'width ' + COLLAPSE_S + ' ease';
+      clipper.style.transition = 'width ' + COLLAPSE_S + ' ease, filter .18s ease';
       clipper.style.width      = cw + 'px';
       var collapseMs = Math.round(parseFloat(COLLAPSE_S) * 1000);
       collapseEndTimer = setTimeout(function () {
@@ -6855,50 +6860,148 @@
     }, 50);
   }
 
-  // Placeholder for the auto-complete logic. STEP 1 = button only. The real
-  // routine (select cell with a single non-conflict centre mark → wait → place
-  // its digit → wait → rescan; stop when a cell hits zero non-conflict marks)
-  // will live here. The two inter-step delays will be named constants at the top
-  // of this function once it's implemented.
-  function fillSingleCandidates() {
-    showRemoveInvalidToast('Fill single candidate: button is wired up — auto-complete logic not added yet.', 'warning');
+  // Auto-complete endgame helper. Premise: SudokuPad tags a centre candidate that
+  // clashes with a placed peer value with class="conflict" (verified: the re-tag
+  // is synchronous with app.act value placement). So a "valid candidate" is just a
+  // non-.conflict tspan in #cell-candidates — we never validate, never eliminate,
+  // and ignore corner marks entirely. Placing a value naturally re-tags peers,
+  // dropping cells to one valid candidate and propagating the chain.
+  //
+  // Cadence (both delays are the named constants below — adjust to taste):
+  //   select the single-candidate cell → SELECT_DELAY_MS → place its digit →
+  //   FILL_DELAY_MS → rescan → repeat.
+  // Stops when: the grid is full (done), a cell drops to ZERO valid candidates
+  // (contradiction → likely a mistake or incomplete pencilmarks), or no cell has
+  // exactly one valid candidate (logic still required).
+  async function fillSingleCandidates() {
+    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+
+    var SELECT_DELAY_MS = 200;   // ← pause after highlighting a cell, before its digit is placed
+    var FILL_DELAY_MS   = 50;    // ← pause after placing a digit, before the next cell is selected
+
+    var app = await Framework.getApp();
+    var cellByKey = {};
+    app.puzzle.cells.forEach(function (c) { cellByKey[c.col + ',' + c.row] = c; });
+
+    // cellKey → array of non-conflict (valid) centre-candidate digits.
+    function scanValidCandidates() {
+      var map = {};
+      document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (t) {
+        var ck = cellKeyFromMarkXY(t.getAttribute('x'), t.getAttribute('y'));
+        var digits = [];
+        t.querySelectorAll('tspan').forEach(function (sp) {
+          if (!sp.classList.contains('conflict')) {
+            var d = sp.getAttribute('data-val');
+            if (d) digits.push(d);
+          }
+        });
+        map[ck] = digits;
+      });
+      return map;
+    }
+
+    // Classify every empty cell by its valid-candidate count. A cell with no
+    // centre marks at all counts as zero (not in the map → []).
+    function analyse() {
+      var map = scanValidCandidates();
+      var empties = [], zero = [], singles = [];
+      app.puzzle.cells.forEach(function (c) {
+        if (cellHasValueOrGiven(c.col, c.row)) return;
+        var ck = c.col + ',' + c.row;
+        var digits = map[ck] || [];
+        empties.push(ck);
+        if (digits.length === 0) zero.push(ck);
+        else if (digits.length === 1) singles.push({ cell: c, ck: ck, digit: digits[0] });
+      });
+      return { empties: empties, zero: zero, singles: singles };
+    }
+
+    // Safety gate — both conditions must hold before we touch anything.
+    var a0 = analyse();
+    if (a0.empties.length === 0) { showRemoveInvalidToast('Puzzle is already complete — nothing to fill.', 'success'); return; }
+    if (a0.zero.length > 0) {
+      showRemoveInvalidToast('Can’t start: ' + a0.zero.length + ' empty cell' + (a0.zero.length === 1 ? '' : 's') +
+        ' ' + (a0.zero.length === 1 ? 'has' : 'have') + ' no valid candidate. Every empty cell needs at least one non-conflict centre mark first.', 'warning');
+      return;
+    }
+    if (a0.singles.length === 0) {
+      showRemoveInvalidToast('Can’t start: no empty cell has exactly one valid candidate yet — there’s still logic to do.', 'warning');
+      return;
+    }
+
+    actionInProgress = true;
+    var filled = 0;
+    try {
+      while (true) {
+        var a = analyse();
+        if (a.empties.length === 0) {
+          showRemoveInvalidToast('Done — auto-filled ' + filled + ' cell' + (filled === 1 ? '' : 's') + '. Puzzle complete.', 'success');
+          break;
+        }
+        if (a.zero.length > 0) {
+          var zc = a.zero[0];
+          app.deselect();
+          if (cellByKey[zc]) app.select([cellByKey[zc]]);   // park the selection on the offending cell
+          showRemoveInvalidToast('Stopped: cell (' + zc + ') has no valid candidates left — likely a mistake earlier or incomplete pencilmarks. Filled ' + filled + ' before stopping.', 'error');
+          break;
+        }
+        if (a.singles.length === 0) {
+          showRemoveInvalidToast('Stopped: no cell has a single valid candidate. Filled ' + filled + ' — more logic needed.', 'warning');
+          break;
+        }
+        var next = a.singles[0];
+        app.deselect();
+        app.select([next.cell]);            // pre-select so the user sees it before it fills
+        await sleep(SELECT_DELAY_MS);
+        app.act({ type: 'value', arg: next.digit });
+        filled++;
+        await sleep(FILL_DELAY_MS);
+      }
+    } finally {
+      actionInProgress = false;
+    }
   }
 
   // Standalone floating button styled like the Fill/Clear/Clear All action
-  // buttons, parked just above the ⚙ settings gear (which is bottom:12px /
-  // right:12px, 36px tall → this sits 8px above it). Unlike those three it does
-  // NOT use the in-grid hover-expand clipper: it floats, so it shows its full
-  // label at a fixed size instead of expanding rightward off the edge.
+  // buttons (square, same colours/border/radius/flash), parked just above the ⚙
+  // settings gear (gear is bottom:12px / right:12px, 36px tall; the version label
+  // sits to its left). Unlike the trio it does NOT use the in-grid hover-expand
+  // clipper — it floats, so it shows the full label wrapped inside a fixed square
+  // rather than expanding rightward off the screen edge.
   function buildFillSingleButton() {
     if (document.getElementById('sp-fill-single-btn')) return;
     // Visual tokens copied from buildActionButton so it matches the trio.
     var colorRefBtn = document.querySelector('[data-control="pen"]') ||
                       document.querySelector('[data-control="corner"]') ||
-                      document.querySelector('[data-control="centre"]');
+                      document.querySelector('[data-control="centre"]') ||
+                      document.querySelector('[data-control="normal"]');
     var colorRefStyle = colorRefBtn ? getComputedStyle(colorRefBtn) : null;
     var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
                       ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
     var textColor = 'rgb(181, 104, 228)';                                  // literal theme purple (stable; see buildActionButton)
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
+    var sizePx    = (colorRefBtn && colorRefBtn.offsetWidth > 0) ? colorRefBtn.offsetWidth : 56;  // square, matches a control button
 
     var btn = document.createElement('button');
     btn.id    = 'sp-fill-single-btn';
     btn.type  = 'button';
-    btn.title = 'Auto-complete cells that have a single valid (non-conflict) candidate';
+    btn.title = 'Auto-complete cells that currently have a single valid (non-conflict) candidate';
     btn.textContent = 'Fill single candid.';
     Object.assign(btn.style, {
       position:   'fixed',
-      bottom:     '56px',   // 12px gear margin + 36px gear height + 8px gap
-      right:      '12px',   // right-aligned over the gear
-      height:     '36px',   // matches the gear's height
-      padding:    '0 12px',
+      bottom:     '56px',          // 12px gear margin + 36px gear height + 8px gap → sits above the gear
+      right:      '12px',          // right-aligned over the gear
+      width:      sizePx + 'px',   // square, like the trio
+      height:     sizePx + 'px',
+      padding:    '3px',
       borderRadius: '8px',
       cursor:     'pointer',
-      fontSize:   '14px',
+      fontSize:   '11px',          // smaller so the wrapped label fits the square
       fontFamily: 'Roboto, Arial, sans-serif',
       fontWeight: '700',
-      lineHeight: '1',
-      whiteSpace: 'nowrap',
+      lineHeight: '1.15',
+      whiteSpace: 'normal',        // allow the label to wrap inside the square
+      textAlign:  'center',
       display:    'flex',
       alignItems: 'center',
       justifyContent: 'center',
@@ -6909,9 +7012,24 @@
     btn.style.setProperty('background-color', bgColor, 'important');
     btn.style.setProperty('color', textColor, 'important');
     btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
-    spdrFxButton(btn);
+    spdrFxButton(btn);   // hover-brighten + active-depress + click flash, like the others now do
     btn.addEventListener('click', function (e) { e.stopPropagation(); fillSingleCandidates(); });
     document.body.appendChild(btn);
+
+    // Re-measure once the control buttons' CSS has settled (offsetWidth can read
+    // 0 / a pre-CSS value at first paint), so the square ends up the right size.
+    function resize() {
+      var ref = document.querySelector('[data-control="pen"]') ||
+                document.querySelector('[data-control="corner"]') ||
+                document.querySelector('[data-control="centre"]') ||
+                document.querySelector('[data-control="normal"]');
+      if (ref && ref.offsetWidth > 0) {
+        btn.style.width  = ref.offsetWidth + 'px';
+        btn.style.height = ref.offsetWidth + 'px';
+      }
+    }
+    setTimeout(resize, 100);
+    setTimeout(resize, 500);
   }
 
   function buildAllUI() {
