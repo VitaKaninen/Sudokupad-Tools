@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.26.0
+// @version      3.27.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.26.0';
+  var SCRIPT_VERSION = '3.27.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -308,13 +308,16 @@
     kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
-    selectionColorEnabled:        true,    // on by default: gives the brighter selection border (#3399ff @0.7) + the no-grey-fill look; disabling reverts to SudokuPad's native selection (rawer blue + translucent-white fill)
+    selectionColorEnabled:        true,    // master ("Cell selection"). On by default: gives the brighter border + no-grey-fill look; disabling reverts to SudokuPad's native selection (rawer blue + translucent-white fill)
+    selectionBorderEnabled:       true,    // "Border" subsection: restyle the selection cage stroke (colour/opacity/width) + grow/offset
     selectionColor:               '#3399ff',
     selectionOpacity:             0.7,
     selectionWidth:               '8',
-    selectionHideBackground:      true,    // (section sub-option) clear the native translucent-white fill on the selection cage so only the border shows (no grey block)
     selectionBorderMode:          'inside',  // 'inside' | 'outside'
     selectionBorderOffset:        '0',       // displayed value; baseline shift is mode-specific (see computeSelectionShift)
+    selectionBgEnabled:           true,    // "Background" subsection: set the selection cage fill (colour + opacity). Default opacity 0 = transparent (clears the native grey block); raise opacity to tint the selected cells
+    selectionBgColor:             '#000000',
+    selectionBgOpacity:           0,
 
     showToasts:                   true,   // show action result notifications (toasts)
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
@@ -546,22 +549,26 @@
     }
 
     if (s.selectionColorEnabled) {
-      // The visible "selection border" is the SudokuPad path.cage-selectioncage
-      // — the stroke around the perimeter of the selected group. The per-cell
-      // rect.cell-highlight fill behind it is dominated visually by this border,
-      // so users see the border colour as "the selection colour."
-      var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
-      var sw = parseFloat(s.selectionWidth);
-      if (!isFinite(sw) || sw < 0) sw = 8;
-      // "Remove gray background" sub-option: clear SudokuPad's hardcoded inline
-      // translucent-white cage fill (rgba(255,255,255,0.4)) so only the border
-      // shows. Gated here so disabling the section restores the native grey block.
-      var fillRule = s.selectionHideBackground ? `
-        fill: transparent !important;` : '';
-      css += `
-      #cell-highlights path.cage-selectioncage {
+      // The visible "selection" is the SudokuPad path.cage-selectioncage — a stroke
+      // around the perimeter of the selected group over a translucent fill. Two
+      // independent subsections restyle it: Border (stroke colour/opacity/width) and
+      // Background (cage fill colour/opacity; default opacity 0 = transparent, which
+      // clears SudokuPad's hardcoded grey rgba(255,255,255,0.4) fill).
+      var selRule = '';
+      if (s.selectionBorderEnabled) {
+        var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
+        var sw = parseFloat(s.selectionWidth);
+        if (!isFinite(sw) || sw < 0) sw = 8;
+        selRule += `
         stroke: ${sc} !important;
-        stroke-width: ${sw}px !important;${fillRule}
+        stroke-width: ${sw}px !important;`;
+      }
+      if (s.selectionBgEnabled) {
+        selRule += `
+        fill: ${hexToRgba(s.selectionBgColor, s.selectionBgOpacity)} !important;`;
+      }
+      if (selRule) css += `
+      #cell-highlights path.cage-selectioncage {${selRule}
       }`;
     }
 
@@ -970,7 +977,7 @@
   //                      writes (skip) from SudokuPad's re-issues (re-derive).
   function applySelectionBorderOffset(path) {
     if (!path) return;
-    var amount = settings.selectionColorEnabled ? computeSelectionShift() : 0;
+    var amount = (settings.selectionColorEnabled && settings.selectionBorderEnabled) ? computeSelectionShift() : 0;
 
     if (amount === 0) {
       // Restore original if we previously modified it
@@ -5950,12 +5957,14 @@
 
     content.appendChild(buildSection({
       enabledKey: 'selectionColorEnabled',
-      label: 'Cell selection border',
+      label: 'Cell selection',
       desc: 'The outline drawn around the cells you currently have selected.',
       hilite: 'selection', hiliteTitle: 'Highlight the selection border (select cells first)',
       hasColor: false,
-      resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth',
-                  'selectionHideBackground', 'selectionBorderMode', 'selectionBorderOffset'],
+      enableKeys: ['selectionColorEnabled', 'selectionBorderEnabled', 'selectionBgEnabled'],
+      resetKeys: ['selectionColorEnabled',
+                  'selectionBorderEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth', 'selectionBorderMode', 'selectionBorderOffset',
+                  'selectionBgEnabled', 'selectionBgColor', 'selectionBgOpacity'],
       subBuilder: function (wrap) {
         // Migrate any leftover 'center' value from a previous version of this
         // script to 'inside' (the new default), so the radio row has a
@@ -5964,14 +5973,34 @@
           settings.selectionBorderMode = 'inside';
           saveSettings(settings);
         }
-        wrap.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
-        wrap.appendChild(makeWidthRow('selectionWidth'));
-        wrap.appendChild(makeSubCheckbox('selectionHideBackground', 'Remove gray background'));
-        wrap.appendChild(makeRadioRow('Grow', 'selectionBorderMode', [
-          { value: 'inside',  label: 'Inside'  },
-          { value: 'outside', label: 'Outside' },
-        ]));
-        wrap.appendChild(makeOffsetRow('selectionBorderOffset'));
+        function divider() {
+          var d = document.createElement('div');
+          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+          return d;
+        }
+        // ── Subsection: Border (the selection outline) ────────────────────
+        wrap.appendChild(makeCollapsibleSubsection({
+          enabledKey: 'selectionBorderEnabled', masterEnabledKey: 'selectionColorEnabled',
+          labelText: 'Border',
+          buildOptions: function (opt) {
+            opt.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
+            opt.appendChild(makeWidthRow('selectionWidth'));
+            opt.appendChild(makeRadioRow('Grow', 'selectionBorderMode', [
+              { value: 'inside',  label: 'Inside'  },
+              { value: 'outside', label: 'Outside' },
+            ]));
+            opt.appendChild(makeOffsetRow('selectionBorderOffset'));
+          },
+        }));
+        // ── Subsection: Background (the fill behind the selection) ─────────
+        wrap.appendChild(divider());
+        wrap.appendChild(makeCollapsibleSubsection({
+          enabledKey: 'selectionBgEnabled', masterEnabledKey: 'selectionColorEnabled',
+          labelText: 'Background',
+          buildOptions: function (opt) {
+            opt.appendChild(makeColorRow('Color', 'selectionBgColor', 'selectionBgOpacity'));
+          },
+        }));
       },
     }));
 
