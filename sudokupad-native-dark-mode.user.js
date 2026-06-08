@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.43.0
+// @version      3.44.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.43.0';
+  var SCRIPT_VERSION = '3.44.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4657,16 +4657,6 @@
     return '56px';
   }
 
-  // Message for the action-lock guard (a button pressed while another op runs).
-  // The only long-running op is the auto-fill — and its button turns into "Stop"
-  // while running — so the realistic collision is "auto-fill is going, user clicks
-  // Fill/Clear". Point them at the Stop button. (The old generic "another operation
-  // is still running" predated the Stop button and never told the user how to act.)
-  function actionBusyMessage() {
-    if (fsState.running) return 'The auto-fill is running. Click the Stop button (above the ⚙ gear) to abort it before starting another action.';
-    return 'Please wait — an action is still finishing.';   // a fast Fill/Clear is mid-flight (sub-second)
-  }
-
   // When true, the Settings "Debug: show popup" cycler is previewing a toast:
   // force it to show (ignore the showToasts gate), never auto-fade, and float it
   // above our own settings panel. See fsDebugShowNext.
@@ -5148,7 +5138,7 @@
   }
 
   function removeInvalidPencilmarks() {
-    if (actionInProgress) { showRemoveInvalidToast(actionBusyMessage(), 'warning'); return; }
+    if (actionInProgress) return;   // locked out (no popup): these finish in a fraction of a second — the lock just blocks a rapid double-click
     actionInProgress = true;
     var preSnap = snapshotPencilmarks();   // pre-button baseline for a full revert on abort
     _removeInvalidPencilmarksMultiPass({}).then(async function (r) {
@@ -5158,7 +5148,7 @@
   }
 
   function clearMarksInSelected() {
-    if (actionInProgress) { showRemoveInvalidToast(actionBusyMessage(), 'warning'); return; }
+    if (actionInProgress) return;   // locked out (no popup): these finish in a fraction of a second — the lock just blocks a rapid double-click
     var selected = getSelectedCells();
     if (selected.size === 0) {
       showRemoveInvalidToast('No marks cleared (no cells selected).', 'success');
@@ -5272,7 +5262,7 @@
   }
 
   function fillSelectedCellsWithCandidates() {
-    if (actionInProgress) { showRemoveInvalidToast(actionBusyMessage(), 'warning'); return; }
+    if (actionInProgress) return;   // locked out (no popup): these finish in a fraction of a second — the lock just blocks a rapid double-click
     var selected = getSelectedCells();
     if (selected.size === 0) {
       showRemoveInvalidToast('No cells selected.', 'success');
@@ -7070,6 +7060,12 @@
     if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one valid candidate yet.'); return; }
     fsRenderToast('success', base + '\n\nReady — click to run.');
   }
+  // Persistent "running" popup — shown for the WHOLE auto-fill run, independent of
+  // the mouse (the runner renders it at start; the mouseleave handler + fsShowOnHover
+  // both leave it alone while fsState.running). Replaced by the result toast at the end.
+  function fsRenderRunning() {
+    fsRenderToast('warning', 'Auto-fill is running…\n\nClick the Stop button to abort.', {});
+  }
   // Post-run message text per terminal kind — shared by the runner and the debug
   // cycler so they never drift. The broken case names the offending cell.
   function fsResultMessage(kind, n, cellKey) {
@@ -7097,14 +7093,15 @@
     function () { fsRenderExplainer({ empties: [], zero: [], singles: [] }); },              // explainer: already complete (green)
     function () { fsRenderExplainer({ empties: ['x'], zero: ['x'], singles: [] }); },        // explainer: not ready — a zero-candidate cell (yellow)
     function () { fsRenderExplainer({ empties: ['x', 'y'], zero: [], singles: [] }); },      // explainer: not ready — no single (yellow)
+    function () { fsRenderRunning(); },                                                      // running: persistent "click Stop" popup (yellow)
     function () { fsRenderToast('success', fsResultMessage('complete', 12), {}); },          // result: complete (green)
     function () { fsRenderToast('warning', fsResultMessage('stuck', 5), {}); },              // result: stuck (yellow)
     function () { fsRenderToast('error',   fsResultMessage('broken', 7, '5,3'), { undo: true }); },  // result: broken (red + Undo)
     function () { fsRenderToast('warning', fsResultMessage('stopped', 3), { undo: true }); },        // result: user-stopped (yellow + Undo)
 
     // ── Action-button popups: direct toasts ──────────────────────────────────
-    function () { showRemoveInvalidToast(actionBusyMessage(), 'warning'); },                          // busy: an action's still finishing (yellow; reads the auto-fill "click Stop" line while it runs)
-    function () { showRemoveInvalidToast('The auto-fill is running. Click the Stop button (above the ⚙ gear) to abort it before starting another action.', 'warning'); },  // busy: auto-fill running variant (yellow)
+    // (No "busy" popup: the 3 fill/clear buttons finish in a fraction of a second
+    //  and are simply locked out on a rapid double-click — silently, no toast.)
     function () { showRemoveInvalidToast('No cells selected.', 'success'); },                         // Fill with nothing selected (green)
     function () { showRemoveInvalidToast('No marks cleared (no cells selected).', 'success'); },      // Clear marks with nothing selected (green)
 
@@ -7237,7 +7234,7 @@
     fsState.firstFill = null;
     actionInProgress = true;
     fsSetButtonLabel('stop');
-    fsHideToast();
+    fsRenderRunning();   // persistent "click Stop to abort" popup for the whole run (finish() replaces it with the result)
 
     // Build the sticky result for the terminal condition we hit.
     function finish(kind, zeroKey) {
@@ -7323,7 +7320,7 @@
     spdrFxButton(btn);          // hover-brighten + active-depress + click flash
     btn.addEventListener('click', function (e) { e.stopPropagation(); fillSingleCandidates(); });
     btn.addEventListener('mouseenter', function () { fsShowOnHover(); });
-    btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned) fsHideToast(); });
+    btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned && !fsState.running) fsHideToast(); });   // keep the running popup up regardless of mouse position
     document.body.appendChild(btn);
     fsSetButtonLabel('idle');   // sets the 4-line label + font/white-space — AFTER append (it looks the button up by id)
 
