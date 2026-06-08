@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.40.0
+// @version      3.41.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.40.0';
+  var SCRIPT_VERSION = '3.41.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -322,6 +322,10 @@
     showToasts:                   true,   // show action result notifications (toasts)
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
     showEasyShadeButton:          true,   // show/hide the Easy Shade button in the controls bar
+    showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
+    fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
+    fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
+    fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
     suppressStartDialog:          true,   // auto-dismiss SudokuPad's "Start/Resume Puzzle" rules popup on load
 
     regionColorPalette0:          '#e05252',  // red
@@ -5009,7 +5013,7 @@
     }
     // Aborted
     var t = result.abortTarget;
-    var targetDesc = t ? (t.type + ' ' + t.digit + ' from cell (' + t.cellX + ',' + t.cellY + ')') : '(unknown)';
+    var targetDesc = t ? (t.type + ' ' + t.digit + ' from cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : '(unknown)';
     var common = '\nRemoved ' + result.removed + ' of ' + result.totalTargets + ' ' + contextLabel + ' in ' + elapsed + '. ';
     if (result.abortReason === 'mode-drift') {
       showRemoveInvalidToast('Aborted: tool mode drifted unexpectedly before removing ' + targetDesc + '.' + common + 'Nothing was damaged.', 'warning');
@@ -5246,7 +5250,7 @@
       var elapsedFill = formatDuration(fillResult.elapsedMs);
       if (fillResult.aborted) {
         var t = fillResult.abortTarget;
-        var desc = t ? ('digit ' + t.digit + ' in cell (' + t.cellX + ',' + t.cellY + ')') : '(unknown)';
+        var desc = t ? ('digit ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : '(unknown)';
         var skippedNote = (fillResult.skippedCount > 0) ? ' (skipped ' + fillResult.skippedCount + ' cell' + (fillResult.skippedCount === 1 ? '' : 's') + ')' : '';
         var inlineNote = (fillResult.removedCount > 0) ? ', removed ' + fillResult.removedCount + ' inline' : '';
         var msg = 'Fill aborted while adding ' + desc + ' (' + fillResult.abortReason + ').\nAdded ' + fillResult.addedCount + ' candidates' + inlineNote + skippedNote + ' in ' + elapsedFill + ' before stopping.';
@@ -5264,7 +5268,7 @@
       if (removeResult.aborted) {
         // Compose a combined message
         var t = removeResult.abortTarget;
-        var desc = t ? (t.type + ' ' + t.digit + ' in cell (' + t.cellX + ',' + t.cellY + ')') : '(unknown)';
+        var desc = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : '(unknown)';
         var kind = (removeResult.abortReason === 'unexpected-diff' && removeResult.rollbackOk === false) ? 'error' : 'warning';
         var inlineR = fillResult.removedCount || 0;
         var msg = 'Filled ' + fillResult.addedCount + ' candidates' + (inlineR > 0 ? ', removed ' + inlineR + ' inline' : '') +
@@ -6219,7 +6223,7 @@
       flexShrink: '0',
     });
     spdrFxButton(actionResetBtn);
-    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'suppressStartDialog', 'showToasts', 'toastPersist'];
+    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'showFillSingleButton', 'fsSelectDelayMs', 'fsFillDelayMs', 'fsUndoDelayMs', 'suppressStartDialog', 'showToasts', 'toastPersist'];
     actionResetBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       ACTION_RESET_KEYS.forEach(function (k) { if (k in DEFAULTS) settings[k] = DEFAULTS[k]; });
@@ -6267,6 +6271,71 @@
     easyShadeVisCbRow.appendChild(document.createTextNode('Show Easy Shade button'));
     easyShadeVisCbRow.appendChild(makeHiliteIcon('easyShade', 'Highlight the Easy Shade button'));
     actionSection.appendChild(easyShadeVisCbRow);
+
+    // Auto-fill (single candidate) button visibility
+    var fsVisCbRow = document.createElement('label');
+    fsVisCbRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-size:12px;';
+    var fsVisCb = document.createElement('input');
+    fsVisCb.id = 'sp-fs-vis-cb';
+    fsVisCb.type = 'checkbox';
+    fsVisCb.checked = settings.showFillSingleButton !== false;
+    Object.assign(fsVisCb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+    fsVisCb.addEventListener('change', function () {
+      settings.showFillSingleButton = fsVisCb.checked;
+      saveSettings(settings);
+      if (controlSyncers['showFillSingleButton']) controlSyncers['showFillSingleButton']();
+    });
+    fsVisCbRow.appendChild(fsVisCb);
+    fsVisCbRow.appendChild(document.createTextNode('Show Auto-fill (single candidate) button'));
+    actionSection.appendChild(fsVisCbRow);
+    // Keep the checkbox in sync when the button's own controlSyncer is invoked
+    // (e.g. by the section reset). Chain onto the visibility syncer set in buildFillSingleButton.
+    (function () {
+      var btnSync = controlSyncers['showFillSingleButton'];
+      controlSyncers['showFillSingleButton'] = function () {
+        if (btnSync) btnSync();
+        fsVisCb.checked = settings.showFillSingleButton !== false;
+      };
+    })();
+
+    // Auto-fill delays — live-editable (no reload), indented under the checkbox.
+    var fsDelayWrap = document.createElement('div');
+    Object.assign(fsDelayWrap.style, { paddingLeft: '20px', marginBottom: '4px' });
+    function makeFsDelayRow(labelText, key) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:3px;font-size:11px;color:#a6adc8;cursor:text;';
+      var inp = document.createElement('input');
+      inp.type = 'number'; inp.min = '0'; inp.step = '50';
+      inp.value = (settings[key] != null ? settings[key] : DEFAULTS[key]);
+      Object.assign(inp.style, { width:'62px', background:'#181825', color:'#cdd6f4', border:'1px solid #45475a', borderRadius:'4px', padding:'2px 6px', fontSize:'11px', flexShrink:'0' });
+      inp.addEventListener('input', function () {
+        var v = parseInt(inp.value, 10);
+        if (isNaN(v) || v < 0) v = 0;
+        settings[key] = v;
+        saveSettings(settings);
+      });
+      controlSyncers[key] = function () { inp.value = (settings[key] != null ? settings[key] : DEFAULTS[key]); };
+      row.appendChild(inp);
+      row.appendChild(document.createTextNode(labelText));
+      fsDelayWrap.appendChild(row);
+    }
+    makeFsDelayRow('Select delay (ms) — before filling the chosen cell', 'fsSelectDelayMs');
+    makeFsDelayRow('Fill delay (ms) — after filling, before the next cell', 'fsFillDelayMs');
+    makeFsDelayRow('Undo delay (ms) — between undo steps', 'fsUndoDelayMs');
+    actionSection.appendChild(fsDelayWrap);
+
+    // Debug: preview every Auto-fill popup without building a puzzle into each state.
+    var fsDebugBtn = document.createElement('button');
+    fsDebugBtn.type = 'button';
+    fsDebugBtn.textContent = 'Debug: show popup 1/' + fsDebugList.length;
+    Object.assign(fsDebugBtn.style, { marginLeft:'20px', marginBottom:'6px', background:'#313244', color:'#a6adc8', border:'1px solid #45475a', borderRadius:'4px', padding:'3px 11px', cursor:'pointer', fontSize:'11px', fontFamily:'system-ui, -apple-system, sans-serif' });
+    spdrFxButton(fsDebugBtn);
+    fsDebugBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nextN = fsDebugShowNext();
+      fsDebugBtn.textContent = 'Debug: show popup ' + nextN + '/' + fsDebugList.length;
+    });
+    actionSection.appendChild(fsDebugBtn);
 
     // Suppress the "Start/Resume Puzzle" rules popup on load (applies next load).
     var suppressDlgCbRow = document.createElement('label');
@@ -6870,13 +6939,21 @@
   // corner marks entirely. Placing a value naturally re-tags peers, dropping
   // cells to one valid candidate and propagating the chain.
   //
-  // Cadence (the three delays below are the only knobs — adjust to taste):
-  //   select the single-candidate cell → FS_SELECT_DELAY_MS → place its digit →
-  //   FS_FILL_DELAY_MS → rescan → repeat. FS_UNDO_DELAY_MS paces the message's
-  //   Undo, which just re-clicks the native undo button N times.
-  var FS_SELECT_DELAY_MS = 400;   // ← pause after highlighting a cell, before its digit is placed
-  var FS_FILL_DELAY_MS   = 350;   // ← pause after placing a digit, before the next cell is selected
-  var FS_UNDO_DELAY_MS   = 100;   // ← pause between native-undo clicks when the message's "Undo" is used
+  // Cadence: select the single-candidate cell → (select delay) → place its digit
+  // → (fill delay) → rescan → repeat. The undo delay paces the message's Undo
+  // (re-clicks the native undo button N times). All three live in settings and are
+  // live-editable in Settings → Action buttons (no reload); read at runtime.
+  function fsSelectDelay() { return settings.fsSelectDelayMs != null ? settings.fsSelectDelayMs : DEFAULTS.fsSelectDelayMs; }
+  function fsFillDelay()   { return settings.fsFillDelayMs   != null ? settings.fsFillDelayMs   : DEFAULTS.fsFillDelayMs; }
+  function fsUndoDelay()   { return settings.fsUndoDelayMs   != null ? settings.fsUndoDelayMs   : DEFAULTS.fsUndoDelayMs; }
+
+  // "col,row" key → human "(R<row+1>,C<col+1>)" — 1-indexed, row-first (R1C1 =
+  // top-left). The only place we surface a specific cell to the player.
+  function fsCellLabel(key) {
+    var p = String(key).split(',');
+    var col = parseInt(p[0], 10), row = parseInt(p[1], 10);
+    return '(R' + (row + 1) + ',C' + (col + 1) + ')';
+  }
 
   // Single source of run/message state.
   var fsState = {
@@ -6960,12 +7037,46 @@
   // Hover explainer (shown when idle, no pending result). Green when the function
   // would run, yellow with the blocking reason when it would not.
   function fsRenderExplainer(a) {
-    var base = 'Auto-fills every empty cell that has exactly one valid (non-conflict) centre candidate, one at a time, watching the chain propagate.';
+    var base = 'Auto-fills every empty cell that has exactly one valid (non-conflict) centre candidate, one at a time.';
     if (a.empties.length === 0) { fsRenderToast('success', base + '\n\nThe puzzle is already complete.'); return; }
     if (a.zero.length > 0) { fsRenderToast('warning', base + '\n\nNot ready: every cell in the grid needs at least one valid centre candidate before it can be used.'); return; }
     if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one valid candidate yet.'); return; }
     fsRenderToast('success', base + '\n\nReady — click to run.');
   }
+  // Post-run message text per terminal kind — shared by the runner and the debug
+  // cycler so they never drift. The broken case names the offending cell.
+  function fsResultMessage(kind, n, cellKey) {
+    var pl = n === 1 ? '' : 's';
+    if (kind === 'complete') return 'Done — auto-filled ' + n + ' cell' + pl + '. Puzzle complete.';
+    if (kind === 'stuck')    return 'Stopped — no cell has a single valid candidate. Filled ' + n + ' cell' + pl + '; more information needed.';
+    if (kind === 'broken')   return 'Stopped — cell ' + fsCellLabel(cellKey) + ' has no valid candidates left, likely a mistake or incomplete pencilmarks. Filled ' + n + ' cell' + pl + ' before stopping.';
+    return 'You stopped the auto-fill after ' + n + ' cell' + pl + '.';   // stopped
+  }
+
+  // Debug preview: cycle through every possible popup (explainer states +
+  // result states) without engineering a puzzle into each condition. Each entry
+  // renders one popup exactly as it appears in real use. (Undo in a previewed
+  // result is inert — there is no real run to rewind.)
+  var fsDebugList = [
+    function () { fsRenderExplainer({ empties: ['x'], zero: [], singles: ['x'] }); },        // explainer: ready (green)
+    function () { fsRenderExplainer({ empties: [], zero: [], singles: [] }); },              // explainer: already complete (green)
+    function () { fsRenderExplainer({ empties: ['x'], zero: ['x'], singles: [] }); },        // explainer: not ready — a zero-candidate cell (yellow)
+    function () { fsRenderExplainer({ empties: ['x', 'y'], zero: [], singles: [] }); },      // explainer: not ready — no single (yellow)
+    function () { fsRenderToast('success', fsResultMessage('complete', 12), {}); },          // result: complete (green)
+    function () { fsRenderToast('warning', fsResultMessage('stuck', 5), {}); },              // result: stuck (yellow)
+    function () { fsRenderToast('error',   fsResultMessage('broken', 7, '5,3'), { undo: true }); },  // result: broken (red + Undo)
+    function () { fsRenderToast('warning', fsResultMessage('stopped', 3), { undo: true }); },        // result: user-stopped (yellow + Undo)
+  ];
+  var fsDebugIdx = 0;
+  function fsDebugShowNext() {
+    fsClearResult();                       // clear any real sticky state so the preview shows cleanly
+    fsDebugList[fsDebugIdx]();
+    var t = document.getElementById('sp-fs-toast');
+    if (t) t.style.zIndex = '1000000';     // above our own settings panel (the debug button lives in it)
+    fsDebugIdx = (fsDebugIdx + 1) % fsDebugList.length;
+    return fsDebugIdx + 1;                 // 1-based index of the NEXT popup (for the button label)
+  }
+
   // Render the current sticky result toast (no running-guard — used both for the
   // auto-popup the moment a stop condition fires AND for re-show on hover).
   function fsRenderResult() {
@@ -7022,7 +7133,7 @@
       if (undoBtn) dispatchClickEl(undoBtn);
       else { var app = await Framework.getApp(); app.act({ type: 'undo' }); }
       i++;
-      await sleep(FS_UNDO_DELAY_MS);
+      await sleep(fsUndoDelay());
     }
     fsState.undoing = false;
     fsClearResult();
@@ -7038,7 +7149,7 @@
     } else {
       btn.style.whiteSpace = 'pre-line';   // honour the explicit line breaks
       btn.style.fontSize   = '9px';        // small enough that 4 lines fit the square
-      btn.textContent      = 'Auto-fill\nsingle\ncandidate\ncells';
+      btn.textContent      = 'Auto-fill\nany single\ncandidate\ncells';
     }
   }
 
@@ -7070,18 +7181,13 @@
 
     // Build the sticky result for the terminal condition we hit.
     function finish(kind, zeroKey) {
-      var n = fsState.filledCount, pl = n === 1 ? '' : 's';
-      if (kind === 'complete') {
-        fsSetResult('complete', 'Done — auto-filled ' + n + ' cell' + pl + '. Puzzle complete.', false);
-      } else if (kind === 'stuck') {
-        fsSetResult('stuck', 'Stopped — no cell has a single valid candidate. Filled ' + n + ' cell' + pl + '; more information needed.', false);
-      } else if (kind === 'broken') {
+      var n = fsState.filledCount;
+      if (kind === 'broken') {
         app.deselect();
         if (cellByKey[zeroKey]) app.select([cellByKey[zeroKey]]);   // park the selection on the offending cell
-        fsSetResult('broken', 'Stopped — cell (' + zeroKey + ') has no valid candidates left, likely a mistake or incomplete pencilmarks. Filled ' + n + ' cell' + pl + ' before stopping.', n > 0);
-      } else { // stopped (user)
-        fsSetResult('stopped', 'You stopped the auto-fill after ' + n + ' cell' + pl + '.', n > 0);
       }
+      var canUndo = (kind === 'broken' || kind === 'stopped') && n > 0;
+      fsSetResult(kind, fsResultMessage(kind, n, zeroKey), canUndo);
     }
 
     try {
@@ -7094,12 +7200,12 @@
         var next = a.singles[0];
         app.deselect();
         app.select([next.cell]);                // pre-select so the user sees it before it fills
-        await sleep(FS_SELECT_DELAY_MS);
+        await sleep(fsSelectDelay());
         if (fsState.aborted) { finish('stopped'); break; }
         app.act({ type: 'value', arg: next.digit });
         if (fsState.filledCount === 0) fsState.firstFill = { col: next.cell.col, row: next.cell.row };
         fsState.filledCount++;
-        await sleep(FS_FILL_DELAY_MS);
+        await sleep(fsFillDelay());
       }
     } finally {
       fsState.running = false;
@@ -7160,6 +7266,11 @@
     btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned) fsHideToast(); });
     document.body.appendChild(btn);
     fsSetButtonLabel('idle');   // sets the 4-line label + font/white-space — AFTER append (it looks the button up by id)
+
+    // Visibility — toggled by the Settings checkbox (controlSyncer keeps it in sync).
+    function fsApplyVisibility() { btn.style.display = settings.showFillSingleButton !== false ? 'flex' : 'none'; }
+    fsApplyVisibility();
+    controlSyncers['showFillSingleButton'] = fsApplyVisibility;
 
     // A click anywhere outside the button + its toast unpins a sticky result
     // (it stays available on re-hover until the puzzle is edited).
