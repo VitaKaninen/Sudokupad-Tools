@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.42.0
+// @version      3.43.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.42.0';
+  var SCRIPT_VERSION = '3.43.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4657,6 +4657,16 @@
     return '56px';
   }
 
+  // Message for the action-lock guard (a button pressed while another op runs).
+  // The only long-running op is the auto-fill — and its button turns into "Stop"
+  // while running — so the realistic collision is "auto-fill is going, user clicks
+  // Fill/Clear". Point them at the Stop button. (The old generic "another operation
+  // is still running" predated the Stop button and never told the user how to act.)
+  function actionBusyMessage() {
+    if (fsState.running) return 'The auto-fill is running. Click the Stop button (above the ⚙ gear) to abort it before starting another action.';
+    return 'Please wait — an action is still finishing.';   // a fast Fill/Clear is mid-flight (sub-second)
+  }
+
   // When true, the Settings "Debug: show popup" cycler is previewing a toast:
   // force it to show (ignore the showToasts gate), never auto-fade, and float it
   // above our own settings panel. See fsDebugShowNext.
@@ -5017,25 +5027,41 @@
       }
       return;
     }
-    // Aborted
+    // Aborted. The public entry point has already reverted the whole operation
+    // back to the pre-button state (revertToSnapshot) and recorded the outcome in
+    // result.fullyReverted — so the message is the SAME regardless of the internal
+    // abort reason: either everything was restored, or (should never happen) it
+    // couldn't be and the player must finish the undo by hand. No partial counts:
+    // on a full revert there are, by definition, no surviving changes to report.
     var t = result.abortTarget;
-    var targetDesc = t ? (t.type + ' ' + t.digit + ' from cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : '(unknown)';
-    var common = '\nRemoved ' + result.removed + ' of ' + result.totalTargets + ' ' + contextLabel + ' in ' + elapsed + '. ';
-    if (result.abortReason === 'mode-drift') {
-      showRemoveInvalidToast('Aborted: tool mode drifted unexpectedly before removing ' + targetDesc + '.' + common + 'Nothing was damaged.', 'warning');
-    } else if (result.abortReason === 'no-effect') {
-      showRemoveInvalidToast('Aborted: click had no effect when removing ' + targetDesc + '.' + common + 'Nothing was damaged.', 'warning');
-    } else if (result.abortReason === 'unexpected-diff') {
-      if (result.rollbackOk) {
-        showRemoveInvalidToast('Aborted: click produced an unexpected change for ' + targetDesc + '. Rolled it back.' + common + 'Nothing was damaged.', 'warning');
-      } else {
-        showRemoveInvalidToast('CRITICAL: an unexpected change occurred for ' + targetDesc + ' AND the rollback failed. Press Ctrl+Z manually until satisfied. (Removed ' + result.removed + ' in ' + elapsed + ' before failure.)', 'error');
-      }
-    } else if (result.abortReason === 'selection-stuck') {
-      showRemoveInvalidToast('Aborted: could not isolate ' + targetDesc + ' as a single-cell selection (the multi-selection from the drag did not clear). ' + common + 'Nothing was damaged.', 'warning');
+    var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
+    if (result.fullyReverted) {
+      showRemoveInvalidToast('Stopped — an unexpected change occurred at ' + where + '. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
     } else {
-      showRemoveInvalidToast('Aborted on ' + targetDesc + '.' + common, 'warning');
+      showRemoveInvalidToast('CRITICAL — an unexpected change occurred at ' + where + ' and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
     }
+  }
+
+  // Revert every change made since `preSnap` by clicking the native undo button
+  // — one edit-group per click — until the puzzle's marks match preSnap again,
+  // restoring the EXACT pre-button state. The Fill/Clear entry points call this on
+  // ANY abort so a failed run never leaves a partial fill/removal behind (a single
+  // worker pass already rolls back its own group; this also catches multi-pass and
+  // fill-then-sweep, where earlier groups would otherwise remain). It re-checks
+  // diffEmpty BEFORE each click, so it stops the instant the state matches and can
+  // never over-undo into the user's own prior moves; `maxUndos` caps it so an
+  // unreachable state (shouldn't happen) fails loudly instead of looping forever.
+  // Returns true iff the pre-button state was fully restored.
+  async function revertToSnapshot(preSnap, maxUndos) {
+    var undoBtn = getModeButton('undo');
+    for (var i = 0; i <= maxUndos; i++) {
+      if (diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()))) return true;
+      if (i === maxUndos) break;
+      if (undoBtn) dispatchClickEl(undoBtn);
+      else { var app = await Framework.getApp(); app.act({ type: 'undo' }); }
+      await sleep(25);
+    }
+    return diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()));
   }
 
   // Public entry points ─ each takes the action lock, runs work, releases.
@@ -5122,22 +5148,26 @@
   }
 
   function removeInvalidPencilmarks() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+    if (actionInProgress) { showRemoveInvalidToast(actionBusyMessage(), 'warning'); return; }
     actionInProgress = true;
-    _removeInvalidPencilmarksMultiPass({}).then(function (r) {
+    var preSnap = snapshotPencilmarks();   // pre-button baseline for a full revert on abort
+    _removeInvalidPencilmarksMultiPass({}).then(async function (r) {
+      if (r.aborted) r.fullyReverted = await revertToSnapshot(preSnap, 12);
       showWorkerResult(r, 'invalid pencilmarks');
     }).finally(function () { actionInProgress = false; });
   }
 
   function clearMarksInSelected() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+    if (actionInProgress) { showRemoveInvalidToast(actionBusyMessage(), 'warning'); return; }
     var selected = getSelectedCells();
     if (selected.size === 0) {
       showRemoveInvalidToast('No marks cleared (no cells selected).', 'success');
       return;
     }
     actionInProgress = true;
-    _removeInvalidPencilmarksMultiPass({ cellFilter: selected }).then(function (r) {
+    var preSnap = snapshotPencilmarks();   // pre-button baseline for a full revert on abort
+    _removeInvalidPencilmarksMultiPass({ cellFilter: selected }).then(async function (r) {
+      if (r.aborted) r.fullyReverted = await revertToSnapshot(preSnap, 12);
       showWorkerResult(r, 'invalid marks in selected cells', 'No invalid marks in the selected cell' + (selected.size === 1 ? '' : 's') + '.');
     }).finally(function () { actionInProgress = false; });
   }
@@ -5242,7 +5272,7 @@
   }
 
   function fillSelectedCellsWithCandidates() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+    if (actionInProgress) { showRemoveInvalidToast(actionBusyMessage(), 'warning'); return; }
     var selected = getSelectedCells();
     if (selected.size === 0) {
       showRemoveInvalidToast('No cells selected.', 'success');
@@ -5251,41 +5281,33 @@
     actionInProgress = true;
     var t0 = performance.now();
     var originalMode = getCurrentMode();
+    var preSnap = snapshotPencilmarks();   // pre-button baseline. Fill + sweep are
+                                           // separate undo groups, so on ANY abort
+                                           // we revert the WHOLE thing back to here.
     (async function () {
       var fillResult = await _fillSelectedInternal(selected);
-      var elapsedFill = formatDuration(fillResult.elapsedMs);
       if (fillResult.aborted) {
-        var t = fillResult.abortTarget;
-        var desc = t ? ('digit ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : '(unknown)';
-        var skippedNote = (fillResult.skippedCount > 0) ? ' (skipped ' + fillResult.skippedCount + ' cell' + (fillResult.skippedCount === 1 ? '' : 's') + ')' : '';
-        var inlineNote = (fillResult.removedCount > 0) ? ', removed ' + fillResult.removedCount + ' inline' : '';
-        var msg = 'Fill aborted while adding ' + desc + ' (' + fillResult.abortReason + ').\nAdded ' + fillResult.addedCount + ' candidates' + inlineNote + skippedNote + ' in ' + elapsedFill + ' before stopping.';
-        var kind = (fillResult.abortReason === 'unexpected-diff' && fillResult.rollbackOk === false) ? 'error' : 'warning';
-        if (kind === 'error') msg = 'CRITICAL: ' + msg;
-        else msg += ' Nothing was damaged.';
-        showRemoveInvalidToast(msg, kind);
+        // Fill itself failed → revert the fill group back to the pre-button state.
+        var reverted = await revertToSnapshot(preSnap, 12);
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
         if (originalMode) await ensureMode(originalMode);
+        if (reverted) showRemoveInvalidToast('Stopped while filling candidates — an unexpected change occurred. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while filling candidates and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
         return;
       }
       // Now strip invalid pencilmarks in those same cells.
       var removeResult = await _removeInvalidPencilmarksMultiPass({ cellFilter: selected });
       var totalElapsed = formatDuration(performance.now() - t0);
       if (removeResult.aborted) {
-        // Compose a combined message
+        // Sweep failed AFTER a successful fill (which is its own committed undo
+        // group) → revert EVERYTHING (sweep + fill) back to the pre-button state.
+        var reverted = await revertToSnapshot(preSnap, 12);
         var t = removeResult.abortTarget;
-        var desc = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : '(unknown)';
-        var kind = (removeResult.abortReason === 'unexpected-diff' && removeResult.rollbackOk === false) ? 'error' : 'warning';
-        var inlineR = fillResult.removedCount || 0;
-        var msg = 'Filled ' + fillResult.addedCount + ' candidates' + (inlineR > 0 ? ', removed ' + inlineR + ' inline' : '') +
-                  ', then aborted during final removal sweep at ' + desc +
-                  ' (' + removeResult.abortReason + ').\nRemoved ' + removeResult.removed + ' of ' + removeResult.totalTargets +
-                  ' sweep marks. Total time ' + totalElapsed + '.';
-        if (kind === 'error') msg = 'CRITICAL: ' + msg;
-        else msg += ' Nothing was damaged.';
-        showRemoveInvalidToast(msg, kind);
+        var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
         if (originalMode) await ensureMode(originalMode);
+        if (reverted) showRemoveInvalidToast('Filled the candidates, then hit an unexpected change during the cleanup sweep at ' + where + '. All changes were reverted, including the fill: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred during the cleanup sweep at ' + where + ' and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
       } else {
         var n = fillResult.addedCount;
         var inlineR = fillResult.removedCount || 0;
@@ -7081,7 +7103,8 @@
     function () { fsRenderToast('warning', fsResultMessage('stopped', 3), { undo: true }); },        // result: user-stopped (yellow + Undo)
 
     // ── Action-button popups: direct toasts ──────────────────────────────────
-    function () { showRemoveInvalidToast('Another operation is still running.', 'warning'); },        // any action while one is running (yellow)
+    function () { showRemoveInvalidToast(actionBusyMessage(), 'warning'); },                          // busy: an action's still finishing (yellow; reads the auto-fill "click Stop" line while it runs)
+    function () { showRemoveInvalidToast('The auto-fill is running. Click the Stop button (above the ⚙ gear) to abort it before starting another action.', 'warning'); },  // busy: auto-fill running variant (yellow)
     function () { showRemoveInvalidToast('No cells selected.', 'success'); },                         // Fill with nothing selected (green)
     function () { showRemoveInvalidToast('No marks cleared (no cells selected).', 'success'); },      // Clear marks with nothing selected (green)
 
@@ -7090,17 +7113,15 @@
     function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 0, aborted: false, elapsedMs: 1230, failures: [] }, 'invalid pencilmarks'); },   // removed N (green)
     function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 2, aborted: false, elapsedMs: 1230, failures: [] }, 'invalid pencilmarks'); },   // removed N + skipped-not-in-set (green)
     function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 0, aborted: false, elapsedMs: 1230, failures: [{}, {}] }, 'invalid pencilmarks'); }, // removed N + non-fatal issues (yellow)
-    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'mode-drift',      abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },                       // aborted: mode drift (yellow)
-    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'no-effect',       abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },                       // aborted: no effect (yellow)
-    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'unexpected-diff', abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, rollbackOk: true,  elapsedMs: 1230 }, 'invalid pencilmarks'); },     // aborted: unexpected diff, rolled back (yellow)
-    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'unexpected-diff', abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, rollbackOk: false, elapsedMs: 1230 }, 'invalid pencilmarks'); },     // aborted: unexpected diff, rollback FAILED (red)
-    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'selection-stuck', abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },                       // aborted: selection stuck (yellow)
+    function () { showWorkerResult({ totalTargets: 10, aborted: true, fullyReverted: true,  abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },   // aborted, fully reverted (yellow)
+    function () { showWorkerResult({ totalTargets: 10, aborted: true, fullyReverted: false, abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },   // aborted, revert FAILED (red)
 
-    // ── Action-button popups: Fill button (text mirrors the inline messages) ──
-    function () { showRemoveInvalidToast('Filled 12 candidates in 4 cells, removed 3 invalid marks (1.45s).', 'success'); },                                                                                                  // fill complete (green)
-    function () { showRemoveInvalidToast('Fill aborted while adding digit 4 in cell (R4,C3) (no-effect).\nAdded 5 candidates in 0.80s before stopping. Nothing was damaged.', 'warning'); },                                   // fill aborted (yellow)
-    function () { showRemoveInvalidToast('CRITICAL: Fill aborted while adding digit 4 in cell (R4,C3) (unexpected-diff).\nAdded 5 candidates in 0.80s before stopping.', 'error'); },                                          // fill aborted, rollback FAILED (red)
-    function () { showRemoveInvalidToast('Filled 12 candidates, then aborted during final removal sweep at centre 4 in cell (R4,C3) (no-effect).\nRemoved 2 of 6 sweep marks. Total time 1.90s. Nothing was damaged.', 'warning'); },  // fill ok, sweep aborted (yellow)
+    // ── Action-button popups: Fill button ─────────────────────────────────────
+    function () { showRemoveInvalidToast('Filled 12 candidates in 4 cells, removed 3 invalid marks (1.45s).', 'success'); },                                                                                                                              // fill complete (green)
+    function () { showRemoveInvalidToast('Stopped while filling candidates — an unexpected change occurred. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning'); },                            // fill aborted, reverted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL — an unexpected change occurred while filling candidates and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error'); },                                                  // fill aborted, revert FAILED (red)
+    function () { showRemoveInvalidToast('Filled the candidates, then hit an unexpected change during the cleanup sweep at centre 4 in cell (R4,C3). All changes were reverted, including the fill: the puzzle is back to exactly how it was before you pressed the button.', 'warning'); },  // fill ok, sweep aborted, reverted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL — an unexpected change occurred during the cleanup sweep at centre 4 in cell (R4,C3) and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error'); },                      // fill ok, sweep aborted, revert FAILED (red)
   ];
   var fsDebugIdx = 0;
   function fsDebugShowNext() {
