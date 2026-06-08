@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.33.0
+// @version      3.34.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.33.0';
+  var SCRIPT_VERSION = '3.34.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -751,7 +751,7 @@
     darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -1281,6 +1281,7 @@
     var c = parseColor(r.getAttribute('fill') || '');
     if (!c || c.a === 0) return false;                          // transparent / no fill
     if (isKropkiDotRect(r)) return false;                       // owned by the Kropki fix (any class, black or white)
+    if (isKropkiClueShape(r)) return false;                     // owned by the Kropki clue-shape fix (off-border dots / diamonds)
     if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false;   // white / near-white
     if (r.classList.contains('textbg') && isGrayColor(c)) return false; // grey label bg
     return true;
@@ -1715,6 +1716,74 @@
     });
   }
 
+  // ── Off-border Kropki-TYPE clue shapes (v3.34.0) ────────────────────────────
+  // Pure black/white circles & diamonds that the position gate keeps OUT of
+  // fixKropkiDot: quad / clock-face dots (circles at a cell CORNER or CENTRE) and
+  // Kropki-cage ratio markers (DIAMONDS = rotate-45 squares). Left to the generic
+  // fixes they invert — object-shading paints the black ones grey (#999), label-bg
+  // paints the white ones dark — so we claim them here and render them in the
+  // Kropki convention instead. object-shading (shouldShadeOverlayRect, objFillSources)
+  // and label-bg (fixLabelRect, HT.labelBg) all SKIP isKropkiClueShape, so this is
+  // their sole controller (the same foolproof pattern as isKropkiDotRect).
+  function isKropkiDiamond(rect) {
+    if (rect.tagName !== 'rect') return false;
+    if (!/rotate\(\s*45\b/.test(rect.getAttribute('transform') || '')) return false;
+    var w = parseFloat(rect.getAttribute('width') || 0), h = parseFloat(rect.getAttribute('height') || 0);
+    return w > 0 && Math.abs(w - h) < 1;
+  }
+  function isKropkiClueShape(rect) {
+    if (!rect || rect.tagName !== 'rect') return false;
+    var f = (rect.getAttribute('fill') || '').toUpperCase();
+    if (f !== '#FFFFFF' && f !== '#000000') return false;          // pure black / white only
+    var cs = getGridCellSize() || 64;
+    var w = parseFloat(rect.getAttribute('width') || 0);
+    // Small only (≤ half a cell): includes kropki-sized clue dots/diamonds (~15–28px
+    // on a 64px cell) but EXCLUDES bigger circles — notably digit QUADRUPLES (~38px
+    // white corner-circles holding 1–4 digits), which must keep their native look.
+    if (!(w > 0 && w <= cs * 0.5)) return false;
+    var diamond = isKropkiDiamond(rect);
+    var circle  = isKropkiCircle(rect);
+    if (!diamond && !circle) return false;
+    // A circle ON a border is a real edge dot — fixKropkiDot owns those; only claim
+    // OFF-border circles (corners / centres) here. Diamonds are claimed anywhere.
+    if (circle && !diamond && isOnCellBorder(rect, cs)) return false;
+    return true;
+  }
+  // Render one clue shape per the confirmed rule (decoupled from the Kropki controls):
+  //   • shape WITH a centred glyph (clock dial) → RING: dark fill (masks the grid
+  //     line behind it), light outline, light glyph — so the arrow shows. Both black
+  //     and white dials become matching light rings (told apart by their glyph,
+  //     e.g. ↻ vs ↺). A currently-correct white dial is left looking identical.
+  //   • solid shape (no glyph) → author colour + contrasting outline:
+  //       black → black fill + white outline;  white → white fill + dark outline.
+  function fixKropkiClueShape(rect) {
+    var f = (rect.getAttribute('fill') || '').toUpperCase();
+    var isBlack = f === '#000000';
+    var LIGHT = '#e8e6e3';
+    var glyph = getCenteredKropkiText(rect);
+    if (glyph) {
+      rect.style.setProperty('fill', settings.labelBgColor || '#181A1B', 'important');
+      rect.style.setProperty('stroke', LIGHT, 'important');
+      rect.style.setProperty('stroke-width', '1.5', 'important');
+      glyph.setAttribute('data-spdr-kropki-text', LIGHT);
+      glyph.style.setProperty('fill', LIGHT, 'important');
+    } else if (isBlack) {
+      rect.style.setProperty('fill', '#000000', 'important');
+      rect.style.setProperty('stroke', '#ffffff', 'important');
+      rect.style.setProperty('stroke-width', '1.5', 'important');
+    } else {
+      rect.style.setProperty('fill', '#ffffff', 'important');
+      rect.style.setProperty('stroke', '#000000', 'important');
+      rect.style.setProperty('stroke-width', '1', 'important');
+    }
+    rect.style.setProperty('fill-opacity', '1', 'important');
+  }
+  function fixAllKropkiClueShapes(svg) {
+    svg.querySelectorAll('#overlay rect, #underlay rect, rect.textbg').forEach(function (rect) {
+      if (isKropkiClueShape(rect)) fixKropkiClueShape(rect);
+    });
+  }
+
   function fixKropkiLabel(t) {
     // Keep our injected Kropki labels at their intended colour. The fill is stored
     // in the data-spdr-kropki-label attribute:
@@ -1886,6 +1955,7 @@
     // white-fill arm of LABEL_RECT_SEL) is owned by the Kropki fix — never paint it
     // the label-bg colour, or it goes dark-on-dark. (Issue: clover's "Diamond Ring".)
     if (isKropkiDotRect(rect)) return;
+    if (isKropkiClueShape(rect)) return;   // off-border dot / diamond — owned by the Kropki clue-shape fix
     if (settings.labelBgEnabled) {
       // Preserve the rect's OWN authored alpha so deliberately-translucent shapes
       // stay see-through. Opaque label boxes (#FFFFFF, alpha 1) are unaffected;
@@ -1914,6 +1984,7 @@
     fixAllUserDigits(svg);
     fixAllOverlayMarkerText(svg);
     fixAllKropkiDots(svg);
+    fixAllKropkiClueShapes(svg);
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
@@ -1936,7 +2007,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); }
     }).observe(svg, { childList: true, subtree: true });
   }
 
@@ -4085,7 +4156,7 @@
   // (#underlay rect + qualifying #overlay rect) and fixAllCagePaths (CAGE_FILL_SEL).
   function objFillSources() {
     var out = [];
-    hqa('#underlay rect').forEach(function (e) { if (!isKropkiDotRect(e)) out.push(e); });
+    hqa('#underlay rect').forEach(function (e) { if (!isKropkiDotRect(e) && !isKropkiClueShape(e)) out.push(e); });
     hqa('#overlay rect').forEach(function (e) { if (shouldShadeOverlayRect(e)) out.push(e); });
     hqa(CAGE_FILL_SEL).forEach(function (e) { out.push(e); });
     return out;
@@ -4136,7 +4207,7 @@
     // cosmetic shapes Object shading owns), minus fill="none"/transparent boxes
     // (invisible label anchors we leave alone), and minus Kropki dots (now owned
     // solely by the Kropki fix — fixLabelRect skips them too, so no overlap).
-    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; if (isKropkiDotRect(r)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
+    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; if (isKropkiDotRect(r) || isKropkiClueShape(r)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
     // Mirrors fixAllKropkiDots exactly via isKropkiDotRect (circular + black/white +
     // on a cell border): native feature-kropki, cosmetic textbg, AND class-less
     // #overlay/#underlay circles. Quadruples (grid corner) / bulbs / centre circles
