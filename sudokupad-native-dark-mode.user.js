@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.36.0
+// @version      3.37.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.36.0';
+  var SCRIPT_VERSION = '3.37.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6855,9 +6855,69 @@
     }, 50);
   }
 
+  // Placeholder for the auto-complete logic. STEP 1 = button only. The real
+  // routine (select cell with a single non-conflict centre mark → wait → place
+  // its digit → wait → rescan; stop when a cell hits zero non-conflict marks)
+  // will live here. The two inter-step delays will be named constants at the top
+  // of this function once it's implemented.
+  function fillSingleCandidates() {
+    showRemoveInvalidToast('Fill single candidate: button is wired up — auto-complete logic not added yet.', 'warning');
+  }
+
+  // Standalone floating button styled like the Fill/Clear/Clear All action
+  // buttons, parked just above the ⚙ settings gear (which is bottom:12px /
+  // right:12px, 36px tall → this sits 8px above it). Unlike those three it does
+  // NOT use the in-grid hover-expand clipper: it floats, so it shows its full
+  // label at a fixed size instead of expanding rightward off the edge.
+  function buildFillSingleButton() {
+    if (document.getElementById('sp-fill-single-btn')) return;
+    // Visual tokens copied from buildActionButton so it matches the trio.
+    var colorRefBtn = document.querySelector('[data-control="pen"]') ||
+                      document.querySelector('[data-control="corner"]') ||
+                      document.querySelector('[data-control="centre"]');
+    var colorRefStyle = colorRefBtn ? getComputedStyle(colorRefBtn) : null;
+    var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
+                      ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
+    var textColor = 'rgb(181, 104, 228)';                                  // literal theme purple (stable; see buildActionButton)
+    var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
+
+    var btn = document.createElement('button');
+    btn.id    = 'sp-fill-single-btn';
+    btn.type  = 'button';
+    btn.title = 'Auto-complete cells that have a single valid (non-conflict) candidate';
+    btn.textContent = 'Fill single candid.';
+    Object.assign(btn.style, {
+      position:   'fixed',
+      bottom:     '56px',   // 12px gear margin + 36px gear height + 8px gap
+      right:      '12px',   // right-aligned over the gear
+      height:     '36px',   // matches the gear's height
+      padding:    '0 12px',
+      borderRadius: '8px',
+      cursor:     'pointer',
+      fontSize:   '14px',
+      fontFamily: 'Roboto, Arial, sans-serif',
+      fontWeight: '700',
+      lineHeight: '1',
+      whiteSpace: 'nowrap',
+      display:    'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex:     '999999',
+      boxShadow:  '0 2px 8px rgba(0,0,0,0.4)',
+      boxSizing:  'border-box',
+    });
+    btn.style.setProperty('background-color', bgColor, 'important');
+    btn.style.setProperty('color', textColor, 'important');
+    btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    spdrFxButton(btn);
+    btn.addEventListener('click', function (e) { e.stopPropagation(); fillSingleCandidates(); });
+    document.body.appendChild(btn);
+  }
+
   function buildAllUI() {
     suppressStartDialog();
     buildVersionLabel();
+    buildFillSingleButton();
     startGapAutoScan();   // TEMP migration dev tool (see GAPSCAN_AUTO)
     buildSettingsUI();
     // Selection-border offset observer is feature-independent of DarkReader
