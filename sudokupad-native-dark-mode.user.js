@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.38.0
+// @version      3.39.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.38.0';
+  var SCRIPT_VERSION = '3.39.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6421,9 +6421,10 @@
       border: '1px solid #45475a', borderRadius: '8px',
       cursor: 'pointer', fontSize: '18px',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: '999999', boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+      zIndex: '900', boxShadow: '0 2px 8px rgba(0,0,0,0.4)',   // below the native dialog scrim (z 1000) so it dims with the page
       padding: '0', lineHeight: '1',
     });
+    spdrFxButton(triggerBtn);   // hover-brighten + active-depress + click flash
     // Save the digit set field and hide the panel.
     function closePanel() {
       if (panel.style.display === 'none') return;
@@ -6728,6 +6729,7 @@
     controlSyncers['shadedRegionColorOpacity']  = shadedOp.sync;
 
     auxRow.appendChild(btn);
+    spdrFxButton(btn);   // hover-brighten + active-depress + click flash
 
     // Visibility — controlled independently by the settings checkbox.
     function applyButtonVisibility() {
@@ -6761,7 +6763,7 @@
       lineHeight:    '1.2',
       textAlign:     'right',
       pointerEvents: 'none',
-      zIndex:        '999999',
+      zIndex:        '900',   // below the native dialog scrim (z 1000) so it dims with the page
       whiteSpace:    'nowrap',
     });
     label.textContent = 'v' + SCRIPT_VERSION;
@@ -6860,114 +6862,254 @@
     }, 50);
   }
 
-  // Auto-complete endgame helper. Premise: SudokuPad tags a centre candidate that
-  // clashes with a placed peer value with class="conflict" (verified: the re-tag
-  // is synchronous with app.act value placement). So a "valid candidate" is just a
-  // non-.conflict tspan in #cell-candidates — we never validate, never eliminate,
-  // and ignore corner marks entirely. Placing a value naturally re-tags peers,
-  // dropping cells to one valid candidate and propagating the chain.
+  // ── Fill single candidate (endgame autocomplete) ───────────────────────────
+  // Premise: SudokuPad tags a centre candidate that clashes with a placed peer
+  // value with class="conflict" (verified: the re-tag is synchronous with
+  // app.act value placement). So a "valid candidate" is just a non-.conflict
+  // tspan in #cell-candidates — we never validate, never eliminate, and ignore
+  // corner marks entirely. Placing a value naturally re-tags peers, dropping
+  // cells to one valid candidate and propagating the chain.
   //
-  // Cadence (both delays are the named constants below — adjust to taste):
-  //   select the single-candidate cell → SELECT_DELAY_MS → place its digit →
-  //   FILL_DELAY_MS → rescan → repeat.
-  // Stops when: the grid is full (done), a cell drops to ZERO valid candidates
-  // (contradiction → likely a mistake or incomplete pencilmarks), or no cell has
-  // exactly one valid candidate (logic still required).
-  async function fillSingleCandidates() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+  // Cadence (the three delays below are the only knobs — adjust to taste):
+  //   select the single-candidate cell → FS_SELECT_DELAY_MS → place its digit →
+  //   FS_FILL_DELAY_MS → rescan → repeat. FS_UNDO_DELAY_MS paces the message's
+  //   Undo, which just re-clicks the native undo button N times.
+  var FS_SELECT_DELAY_MS = 400;   // ← pause after highlighting a cell, before its digit is placed
+  var FS_FILL_DELAY_MS   = 350;   // ← pause after placing a digit, before the next cell is selected
+  var FS_UNDO_DELAY_MS   = 100;   // ← pause between native-undo clicks when the message's "Undo" is used
 
-    var SELECT_DELAY_MS = 200;   // ← pause after highlighting a cell, before its digit is placed
-    var FILL_DELAY_MS   = 50;    // ← pause after placing a digit, before the next cell is selected
+  // Single source of run/message state.
+  var fsState = {
+    running: false,        // the loop is executing
+    aborted: false,        // a 2nd button press requested a stop
+    result: null,          // sticky post-run message: { kind, message, canUndo }
+    resultPinned: false,   // result toast stays until the user clicks elsewhere
+    firstFill: null,       // {col,row} of the first cell we filled — anchors the Undo
+    filledCount: 0,
+    undoing: false,        // suppress the revoke-observer while WE drive undos
+  };
+  var fsObserver = null;   // revokes a pending result the moment the user edits the puzzle
+
+  function fsScanValid() {
+    var map = {};
+    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (t) {
+      var ck = cellKeyFromMarkXY(t.getAttribute('x'), t.getAttribute('y'));
+      var digits = [];
+      t.querySelectorAll('tspan').forEach(function (sp) {
+        if (!sp.classList.contains('conflict')) { var d = sp.getAttribute('data-val'); if (d) digits.push(d); }
+      });
+      map[ck] = digits;
+    });
+    return map;
+  }
+  // Classify every empty cell by its valid-candidate count (no marks at all → zero).
+  function fsAnalyse(app) {
+    var map = fsScanValid();
+    var empties = [], zero = [], singles = [];
+    app.puzzle.cells.forEach(function (c) {
+      if (cellHasValueOrGiven(c.col, c.row)) return;
+      var ck = c.col + ',' + c.row;
+      var digits = map[ck] || [];
+      empties.push(ck);
+      if (digits.length === 0) zero.push(ck);
+      else if (digits.length === 1) singles.push({ cell: c, ck: ck, digit: digits[0] });
+    });
+    return { empties: empties, zero: zero, singles: singles };
+  }
+
+  // Low-level toast for this feature (distinct id from the action-button toast).
+  // NEVER auto-fades — visibility is driven by hover + pin state below.
+  function fsHideToast() { var t = document.getElementById('sp-fs-toast'); if (t) t.remove(); }
+  function fsRenderToast(colorKind, message, opts) {
+    opts = opts || {};
+    fsHideToast();
+    var colours = {
+      success: { bg: '#2d4a36', border: '#3d8b54', text: '#cdebd1' },
+      warning: { bg: '#4a3f2d', border: '#a3853d', text: '#ebe1cd' },
+      error:   { bg: '#4a2d2d', border: '#a33d3d', text: '#ebcdcd' },
+    };
+    var c = colours[colorKind] || colours.success;
+    var toast = document.createElement('div');
+    toast.id = 'sp-fs-toast';
+    Object.assign(toast.style, {
+      position: 'fixed', bottom: getToastBottom(), right: '12px', width: '320px',
+      padding: '10px 12px', background: c.bg, color: c.text, border: '1px solid ' + c.border,
+      borderRadius: '6px', fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: '12px',
+      lineHeight: '1.4', zIndex: '900', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+      whiteSpace: 'pre-line', boxSizing: 'border-box',
+    });
+    var msg = document.createElement('div');
+    msg.textContent = message;
+    toast.appendChild(msg);
+    if (opts.undo) {
+      var u = document.createElement('button');
+      u.type = 'button';
+      u.textContent = 'Undo';
+      Object.assign(u.style, {
+        marginTop: '8px', padding: '4px 14px', background: 'transparent', color: c.text,
+        border: '1px solid ' + c.border, borderRadius: '5px', cursor: 'pointer',
+        fontSize: '12px', fontWeight: '700',
+      });
+      spdrFxButton(u);
+      u.addEventListener('click', function (e) { e.stopPropagation(); fsDoUndo(); });
+      toast.appendChild(u);
+    }
+    document.body.appendChild(toast);
+  }
+
+  // Hover explainer (shown when idle, no pending result). Green when the function
+  // would run, yellow with the blocking reason when it would not.
+  function fsRenderExplainer(a) {
+    var base = 'Auto-fills every empty cell that has exactly one valid (non-conflict) centre candidate, one at a time, watching the chain propagate.';
+    if (a.empties.length === 0) { fsRenderToast('success', base + '\n\nThe puzzle is already complete.'); return; }
+    if (a.zero.length > 0) { fsRenderToast('warning', base + '\n\nNot ready: every cell in the grid needs at least one valid centre candidate before it can be used.'); return; }
+    if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one valid candidate yet.'); return; }
+    fsRenderToast('success', base + '\n\nReady — click to run.');
+  }
+  async function fsShowOnHover() {
+    if (fsState.running) return;                      // button reads "Stop"; no popup mid-run
+    if (fsState.result) {                             // a sticky result is available → re-show it
+      var r = fsState.result;
+      var col = r.kind === 'complete' ? 'success' : (r.kind === 'broken' ? 'error' : 'warning');
+      fsRenderToast(col, r.message, { undo: r.canUndo });
+      return;
+    }
+    var app = await Framework.getApp();
+    fsRenderExplainer(fsAnalyse(app));
+  }
+
+  // Pending-result lifecycle. A result stays available (via hover) until the user
+  // edits the puzzle, which revokes it (and its Undo).
+  function fsStartRevokeObserver() {
+    if (fsObserver) return;
+    var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
+      .map(function (s) { return document.querySelector(s); }).filter(Boolean);
+    if (!targets.length) return;
+    fsObserver = new MutationObserver(function () {
+      if (!fsState.result || fsState.undoing) return;   // ignore our own undo-driven mutations
+      fsClearResult();
+    });
+    targets.forEach(function (t) { fsObserver.observe(t, { childList: true, subtree: true, characterData: true }); });
+  }
+  function fsStopRevokeObserver() { if (fsObserver) { fsObserver.disconnect(); fsObserver = null; } }
+  function fsSetResult(kind, message, canUndo) {
+    fsState.result = { kind: kind, message: message, canUndo: !!canUndo };
+    fsState.resultPinned = true;
+    fsStartRevokeObserver();
+    fsShowOnHover();   // render it now
+  }
+  function fsClearResult() {
+    fsState.result = null;
+    fsState.resultPinned = false;
+    fsStopRevokeObserver();
+    fsHideToast();
+  }
+
+  // Rewind exactly our run: re-click the native undo button until the FIRST cell
+  // we filled is empty again (LIFO ⇒ that undoes all our placements, candidates
+  // restored), capped at filledCount so a stuck state can't loop forever.
+  async function fsDoUndo() {
+    if (!fsState.result || !fsState.result.canUndo || fsState.undoing) return;
+    var first = fsState.firstFill, max = fsState.filledCount;
+    if (!first || !max) { fsClearResult(); return; }
+    fsState.undoing = true;
+    var undoBtn = getModeButton('undo');
+    var i = 0;
+    while (i < max && cellHasValueOrGiven(first.col, first.row)) {
+      if (undoBtn) dispatchClickEl(undoBtn);
+      else { var app = await Framework.getApp(); app.act({ type: 'undo' }); }
+      i++;
+      await sleep(FS_UNDO_DELAY_MS);
+    }
+    fsState.undoing = false;
+    fsClearResult();
+  }
+
+  function fsSetButtonLabel(mode) {
+    var btn = document.getElementById('sp-fill-single-btn');
+    if (!btn) return;
+    if (mode === 'stop') {
+      btn.style.whiteSpace = 'nowrap';
+      btn.style.fontSize   = '15px';
+      btn.textContent      = 'Stop';
+    } else {
+      btn.style.whiteSpace = 'pre-line';   // honour the explicit line breaks
+      btn.style.fontSize   = '9px';        // small enough that 4 lines fit the square
+      btn.textContent      = 'Auto-fill\nsingle\ncandidate\ncells';
+    }
+  }
+
+  async function fillSingleCandidates() {
+    if (fsState.running) { fsState.aborted = true; return; }   // 2nd press = Stop
+    if (actionInProgress) { return; }                          // another action owns the lock
 
     var app = await Framework.getApp();
     var cellByKey = {};
     app.puzzle.cells.forEach(function (c) { cellByKey[c.col + ',' + c.row] = c; });
 
-    // cellKey → array of non-conflict (valid) centre-candidate digits.
-    function scanValidCandidates() {
-      var map = {};
-      document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (t) {
-        var ck = cellKeyFromMarkXY(t.getAttribute('x'), t.getAttribute('y'));
-        var digits = [];
-        t.querySelectorAll('tspan').forEach(function (sp) {
-          if (!sp.classList.contains('conflict')) {
-            var d = sp.getAttribute('data-val');
-            if (d) digits.push(d);
-          }
-        });
-        map[ck] = digits;
-      });
-      return map;
-    }
-
-    // Classify every empty cell by its valid-candidate count. A cell with no
-    // centre marks at all counts as zero (not in the map → []).
-    function analyse() {
-      var map = scanValidCandidates();
-      var empties = [], zero = [], singles = [];
-      app.puzzle.cells.forEach(function (c) {
-        if (cellHasValueOrGiven(c.col, c.row)) return;
-        var ck = c.col + ',' + c.row;
-        var digits = map[ck] || [];
-        empties.push(ck);
-        if (digits.length === 0) zero.push(ck);
-        else if (digits.length === 1) singles.push({ cell: c, ck: ck, digit: digits[0] });
-      });
-      return { empties: empties, zero: zero, singles: singles };
-    }
-
-    // Safety gate — both conditions must hold before we touch anything.
-    var a0 = analyse();
-    if (a0.empties.length === 0) { showRemoveInvalidToast('Puzzle is already complete — nothing to fill.', 'success'); return; }
-    if (a0.zero.length > 0) {
-      showRemoveInvalidToast('Can’t start: ' + a0.zero.length + ' empty cell' + (a0.zero.length === 1 ? '' : 's') +
-        ' ' + (a0.zero.length === 1 ? 'has' : 'have') + ' no valid candidate. Every empty cell needs at least one non-conflict centre mark first.', 'warning');
-      return;
-    }
-    if (a0.singles.length === 0) {
-      showRemoveInvalidToast('Can’t start: no empty cell has exactly one valid candidate yet — there’s still logic to do.', 'warning');
+    // Pre-run gate. When unmet, just (re-)show the explainer — it already states
+    // the reason; do not start. (No separate toast → no double-stacking.)
+    var a0 = fsAnalyse(app);
+    if (a0.empties.length === 0 || a0.zero.length > 0 || a0.singles.length === 0) {
+      fsClearResult();
+      fsRenderExplainer(a0);
       return;
     }
 
+    fsClearResult();                 // drop any prior sticky result
+    fsState.running = true;
+    fsState.aborted = false;
+    fsState.filledCount = 0;
+    fsState.firstFill = null;
     actionInProgress = true;
-    var filled = 0;
+    fsSetButtonLabel('stop');
+    fsHideToast();
+
+    // Build the sticky result for the terminal condition we hit.
+    function finish(kind, zeroKey) {
+      var n = fsState.filledCount, pl = n === 1 ? '' : 's';
+      if (kind === 'complete') {
+        fsSetResult('complete', 'Done — auto-filled ' + n + ' cell' + pl + '. Puzzle complete.', false);
+      } else if (kind === 'stuck') {
+        fsSetResult('stuck', 'Stopped — no cell has a single valid candidate. Filled ' + n + ' cell' + pl + '; more information needed.', false);
+      } else if (kind === 'broken') {
+        app.deselect();
+        if (cellByKey[zeroKey]) app.select([cellByKey[zeroKey]]);   // park the selection on the offending cell
+        fsSetResult('broken', 'Stopped — cell (' + zeroKey + ') has no valid candidates left, likely a mistake or incomplete pencilmarks. Filled ' + n + ' cell' + pl + ' before stopping.', n > 0);
+      } else { // stopped (user)
+        fsSetResult('stopped', 'You stopped the auto-fill after ' + n + ' cell' + pl + '.', n > 0);
+      }
+    }
+
     try {
       while (true) {
-        var a = analyse();
-        if (a.empties.length === 0) {
-          showRemoveInvalidToast('Done — auto-filled ' + filled + ' cell' + (filled === 1 ? '' : 's') + '. Puzzle complete.', 'success');
-          break;
-        }
-        if (a.zero.length > 0) {
-          var zc = a.zero[0];
-          app.deselect();
-          if (cellByKey[zc]) app.select([cellByKey[zc]]);   // park the selection on the offending cell
-          showRemoveInvalidToast('Stopped: cell (' + zc + ') has no valid candidates left — likely a mistake earlier or incomplete pencilmarks. Filled ' + filled + ' before stopping.', 'error');
-          break;
-        }
-        if (a.singles.length === 0) {
-          showRemoveInvalidToast('Stopped: no cell has a single valid candidate. Filled ' + filled + ' — more logic needed.', 'warning');
-          break;
-        }
+        if (fsState.aborted) { finish('stopped'); break; }
+        var a = fsAnalyse(app);
+        if (a.empties.length === 0) { finish('complete'); break; }
+        if (a.zero.length > 0)      { finish('broken', a.zero[0]); break; }
+        if (a.singles.length === 0) { finish('stuck'); break; }
         var next = a.singles[0];
         app.deselect();
-        app.select([next.cell]);            // pre-select so the user sees it before it fills
-        await sleep(SELECT_DELAY_MS);
+        app.select([next.cell]);                // pre-select so the user sees it before it fills
+        await sleep(FS_SELECT_DELAY_MS);
+        if (fsState.aborted) { finish('stopped'); break; }
         app.act({ type: 'value', arg: next.digit });
-        filled++;
-        await sleep(FILL_DELAY_MS);
+        if (fsState.filledCount === 0) fsState.firstFill = { col: next.cell.col, row: next.cell.row };
+        fsState.filledCount++;
+        await sleep(FS_FILL_DELAY_MS);
       }
     } finally {
+      fsState.running = false;
       actionInProgress = false;
+      fsSetButtonLabel('idle');
     }
   }
 
-  // Standalone floating button styled like the Fill/Clear/Clear All action
-  // buttons (square, same colours/border/radius/flash), parked just above the ⚙
-  // settings gear (gear is bottom:12px / right:12px, 36px tall; the version label
-  // sits to its left). Unlike the trio it does NOT use the in-grid hover-expand
-  // clipper — it floats, so it shows the full label wrapped inside a fixed square
-  // rather than expanding rightward off the screen edge.
+  // Standalone floating square button styled like the Fill/Clear/Clear All action
+  // buttons (same colours/border/radius/flash), parked just above the ⚙ settings
+  // gear. zIndex 900 (below the native dialog scrim at 1000) so it dims with the
+  // rest of the page when the native settings dialog is open. Toggles to "Stop"
+  // while running; hover shows a state-aware explainer / sticky result.
   function buildFillSingleButton() {
     if (document.getElementById('sp-fill-single-btn')) return;
     // Visual tokens copied from buildActionButton so it matches the trio.
@@ -6985,36 +7127,47 @@
     var btn = document.createElement('button');
     btn.id    = 'sp-fill-single-btn';
     btn.type  = 'button';
-    btn.title = 'Auto-complete cells that currently have a single valid (non-conflict) candidate';
-    btn.textContent = 'Fill single candid.';
+    btn.title = 'Auto-fill cells that currently have a single valid (non-conflict) candidate';
     Object.assign(btn.style, {
       position:   'fixed',
       bottom:     '56px',          // 12px gear margin + 36px gear height + 8px gap → sits above the gear
       right:      '12px',          // right-aligned over the gear
       width:      sizePx + 'px',   // square, like the trio
       height:     sizePx + 'px',
-      padding:    '3px',
+      padding:    '2px',
       borderRadius: '8px',
       cursor:     'pointer',
-      fontSize:   '11px',          // smaller so the wrapped label fits the square
       fontFamily: 'Roboto, Arial, sans-serif',
       fontWeight: '700',
-      lineHeight: '1.15',
-      whiteSpace: 'normal',        // allow the label to wrap inside the square
+      lineHeight: '1.12',
       textAlign:  'center',
       display:    'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex:     '999999',
+      zIndex:     '900',           // below the native dialog scrim (z 1000) so it dims with the page
       boxShadow:  '0 2px 8px rgba(0,0,0,0.4)',
       boxSizing:  'border-box',
     });
     btn.style.setProperty('background-color', bgColor, 'important');
     btn.style.setProperty('color', textColor, 'important');
     btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
-    spdrFxButton(btn);   // hover-brighten + active-depress + click flash, like the others now do
+    fsSetButtonLabel('idle');   // sets the 4-line label + font/white-space
+    spdrFxButton(btn);          // hover-brighten + active-depress + click flash
     btn.addEventListener('click', function (e) { e.stopPropagation(); fillSingleCandidates(); });
+    btn.addEventListener('mouseenter', function () { fsShowOnHover(); });
+    btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned) fsHideToast(); });
     document.body.appendChild(btn);
+
+    // A click anywhere outside the button + its toast unpins a sticky result
+    // (it stays available on re-hover until the puzzle is edited).
+    document.addEventListener('click', function (e) {
+      if (!fsState.resultPinned) return;
+      var toast = document.getElementById('sp-fs-toast');
+      if (btn.contains(e.target)) return;
+      if (toast && toast.contains(e.target)) return;
+      fsState.resultPinned = false;
+      fsHideToast();
+    });
 
     // Re-measure once the control buttons' CSS has settled (offsetWidth can read
     // 0 / a pre-CSS value at first paint), so the square ends up the right size.
