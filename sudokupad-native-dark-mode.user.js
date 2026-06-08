@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.30.0
+// @version      3.31.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.30.0';
+  var SCRIPT_VERSION = '3.31.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1520,8 +1520,34 @@
   // inline !important, but we don't inject our own labels on top of the existing text.
   // data-spdr-kropki-text marks such texts so the MutationObserver can re-fix them.
 
-  // Returns the non-spdr text immediately following a Kropki circle rect, if it has
-  // non-empty content (= the existing label for labeled Kropki-type circles).
+  // Returns the non-spdr value text whose anchor sits ON a circle's centre, by
+  // scanning the overlay/underlay text in the same SVG. SudokuPad often renders
+  // an edge clue's value in a SEPARATE batch (Ratio fractions, XV/Roman sums) so
+  // it is NOT a DOM sibling of the dot — the only stable link is position. The
+  // anchor of a centred value lands on the dot centre (text-anchor:middle), a few
+  // px down for the baseline. Tolerance stays well under one cell, so a
+  // neighbouring clue (≥ 1 cell away) can never be matched. Scoped to
+  // overlay/underlay so grid digits / pencilmarks are never picked up.
+  function getCenteredKropkiText(rect) {
+    var svg = rect.ownerSVGElement; if (!svg) return null;
+    var w = parseFloat(rect.getAttribute('width') || 0);
+    var h = parseFloat(rect.getAttribute('height') || 0);
+    var cx = parseFloat(rect.getAttribute('x') || 0) + w / 2;
+    var cy = parseFloat(rect.getAttribute('y') || 0) + h / 2;
+    var texts = svg.querySelectorAll('#overlay text, #underlay text');
+    for (var i = 0; i < texts.length; i++) {
+      var t = texts[i];
+      if (t.getAttribute('data-spdr-kropki-label') != null) continue;  // our own label
+      if (t.textContent.trim() === '') continue;
+      var tx = parseFloat(t.getAttribute('x')), ty = parseFloat(t.getAttribute('y'));
+      if (!isFinite(tx) || !isFinite(ty)) continue;
+      if (Math.abs(tx - cx) <= 10 && Math.abs(ty - cy) <= 16) return t;
+    }
+    return null;
+  }
+
+  // Returns the non-spdr value text belonging to a Kropki circle rect (its
+  // existing label, for labeled Kropki-type circles), or null if the dot is bare.
   function getKropkiAdjacentText(rect) {
     var next = rect.nextElementSibling;
     // Walk past elements that can sit BETWEEN a labeled dot and its value text:
@@ -1535,7 +1561,13 @@
       if (next.tagName === 'rect' && next.classList && next.classList.contains('textbg')) { next = next.nextElementSibling; continue; }
       break;
     }
-    return (next && next.tagName === 'text' && next.textContent.trim() !== '') ? next : null;
+    if (next && next.tagName === 'text' && next.textContent.trim() !== '') return next;
+    // Fallback: the value text isn't a sibling at all — SudokuPad batched it
+    // elsewhere in the group (Ratio fractions, XV/Roman sums). Match by position.
+    // Without this we mistake the labeled dot for bare → inject a spurious '~'
+    // AND never pin the value's colour → off-white numerals vanish on the white
+    // disc. (clover "XIIIVIII" ed0mko9d0b, "Back to the Ratio" 3y38nrs34s, etc.)
+    return getCenteredKropkiText(rect);
   }
 
   // Any Kropki-shaped circle — used for color fixing. SHAPE test only; the
