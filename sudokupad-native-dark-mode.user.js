@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.29.0
+// @version      3.30.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.29.0';
+  var SCRIPT_VERSION = '3.30.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -436,13 +436,15 @@
     var csz = (typeof getGridCellSize === 'function' && getGridCellSize(svg)) || 64;
     var seen = {}, flags = [];
     els.forEach(function (el) {
-      // .textbg is the halo/backing shape drawn BEHIND a text glyph to erase
-      // grid lines behind it — it is background-colored *by design*, so it
-      // always scores near-zero contrast. That is not the "invisible object"
-      // class this scan hunts for (the digit it backs is a separate, visible
-      // <text> element we don't scan), so excluding it kills a whole bucket of
-      // false positives rather than masking a real gap.
-      if (el.classList && el.classList.contains('textbg')) return;
+      // Skip elements that cannot actually render: a rect with a non-positive
+      // width or height paints nothing, so its (invisible) stroke is not a real
+      // "gap" — e.g. SudokuPad's degenerate text-halo rects (class "textbg",
+      // w/h = -2) behind tiny value glyphs. This is a geometry guard, not a
+      // class exclusion: a real-sized textbg still gets scanned.
+      if (el.tagName === 'rect') {
+        var rw = parseFloat(el.getAttribute('width')), rh = parseFloat(el.getAttribute('height'));
+        if (!(rw > 0) || !(rh > 0)) return;
+      }
       var p = paint(el); if (!p || p.best.c >= TH || ours(el)) return;
       var center = null;
       try { var b = el.getBBox(); center = 'R' + (Math.floor((b.y + b.height / 2) / csz) + 1) + 'C' + (Math.floor((b.x + b.width / 2) / csz) + 1); } catch (e) {}
@@ -1522,8 +1524,16 @@
   // non-empty content (= the existing label for labeled Kropki-type circles).
   function getKropkiAdjacentText(rect) {
     var next = rect.nextElementSibling;
-    while (next && next.getAttribute && next.getAttribute('data-spdr-kropki-label')) {
-      next = next.nextElementSibling;
+    // Walk past elements that can sit BETWEEN a labeled dot and its value text:
+    //   - our own injected labels (data-spdr-kropki-label)
+    //   - the author's text-background halo (rect.textbg), which Difference/Ratio
+    //     puzzles place between the circle and its "2"/"3" value (circle → textbg
+    //     → text). Missing it made us treat the labeled dot as BARE and inject a
+    //     spurious rotated '~' on top of the real value (clover "Same Difference").
+    while (next) {
+      if (next.getAttribute && next.getAttribute('data-spdr-kropki-label') != null) { next = next.nextElementSibling; continue; }
+      if (next.tagName === 'rect' && next.classList && next.classList.contains('textbg')) { next = next.nextElementSibling; continue; }
+      break;
     }
     return (next && next.tagName === 'text' && next.textContent.trim() !== '') ? next : null;
   }
