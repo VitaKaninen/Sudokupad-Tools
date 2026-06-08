@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.27.0
+// @version      3.28.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.27.0';
+  var SCRIPT_VERSION = '3.28.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -315,8 +315,8 @@
     selectionWidth:               '8',
     selectionBorderMode:          'inside',  // 'inside' | 'outside'
     selectionBorderOffset:        '0',       // displayed value; baseline shift is mode-specific (see computeSelectionShift)
-    selectionBgEnabled:           true,    // "Background" subsection: set the selection cage fill (colour + opacity). Default opacity 0 = transparent (clears the native grey block); raise opacity to tint the selected cells
-    selectionBgColor:             '#000000',
+    selectionBgEnabled:           true,    // "Background" subsection: set the selection cage fill (colour + opacity). Default opacity 0 = transparent (clears the native grey block); raise opacity toward white — passing the native grey (white @ ~0.4) on the way to opaque white
+    selectionBgColor:             '#ffffff', // white = SudokuPad's native selection-fill colour, so raising opacity reproduces the native grey (@0.4) then continues to solid white
     selectionBgOpacity:           0,
 
     showToasts:                   true,   // show action result notifications (toasts)
@@ -3224,6 +3224,53 @@
   }
 
   // Generic labelled range slider with optional enable-checkbox.
+  // Wrap a range <input> in a relative flex container and draw reference tick
+  // marks along its track. `ticks` = array of { value, title?, accent? }; each is
+  // positioned at value's fraction of [min,max] (inset by ~half the thumb so
+  // mid-range marks line up with the thumb centre). accent marks are taller + blue
+  // (a notable reference, e.g. "this opacity matches the native look"); plain ones
+  // are short + grey (e.g. the setting's default). Returns the wrapper (slider
+  // reference is unchanged, so existing syncers keep working). pointer-events:none
+  // so marks never block dragging.
+  function wrapSliderWithTicks(slider, min, max, ticks) {
+    var wrap = document.createElement('div');
+    Object.assign(wrap.style, {
+      position: 'relative', flex: slider.style.flex || '1', minWidth: '0',
+      display: 'flex', alignItems: 'center', margin: slider.style.margin || '',
+    });
+    slider.style.margin = '0';
+    slider.style.flex = '1';
+    slider.style.width = '100%';
+    wrap.appendChild(slider);
+    var span = (parseFloat(max) - parseFloat(min)) || 1;
+    (ticks || []).forEach(function (t) {
+      var frac = (parseFloat(t.value) - parseFloat(min)) / span;
+      if (!isFinite(frac)) return;
+      if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
+      var THUMB = 7; // px ≈ half the native range thumb — keeps mid-range marks aligned
+      var mark = document.createElement('div');
+      if (t.title) mark.title = t.title;
+      Object.assign(mark.style, {
+        position: 'absolute', top: '50%',
+        left: 'calc(' + THUMB + 'px + ' + frac + ' * (100% - ' + (2 * THUMB) + 'px))',
+        width: '2px', height: t.accent ? '14px' : '9px',
+        transform: 'translate(-50%, -50%)',
+        background: t.accent ? '#89b4fa' : '#6c7086',
+        borderRadius: '1px', pointerEvents: 'none', zIndex: '2',
+      });
+      wrap.appendChild(mark);
+    });
+    return wrap;
+  }
+
+  // Build the tick list for a slider: a subtle mark at the setting's DEFAULT value
+  // (so every slider shows where "home" is), plus any explicit reference ticks.
+  function sliderTicks(key, extra) {
+    var ticks = [];
+    if (key != null && DEFAULTS[key] != null) ticks.push({ value: DEFAULTS[key], title: 'Default' });
+    return ticks.concat(extra || []);
+  }
+
   function makeRangeRow(opts) {
     // opts: { key, label, min, max, step, format, enabledKey,
     //         extraKeys, extraEnabledKeys }
@@ -3314,11 +3361,12 @@
     header.appendChild(lbl);
     if (opts.hilite) header.appendChild(makeHiliteIcon(opts.hilite, opts.hiliteTitle));
     header.appendChild(pct);
-    row.appendChild(header); row.appendChild(slider);
+    row.appendChild(header);
+    row.appendChild(wrapSliderWithTicks(slider, opts.min, opts.max, sliderTicks(opts.key, opts.ticks)));
     return row;
   }
 
-  function makeOpacityRow(opacityKey, swatchRef) {
+  function makeOpacityRow(opacityKey, swatchRef, ticks) {
     var row = document.createElement('div');
     Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' });
 
@@ -3349,7 +3397,9 @@
       if (swatchRef && swatchRef.__refreshSwatch) swatchRef.__refreshSwatch();
     };
 
-    row.appendChild(lbl); row.appendChild(slider); row.appendChild(pct);
+    row.appendChild(lbl);
+    row.appendChild(wrapSliderWithTicks(slider, 0, 1, sliderTicks(opacityKey, ticks)));
+    row.appendChild(pct);
     return row;
   }
 
@@ -3491,7 +3541,7 @@
   }
 
   // Sub-row: label + swatch on top row, opacity slider beneath. No per-row reset.
-  function makeColorRow(label, colorKey, opacityKey, hilite, hiliteTitle) {
+  function makeColorRow(label, colorKey, opacityKey, hilite, hiliteTitle, ticks) {
     var wrap = document.createElement('div');
     Object.assign(wrap.style, { marginTop: '6px' });
 
@@ -3509,7 +3559,7 @@
     if (hilite) topRow.appendChild(makeHiliteIcon(hilite, hiliteTitle));
     topRow.appendChild(swatchRef);
     wrap.appendChild(topRow);
-    if (opacityKey) wrap.appendChild(makeOpacityRow(opacityKey, swatchRef));
+    if (opacityKey) wrap.appendChild(makeOpacityRow(opacityKey, swatchRef, ticks));
     return wrap;
   }
 
@@ -5998,7 +6048,10 @@
           enabledKey: 'selectionBgEnabled', masterEnabledKey: 'selectionColorEnabled',
           labelText: 'Background',
           buildOptions: function (opt) {
-            opt.appendChild(makeColorRow('Color', 'selectionBgColor', 'selectionBgOpacity'));
+            // Accent tick at 0.4 = where white@opacity reproduces SudokuPad's native
+            // grey selection fill (the look when this subsection is off).
+            opt.appendChild(makeColorRow('Color', 'selectionBgColor', 'selectionBgOpacity', null, null,
+              [{ value: 0.4, title: 'Matches the native gray fill (Background off)', accent: true }]));
           },
         }));
       },
