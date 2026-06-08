@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.41.0
+// @version      3.42.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.41.0';
+  var SCRIPT_VERSION = '3.42.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -308,7 +308,6 @@
     kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
-    selectionColorEnabled:        true,    // master ("Cell selection"). On by default: gives the brighter border + no-grey-fill look; disabling reverts to SudokuPad's native selection (rawer blue + translucent-white fill)
     selectionBorderEnabled:       true,    // "Border" subsection: restyle the selection cage stroke (colour/opacity/width) + grow/offset
     selectionColor:               '#3399ff',
     selectionOpacity:             0.7,
@@ -561,12 +560,13 @@
       #cell-pencilmarks text.conflict { display: none !important; }`;
     }
 
-    if (s.selectionColorEnabled) {
-      // The visible "selection" is the SudokuPad path.cage-selectioncage — a stroke
-      // around the perimeter of the selected group over a translucent fill. Two
-      // independent subsections restyle it: Border (stroke colour/opacity/width) and
-      // Background (cage fill colour/opacity; default opacity 0 = transparent, which
-      // clears SudokuPad's hardcoded grey rgba(255,255,255,0.4) fill).
+    // The visible "selection" is the SudokuPad path.cage-selectioncage — a stroke
+    // around the perimeter of the selected group over a translucent fill. Two
+    // independent subsections restyle it (each stands alone, no section master):
+    // Border (stroke colour/opacity/width) and Background (cage fill colour/opacity;
+    // default opacity 0 = transparent, which clears SudokuPad's hardcoded grey
+    // rgba(255,255,255,0.4) fill).
+    {
       var selRule = '';
       if (s.selectionBorderEnabled) {
         var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
@@ -990,7 +990,7 @@
   //                      writes (skip) from SudokuPad's re-issues (re-derive).
   function applySelectionBorderOffset(path) {
     if (!path) return;
-    var amount = (settings.selectionColorEnabled && settings.selectionBorderEnabled) ? computeSelectionShift() : 0;
+    var amount = settings.selectionBorderEnabled ? computeSelectionShift() : 0;
 
     if (amount === 0) {
       // Restore original if we previously modified it
@@ -4657,9 +4657,14 @@
     return '56px';
   }
 
+  // When true, the Settings "Debug: show popup" cycler is previewing a toast:
+  // force it to show (ignore the showToasts gate), never auto-fade, and float it
+  // above our own settings panel. See fsDebugShowNext.
+  var fsPreviewActive = false;
+
   function showRemoveInvalidToast(message, kind) {
     // Errors always show (player must know something went wrong) regardless of showToasts.
-    if (settings.showToasts === false && kind !== 'error') return;
+    if (!fsPreviewActive && settings.showToasts === false && kind !== 'error') return;
     var existing = document.getElementById('sp-remove-invalid-toast');
     if (existing) existing.remove();
     var toast = document.createElement('div');
@@ -4720,9 +4725,10 @@
     toast.appendChild(dismiss);
 
     document.body.appendChild(toast);
+    if (fsPreviewActive) toast.style.zIndex = '1000000';   // preview: float above our settings panel (z 999999)
 
     // Auto-fade after 2s (unless toastPersist is on, or this is an error — errors always persist).
-    if (!settings.toastPersist && kind !== 'error') {
+    if (!fsPreviewActive && !settings.toastPersist && kind !== 'error') {
       var fadeTimer = null;
       function scheduleFade() {
         clearTimeout(fadeTimer);
@@ -5801,12 +5807,12 @@
 
         // ── Subsection 1: Center borders ──────────────────────────────────
         wrap.appendChild(divider());
-        wrap.appendChild(makeSubsection('regionBorderCenterEnabled', 'Center borders', function (opt) {
+        wrap.appendChild(makeSubsection('regionBorderCenterEnabled', 'Centre borders', function (opt) {
           var c = colorRow('Color:', 'regionBorderColor', 'regionBorderOpacity');
           opt.appendChild(c.row);
           opt.appendChild(makeOpacityRow('regionBorderOpacity', c.ref));
           opt.appendChild(makeWidthRow('regionBorderWidth'));
-        }, 'regCenter', 'Highlight the center region borders (or where they\'d be drawn)'));
+        }, 'regCenter', 'Highlight the centre region borders (or where they\'d be drawn)'));
 
         // ── Subsection 2: Multi-color borders ─────────────────────────────
         wrap.appendChild(divider());
@@ -5875,7 +5881,7 @@
 
     content.appendChild(buildSection({
       label: 'Pencilmarks',
-      desc: 'The small candidate digits you pencil into cells — center marks and corner marks.',
+      desc: 'The small candidate digits you pencil into cells — centre marks and corner marks.',
       hasColor: false,
       noMasterCheckbox: true,
       enableKeys: ['centerEnabled', 'cornerEnabled'],
@@ -5899,12 +5905,12 @@
         }
 
         // ── Center marks ──────────────────────────────────────────────────
-        wrap.appendChild(sub('centerEnabled', 'Center marks', function (opt) {
+        wrap.appendChild(sub('centerEnabled', 'Centre marks', function (opt) {
           opt.appendChild(makeColorRow('Valid digits',   'centerValidColor',   'centerValidOpacity'));
           opt.appendChild(makeColorRow('Invalid digits', 'centerInvalidColor', 'centerInvalidOpacity'));
           opt.appendChild(makeSubCheckbox('centerHideInvalid',      'Hide invalid digits'));
           opt.appendChild(makeSubCheckbox('centerMoveInvalidRight', 'Move invalid digits to the right'));
-        }, 'centerMarks', 'Highlight the center pencilmarks'));
+        }, 'centerMarks', 'Highlight the centre pencilmarks'));
 
         // ── Corner marks ──────────────────────────────────────────────────
         wrap.appendChild(divider());
@@ -6149,14 +6155,13 @@
     }));
 
     content.appendChild(buildSection({
-      enabledKey: 'selectionColorEnabled',
       label: 'Cell selection',
       desc: 'The outline drawn around the cells you currently have selected.',
       hilite: 'selection', hiliteTitle: 'Highlight the selection border (select cells first)',
       hasColor: false,
-      enableKeys: ['selectionColorEnabled', 'selectionBorderEnabled', 'selectionBgEnabled'],
-      resetKeys: ['selectionColorEnabled',
-                  'selectionBorderEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth', 'selectionBorderMode', 'selectionBorderOffset',
+      noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone (like Given / placed digits)
+      enableKeys: ['selectionBorderEnabled', 'selectionBgEnabled'],
+      resetKeys: ['selectionBorderEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth', 'selectionBorderMode', 'selectionBorderOffset',
                   'selectionBgEnabled', 'selectionBgColor', 'selectionBgOpacity'],
       subBuilder: function (wrap) {
         // Migrate any leftover 'center' value from a previous version of this
@@ -6173,7 +6178,7 @@
         }
         // ── Subsection: Border (the selection outline) ────────────────────
         wrap.appendChild(makeCollapsibleSubsection({
-          enabledKey: 'selectionBorderEnabled', masterEnabledKey: 'selectionColorEnabled',
+          enabledKey: 'selectionBorderEnabled',
           labelText: 'Border',
           buildOptions: function (opt) {
             opt.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
@@ -6188,7 +6193,7 @@
         // ── Subsection: Background (the fill behind the selection) ─────────
         wrap.appendChild(divider());
         wrap.appendChild(makeCollapsibleSubsection({
-          enabledKey: 'selectionBgEnabled', masterEnabledKey: 'selectionColorEnabled',
+          enabledKey: 'selectionBgEnabled',
           labelText: 'Background',
           buildOptions: function (opt) {
             // Accent tick at 0.4 = where white@opacity reproduces SudokuPad's native
@@ -7053,11 +7058,19 @@
     return 'You stopped the auto-fill after ' + n + ' cell' + pl + '.';   // stopped
   }
 
-  // Debug preview: cycle through every possible popup (explainer states +
-  // result states) without engineering a puzzle into each condition. Each entry
-  // renders one popup exactly as it appears in real use. (Undo in a previewed
-  // result is inert — there is no real run to rewind.)
+  // Debug preview: cycle through EVERY popup the script can show — both the
+  // Auto-fill (Fill-single) explainer/result states AND the action-button toasts
+  // (Fill / Clear / Clear All / Remove invalid) — without engineering a puzzle
+  // into each condition. Each entry renders one popup exactly as it appears in
+  // real use. The worker-result toasts are produced by calling the real
+  // showWorkerResult() with a synthetic result object, so their text never drifts
+  // from production. (Undo in a previewed result is inert — there is no real run
+  // to rewind. fsPreviewActive forces every toast to show + persist above the panel.)
+  //
+  // A representative aborted action-toast target (centre 4 from cell (R4,C3)):
+  // cellKeyFromMarkXY('160','224') → col 2, row 3 → fsCellLabel "(R4,C3)".
   var fsDebugList = [
+    // ── Auto-fill (Fill-single) popups ───────────────────────────────────────
     function () { fsRenderExplainer({ empties: ['x'], zero: [], singles: ['x'] }); },        // explainer: ready (green)
     function () { fsRenderExplainer({ empties: [], zero: [], singles: [] }); },              // explainer: already complete (green)
     function () { fsRenderExplainer({ empties: ['x'], zero: ['x'], singles: [] }); },        // explainer: not ready — a zero-candidate cell (yellow)
@@ -7066,11 +7079,37 @@
     function () { fsRenderToast('warning', fsResultMessage('stuck', 5), {}); },              // result: stuck (yellow)
     function () { fsRenderToast('error',   fsResultMessage('broken', 7, '5,3'), { undo: true }); },  // result: broken (red + Undo)
     function () { fsRenderToast('warning', fsResultMessage('stopped', 3), { undo: true }); },        // result: user-stopped (yellow + Undo)
+
+    // ── Action-button popups: direct toasts ──────────────────────────────────
+    function () { showRemoveInvalidToast('Another operation is still running.', 'warning'); },        // any action while one is running (yellow)
+    function () { showRemoveInvalidToast('No cells selected.', 'success'); },                         // Fill with nothing selected (green)
+    function () { showRemoveInvalidToast('No marks cleared (no cells selected).', 'success'); },      // Clear marks with nothing selected (green)
+
+    // ── Action-button popups: worker results (real showWorkerResult text) ─────
+    function () { showWorkerResult({ totalTargets: 0, skippedExcluded: 0, elapsedMs: 0, failures: [] }, 'invalid pencilmarks'); },                                  // nothing to remove (green)
+    function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 0, aborted: false, elapsedMs: 1230, failures: [] }, 'invalid pencilmarks'); },   // removed N (green)
+    function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 2, aborted: false, elapsedMs: 1230, failures: [] }, 'invalid pencilmarks'); },   // removed N + skipped-not-in-set (green)
+    function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 0, aborted: false, elapsedMs: 1230, failures: [{}, {}] }, 'invalid pencilmarks'); }, // removed N + non-fatal issues (yellow)
+    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'mode-drift',      abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },                       // aborted: mode drift (yellow)
+    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'no-effect',       abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },                       // aborted: no effect (yellow)
+    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'unexpected-diff', abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, rollbackOk: true,  elapsedMs: 1230 }, 'invalid pencilmarks'); },     // aborted: unexpected diff, rolled back (yellow)
+    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'unexpected-diff', abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, rollbackOk: false, elapsedMs: 1230 }, 'invalid pencilmarks'); },     // aborted: unexpected diff, rollback FAILED (red)
+    function () { showWorkerResult({ totalTargets: 10, removed: 4, aborted: true, abortReason: 'selection-stuck', abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },                       // aborted: selection stuck (yellow)
+
+    // ── Action-button popups: Fill button (text mirrors the inline messages) ──
+    function () { showRemoveInvalidToast('Filled 12 candidates in 4 cells, removed 3 invalid marks (1.45s).', 'success'); },                                                                                                  // fill complete (green)
+    function () { showRemoveInvalidToast('Fill aborted while adding digit 4 in cell (R4,C3) (no-effect).\nAdded 5 candidates in 0.80s before stopping. Nothing was damaged.', 'warning'); },                                   // fill aborted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL: Fill aborted while adding digit 4 in cell (R4,C3) (unexpected-diff).\nAdded 5 candidates in 0.80s before stopping.', 'error'); },                                          // fill aborted, rollback FAILED (red)
+    function () { showRemoveInvalidToast('Filled 12 candidates, then aborted during final removal sweep at centre 4 in cell (R4,C3) (no-effect).\nRemoved 2 of 6 sweep marks. Total time 1.90s. Nothing was damaged.', 'warning'); },  // fill ok, sweep aborted (yellow)
   ];
   var fsDebugIdx = 0;
   function fsDebugShowNext() {
-    fsClearResult();                       // clear any real sticky state so the preview shows cleanly
-    fsDebugList[fsDebugIdx]();
+    fsClearResult();                       // clear any real sticky state + the fs-toast so the preview shows cleanly
+    var prevAction = document.getElementById('sp-remove-invalid-toast');
+    if (prevAction) prevAction.remove();   // clear a prior action-toast preview (so fs↔action cycling doesn't stack)
+    fsPreviewActive = true;
+    try { fsDebugList[fsDebugIdx](); }     // action toasts self-bump z-index + skip auto-fade while fsPreviewActive
+    finally { fsPreviewActive = false; }
     var t = document.getElementById('sp-fs-toast');
     if (t) t.style.zIndex = '1000000';     // above our own settings panel (the debug button lives in it)
     fsDebugIdx = (fsDebugIdx + 1) % fsDebugList.length;
@@ -7087,7 +7126,7 @@
   }
   async function fsShowOnHover() {
     if (fsState.running) return;                      // button reads "Stop"; no popup mid-run
-    if (fsState.result) { fsRenderResult(); return; } // a sticky result is available → re-show it
+    if (fsState.result) { fsState.resultPinned = true; fsRenderResult(); return; } // re-show a sticky result AND re-pin it (stays until the next click-elsewhere)
     var app = await Framework.getApp();
     fsRenderExplainer(fsAnalyse(app));
   }
