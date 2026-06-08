@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.24.0
+// @version      3.25.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -220,7 +220,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.24.0';
+  var SCRIPT_VERSION = '3.25.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -237,7 +237,8 @@
     regionBorderWidth:             '3',
     regionBorderCenterEnabled:     true,    // center border: single-color CSS stroke on region outlines
     regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
-    regionBorderSuppressBoundary:  false,   // (center sub-option) drop the built-in cell grid line along region boundaries
+    regionBorderSuppressBoundary:  false,   // (top-level toggle) drop the built-in cell grid line along region boundaries
+    regionHideAuthorBorders:       false,   // (top-level, SESSION-ONLY) hide author-drawn region/grid border lines in #overlay (clash with our borders on overlapping-grid puzzles). Never persisted — forced off on every page load.
     regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
     regionBorderCellColor:         '#dddad6',// cell grid line colour — matches DR's converted native grid-line colour so enabling looks identical to disabled by default
     regionBorderCellOpacity:       1.0,     // cell grid line opacity
@@ -340,6 +341,10 @@
     cellColorsOpacityEnabled:     false,      // override #cell-colors opacity when true
   };
 
+  // Settings that must NOT survive a page load (deliberately aggressive, per-puzzle
+  // escape hatches). loadSettings forces each back to its default after merging.
+  var SESSION_ONLY_KEYS = ['regionHideAuthorBorders'];
+
   function loadSettings() {
     try {
       var stored = localStorage.getItem(SETTINGS_KEY);
@@ -348,6 +353,10 @@
       // script that allowed alphanumerics. Falls back to default if empty.
       var cleanedDigits = (merged.digitSet || '').split('').filter(function (c) { return /^[0-9]$/.test(c); }).join('');
       merged.digitSet = cleanedDigits || DEFAULTS.digitSet;
+      // Session-only keys: never restored from storage — forced to default on every
+      // page load so they apply per-puzzle/per-session and turn back off when the
+      // user leaves the page (they must re-enable manually on the next puzzle).
+      SESSION_ONLY_KEYS.forEach(function (k) { merged[k] = DEFAULTS[k]; });
       return merged;
     } catch (e) { return Object.assign({}, DEFAULTS); }
   }
@@ -659,12 +668,73 @@
     return true;
   }
 
+  // True when a path's `d` is made only of horizontal/vertical segments (and no
+  // curves) — i.e. a rectilinear outline like a grid frame or box/region boundary,
+  // as opposed to a diagonal/curved cosmetic line. Used to scope the
+  // "Hide author-drawn region borders" toggle to grid-structure lines only, so it
+  // leaves diagonal constraint lines etc. alone.
+  function pathIsRectilinear(d) {
+    if (!d || /[CcSsQqTtAa]/.test(d)) return false;   // any curve command disqualifies
+    var toks = d.match(/[MLHVZmlhvz]|-?\d*\.?\d+/g) || [];
+    var i = 0, cx = 0, cy = 0, sx = 0, sy = 0, cmd = '';
+    while (i < toks.length) {
+      var t = toks[i];
+      if (/^[MLHVZmlhvz]$/.test(t)) { cmd = t; i++; if (cmd === 'Z' || cmd === 'z') { cx = sx; cy = sy; } continue; }
+      if (cmd === 'M' || cmd === 'm') {
+        var mx = parseFloat(toks[i++]), my = parseFloat(toks[i++]);
+        if (cmd === 'm') { mx += cx; my += cy; }
+        cx = mx; cy = my; sx = mx; sy = my; cmd = (cmd === 'M') ? 'L' : 'l';   // extra pairs are implicit L
+      } else if (cmd === 'L' || cmd === 'l') {
+        var lx = parseFloat(toks[i++]), ly = parseFloat(toks[i++]);
+        if (cmd === 'l') { lx += cx; ly += cy; }
+        if (Math.abs(lx - cx) > 0.01 && Math.abs(ly - cy) > 0.01) return false;  // diagonal segment
+        cx = lx; cy = ly;
+      } else if (cmd === 'H' || cmd === 'h') { var hx = parseFloat(toks[i++]); cx = (cmd === 'h') ? cx + hx : hx; }
+      else if (cmd === 'V' || cmd === 'v') { var vy = parseFloat(toks[i++]); cy = (cmd === 'v') ? cy + vy : vy; }
+      else { i++; }
+    }
+    return true;
+  }
+
+  // "Hide author-drawn region borders" (session-only toggle). Some puzzles —
+  // overlapping/gattai grids, framed grids — draw their own grid frame + box/region
+  // boundary lines as classless, fill:none, stroked paths in #overlay. Because
+  // #overlay renders ABOVE our injected region-border group, those lines sit on top
+  // of our coloured borders (and our black->white swap brightens the black ones).
+  // When the toggle is on we hide each such rectilinear author border line so our
+  // borders show cleanly; diagonal/curved cosmetic lines and classed/filled shapes
+  // are left untouched. Restores them when off.
+  function applyHideAuthorBorders(svg) {
+    var ov = svg && svg.querySelector('#overlay');
+    if (!ov) return;
+    if (settings.regionHideAuthorBorders) {
+      ov.querySelectorAll('path, line').forEach(function (el) {
+        if (el.getAttribute('class')) return;                       // only classless cosmetic structure
+        var f = el.getAttribute('fill'), s = el.getAttribute('stroke');
+        if (!(f === 'none' || f === null) || !s || s === 'none') return;  // outline-only (no fill)
+        var rect;
+        if (el.tagName.toLowerCase() === 'line') {
+          rect = Math.abs((+el.getAttribute('x1')) - (+el.getAttribute('x2'))) < 0.01 ||
+                 Math.abs((+el.getAttribute('y1')) - (+el.getAttribute('y2'))) < 0.01;
+        } else { rect = pathIsRectilinear(el.getAttribute('d') || ''); }
+        if (!rect) return;
+        el.setAttribute('data-spdr-auth-border-hidden', '');
+        el.style.setProperty('display', 'none', 'important');
+      });
+    } else {
+      ov.querySelectorAll('[data-spdr-auth-border-hidden]').forEach(function (el) {
+        el.style.removeProperty('display');
+        el.removeAttribute('data-spdr-auth-border-hidden');
+      });
+    }
+  }
+
   function applySettings() {
     rebuildStyleTag();
     darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -5478,7 +5548,7 @@
       hasColor: false,
       noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone
       enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
-      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
+      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary', 'regionHideAuthorBorders',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
                   'regionColorStripeWidth', 'regionColorOpacity',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
@@ -5511,13 +5581,17 @@
           return { row: r, ref: ref };
         }
 
+        // ── Top-level toggles (always visible, outside every collapsible subsection) ──
+        wrap.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries'));
+        wrap.appendChild(makeSubCheckbox('regionHideAuthorBorders', 'Hide author-drawn region borders'));
+
         // ── Subsection 1: Center borders ──────────────────────────────────
+        wrap.appendChild(divider());
         wrap.appendChild(makeSubsection('regionBorderCenterEnabled', 'Center borders', function (opt) {
           var c = colorRow('Color:', 'regionBorderColor', 'regionBorderOpacity');
           opt.appendChild(c.row);
           opt.appendChild(makeOpacityRow('regionBorderOpacity', c.ref));
           opt.appendChild(makeWidthRow('regionBorderWidth'));
-          opt.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries'));
         }, 'regCenter', 'Highlight the center region borders (or where they\'d be drawn)'));
 
         // ── Subsection 2: Multi-color borders ─────────────────────────────
