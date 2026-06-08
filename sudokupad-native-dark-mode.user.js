@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.31.0
+// @version      3.32.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.31.0';
+  var SCRIPT_VERSION = '3.32.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1648,21 +1648,28 @@
     // solid-black circle off a border is cosmetic, not Kropki).
     if (!isOnCellBorder(rect, getGridCellSize())) return;
     var adjText = getKropkiAdjacentText(rect);
+    // A dot carrying a printed VALUE (Ratio fraction, Difference number, XV/Roman
+    // sum, operator symbol) uses its fill only cosmetically — the value carries
+    // the meaning — so render every labeled dot uniformly as a BLACK disc with a
+    // white outline and WHITE text: best contrast on dark and consistent across
+    // puzzles. BARE dots keep their SEMANTIC fill (white = consecutive, black =
+    // 2:1); flipping those would corrupt the clue, so only labeled dots invert.
+    var renderBlack = isBlack || !!adjText;
     if (settings.kropkiFixEnabled) {
-      if (isWhite) {
-        rect.style.setProperty('fill', '#ffffff', 'important');
-        if (settings.kropkiWhiteOutlineEnabled !== false) {
-          rect.style.setProperty('stroke', '#000000', 'important');
-          rect.style.removeProperty('stroke-width');
+      if (renderBlack) {
+        rect.style.setProperty('fill', '#000000', 'important');
+        if (settings.kropkiOutlineEnabled) {
+          rect.style.setProperty('stroke', '#ffffff', 'important');
+          rect.style.setProperty('stroke-width', '1.5', 'important');
         } else {
           rect.style.removeProperty('stroke');
           rect.style.removeProperty('stroke-width');
         }
       } else {
-        rect.style.setProperty('fill', '#000000', 'important');
-        if (settings.kropkiOutlineEnabled) {
-          rect.style.setProperty('stroke', '#ffffff', 'important');
-          rect.style.setProperty('stroke-width', '1.5', 'important');
+        rect.style.setProperty('fill', '#ffffff', 'important');
+        if (settings.kropkiWhiteOutlineEnabled !== false) {
+          rect.style.setProperty('stroke', '#000000', 'important');
+          rect.style.removeProperty('stroke-width');
         } else {
           rect.style.removeProperty('stroke');
           rect.style.removeProperty('stroke-width');
@@ -1673,12 +1680,11 @@
       // so fixed dots are solid; stash the original to restore on disable.
       if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
       rect.style.setProperty('fill-opacity', '1', 'important');
-      // For labeled Kropki circles, also pin the existing text colour.
-      // White circle → black text; black circle → white text.
+      // A labeled dot is always rendered as a black disc above, so its value text
+      // is always white.
       if (adjText) {
-        var textColor = isWhite ? '#000000' : '#ffffff';
-        adjText.setAttribute('data-spdr-kropki-text', textColor);
-        adjText.style.setProperty('fill', textColor, 'important');
+        adjText.setAttribute('data-spdr-kropki-text', '#ffffff');
+        adjText.style.setProperty('fill', '#ffffff', 'important');
       }
     } else {
       rect.style.removeProperty('fill');
