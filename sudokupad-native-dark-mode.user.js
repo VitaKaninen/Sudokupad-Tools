@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.23.0
+// @version      3.24.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -110,8 +110,8 @@
     --controls-button-bg: var(--dm-button-dark);
     --controls-button-hover-bg: var(--dm-button-dark-hover);
     --puzzle-given: var(--dm-white);
-    --puzzle-givenCornermark: var(--body-bg);
-    --puzzle-givenCandidate: var(--body-bg);
+    --puzzle-givenCornermark: var(--dm-white);
+    --puzzle-givenCandidate: var(--dm-white);
     --puzzle-value: #5f95ec;
     --puzzle-candidate: #5f95ec;
     --puzzle-pencilmark: #5f95ec;
@@ -130,6 +130,20 @@
   .spdr-dark [bordercolor="#fff"], .spdr-dark [bordercolor="#ffffff"], .spdr-dark [bordercolor="#FFF"], .spdr-dark [bordercolor="#FFFFFF"] { stroke: var(--dm-black); }
   .spdr-dark [stroke="#000000"] { stroke: var(--dm-white); }
   .spdr-dark [stroke="rgba(0, 0, 0, 1)"] { stroke: var(--dm-white); }
+  /* Inside an SVG <mask>, fill/stroke encode luminance (white=show, black=hide),
+     NOT a visible colour, so the #000<->#fff swaps above invert any such mask —
+     e.g. the Restart button's "!"-in-circular-arrow icon, whose mask rect (#fff)
+     and "!" path (#000) get flipped, hiding the arrow and showing only the "!".
+     Restore the authored mask values (higher specificity than the bare swaps). */
+  .spdr-dark mask [fill="#fff" i], .spdr-dark mask [fill="#ffffff" i] { fill: #fff; }
+  .spdr-dark mask [fill="#000" i], .spdr-dark mask [fill="#000000" i] { fill: #000; }
+  .spdr-dark mask [stroke="#fff" i], .spdr-dark mask [stroke="#ffffff" i] { stroke: #fff; }
+  .spdr-dark mask [stroke="#000" i], .spdr-dark mask [stroke="#000000" i] { stroke: #000; }
+  /* Cell selection (cage mode): SudokuPad hardcodes a translucent-WHITE fill
+     (rgba(255,255,255,0.4)) inline on path.cage-selectioncage; on the dark canvas
+     that reads as a grey block. DarkReader inverted it away, leaving just the blue
+     border — match that: clear the fill so only the blue selection outline shows. */
+  .spdr-dark .cage-selectioncage { fill: transparent; }
   .spdr-dark .cell-given, .spdr-dark .cell-pencilmark.givenCornermark, .spdr-dark .cell-candidate .given { color: var(--dm-white); fill: var(--dm-white); }
   .spdr-dark rect.textbg[fill="#FFF"], .spdr-dark rect.textbg[fill="#FFFFFF"], .spdr-dark rect.textbg[fill="#fff"], .spdr-dark rect.textbg[fill="#ffffff"], .spdr-dark rect.feature-xv[fill="#FFF"], .spdr-dark rect.feature-xv[fill="#FFFFFF"], .spdr-dark rect.feature-xv[fill="#fff"], .spdr-dark rect.feature-xv[fill="#ffffff"] { fill: var(--dm-black); }
   .spdr-dark rect.feature-kropki[fill="#000" i], .spdr-dark rect.feature-kropki[fill="#000000" i] { stroke: var(--dm-white); fill: var(--dm-black); }
@@ -206,7 +220,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.23.0';
+  var SCRIPT_VERSION = '3.24.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
