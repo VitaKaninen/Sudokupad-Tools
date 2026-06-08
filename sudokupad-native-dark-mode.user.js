@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.34.0
+// @version      3.35.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.34.0';
+  var SCRIPT_VERSION = '3.35.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1749,32 +1749,28 @@
     if (circle && !diamond && isOnCellBorder(rect, cs)) return false;
     return true;
   }
-  // Render one clue shape per the confirmed rule (decoupled from the Kropki controls):
-  //   • shape WITH a centred glyph (clock dial) → RING: dark fill (masks the grid
-  //     line behind it), light outline, light glyph — so the arrow shows. Both black
-  //     and white dials become matching light rings (told apart by their glyph,
-  //     e.g. ↻ vs ↺). A currently-correct white dial is left looking identical.
-  //   • solid shape (no glyph) → author colour + contrasting outline:
-  //       black → black fill + white outline;  white → white fill + dark outline.
+  // Render one clue shape PRESERVING the author's black/white, with an outline for
+  // dark-mode visibility and — if the shape carries a centred glyph (e.g. a clock
+  // dial's ↻/↺ arrow) — that glyph recoloured to contrast with its own fill:
+  //   • white → white fill + dark outline + DARK glyph
+  //   • black → black fill + white outline (so the disc shows on dark) + WHITE glyph
+  // (Decoupled from the Kropki controls.) This keeps a white dot white and a black
+  // dot black, exactly as the puzzle draws them in light mode — we never flip the
+  // colour, only add the minimum needed to stay visible on the dark background.
   function fixKropkiClueShape(rect) {
     var f = (rect.getAttribute('fill') || '').toUpperCase();
     var isBlack = f === '#000000';
-    var LIGHT = '#e8e6e3';
     var glyph = getCenteredKropkiText(rect);
-    if (glyph) {
-      rect.style.setProperty('fill', settings.labelBgColor || '#181A1B', 'important');
-      rect.style.setProperty('stroke', LIGHT, 'important');
-      rect.style.setProperty('stroke-width', '1.5', 'important');
-      glyph.setAttribute('data-spdr-kropki-text', LIGHT);
-      glyph.style.setProperty('fill', LIGHT, 'important');
-    } else if (isBlack) {
+    if (isBlack) {
       rect.style.setProperty('fill', '#000000', 'important');
       rect.style.setProperty('stroke', '#ffffff', 'important');
       rect.style.setProperty('stroke-width', '1.5', 'important');
+      if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#ffffff'); glyph.style.setProperty('fill', '#ffffff', 'important'); }
     } else {
       rect.style.setProperty('fill', '#ffffff', 'important');
       rect.style.setProperty('stroke', '#000000', 'important');
       rect.style.setProperty('stroke-width', '1', 'important');
+      if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#000000'); glyph.style.setProperty('fill', '#000000', 'important'); }
     }
     rect.style.setProperty('fill-opacity', '1', 'important');
   }
