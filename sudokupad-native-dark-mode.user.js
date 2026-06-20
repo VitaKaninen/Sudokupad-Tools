@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.49.0
+// @version      3.50.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.49.0';
+  var SCRIPT_VERSION = '3.50.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1643,6 +1643,23 @@
     return isOnCellBorder(rect, getGridCellSize());
   }
 
+  // Apply (ring on) or clear (ring off) a Kropki-family dot's outline as the disc
+  // rect's OWN stroke — so the ring always paints UNDER the dot's value/label text
+  // (the rect precedes the text in DOM order; SVG paints in document order). When
+  // off we set stroke:none !important, NOT a bare removeProperty: the static
+  // `.spdr-dark rect.feature-kropki[fill=...]` CSS rule derives a contrasting stroke
+  // from the attribute fill, so merely clearing our inline value would let that
+  // CSS ring re-appear. Shared by the labeled-dot branch and fixKropkiClueShape.
+  function applyKropkiDotRing(rect, on, color) {
+    if (on) {
+      rect.style.setProperty('stroke', color, 'important');
+      rect.style.setProperty('stroke-width', '1.5', 'important');
+    } else {
+      rect.style.setProperty('stroke', 'none', 'important');
+      rect.style.removeProperty('stroke-width');
+    }
+  }
+
   function fixKropkiDot(rect) {
     var fill = rect.getAttribute('fill');
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
@@ -1657,21 +1674,27 @@
     if (!isOnCellBorder(rect, getGridCellSize())) return;
     var adjText = getKropkiAdjacentText(rect);
     // ── LABELED value clues (Ratio fraction, Difference number, XV/Roman sum,
-    // operator symbol) ── are NOT stylistic Kropki dots: the printed value IS the
-    // clue, so the disc colour is meaningless. Give them a FIXED look that NONE of
-    // the Kropki controls touch — not the outline toggles, not the label
-    // text/size/rotate, not even the master kropkiFixEnabled: a black disc, NO
-    // outline ring, white value text. Native dark renders these broken (off-white
-    // text on a white disc), so it's an unconditional correctness fix, fully
-    // decoupled from the Kropki *feature* settings (which exist for bare dots).
+    // operator symbol) ── carry a printed value but are still Kropki-FAMILY dots:
+    // a black disc = ratio, a white disc = difference (e.g. "Fourshadowing"
+    // 42klo6lbj4 — black "4" ratio dots and white "4" difference dots). So KEEP the
+    // disc's semantic colour and only pin the value text to contrast (white on a
+    // black disc, black on a white disc). Native dark only rendered these "broken"
+    // because it left the value off-white on a white disc; once WE own the text
+    // colour, a white disc is perfectly readable — no need to flatten everything to
+    // black (which also let the static feature-kropki[fill] CSS rule paint a stray
+    // white ring on the real black dots). The outline RING follows the same
+    // per-colour toggles as bare dots and is the disc's own stroke, so it paints
+    // UNDER the value text. The colour+text fix stays decoupled from the master
+    // kropkiFixEnabled (an unconditional correctness fix); only the ring is gated.
     if (adjText) {
-      rect.style.setProperty('fill', '#000000', 'important');
-      rect.style.removeProperty('stroke');
-      rect.style.removeProperty('stroke-width');
+      var labelRingOn, labelRingColor, labelTextColor;
+      if (isBlack) { labelRingOn = !!settings.kropkiOutlineEnabled;             labelRingColor = '#ffffff'; labelTextColor = '#ffffff'; rect.style.setProperty('fill', '#000000', 'important'); }
+      else         { labelRingOn = settings.kropkiWhiteOutlineEnabled !== false; labelRingColor = '#000000'; labelTextColor = '#000000'; rect.style.setProperty('fill', '#ffffff', 'important'); }
+      applyKropkiDotRing(rect, labelRingOn, labelRingColor);
       if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
       rect.style.setProperty('fill-opacity', '1', 'important');
-      adjText.setAttribute('data-spdr-kropki-text', '#ffffff');
-      adjText.style.setProperty('fill', '#ffffff', 'important');
+      adjText.setAttribute('data-spdr-kropki-text', labelTextColor);
+      adjText.style.setProperty('fill', labelTextColor, 'important');
       return;
     }
     // ── BARE dots ── genuine Kropki: keep the SEMANTIC fill (white = consecutive,
@@ -1769,22 +1792,22 @@
   // dial's ↻/↺ arrow) — that glyph recoloured to contrast with its own fill:
   //   • white → white fill + dark outline + DARK glyph
   //   • black → black fill + white outline (so the disc shows on dark) + WHITE glyph
-  // (Decoupled from the Kropki controls.) This keeps a white dot white and a black
-  // dot black, exactly as the puzzle draws them in light mode — we never flip the
-  // colour, only add the minimum needed to stay visible on the dark background.
+  // The outline RING follows the same per-colour toggles as the on-border dots
+  // (kropkiOutlineEnabled / kropkiWhiteOutlineEnabled), drawn via applyKropkiDotRing
+  // as the disc's own stroke so it paints under any glyph. This keeps a white dot
+  // white and a black dot black, exactly as the puzzle draws them in light mode —
+  // we never flip the colour, only add the minimum needed to stay visible on dark.
   function fixKropkiClueShape(rect) {
     var f = (rect.getAttribute('fill') || '').toUpperCase();
     var isBlack = f === '#000000';
     var glyph = getCenteredKropkiText(rect);
     if (isBlack) {
       rect.style.setProperty('fill', '#000000', 'important');
-      rect.style.setProperty('stroke', '#ffffff', 'important');
-      rect.style.setProperty('stroke-width', '1.5', 'important');
+      applyKropkiDotRing(rect, !!settings.kropkiOutlineEnabled, '#ffffff');
       if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#ffffff'); glyph.style.setProperty('fill', '#ffffff', 'important'); }
     } else {
       rect.style.setProperty('fill', '#ffffff', 'important');
-      rect.style.setProperty('stroke', '#000000', 'important');
-      rect.style.setProperty('stroke-width', '1', 'important');
+      applyKropkiDotRing(rect, settings.kropkiWhiteOutlineEnabled !== false, '#000000');
       if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#000000'); glyph.style.setProperty('fill', '#000000', 'important'); }
     }
     rect.style.setProperty('fill-opacity', '1', 'important');
