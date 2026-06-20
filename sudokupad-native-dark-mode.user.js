@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.46.0
+// @version      3.47.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.46.0';
+  var SCRIPT_VERSION = '3.47.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7096,7 +7096,16 @@
     fsState.result = { kind: kind, message: message, canUndo: !!canUndo };
     fsState.resultPinned = true;
     fsStartRevokeObserver();
-    fsRenderResult();   // auto-show now (running may still be true here, so don't route via fsShowOnHover)
+    // Respect the "Show action result notifications" setting (settings.showToasts) for
+    // the auto-pop. Exception: a 'broken' result (a cell has NO valid candidates left)
+    // is an error the player must see, so it always pops — same policy as the
+    // action-button toasts. When suppressed, the result is still stored (and re-appears
+    // on hover); we just drop the lingering "running" popup so it doesn't stay up.
+    if (settings.showToasts !== false || kind === 'broken') {
+      fsRenderResult();   // auto-show now (running may still be true here, so don't route via fsShowOnHover)
+    } else {
+      fsHideToast();      // toasts off: remove the "Auto-fill is running…" popup
+    }
   }
   function fsClearResult() {
     fsState.result = null;
