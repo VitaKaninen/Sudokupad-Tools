@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.47.0
+// @version      3.48.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.47.0';
+  var SCRIPT_VERSION = '3.48.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6897,13 +6897,18 @@
   var fsState = {
     running: false,        // the loop is executing
     aborted: false,        // a 2nd button press requested a stop
-    result: null,          // sticky post-run message: { kind, message, canUndo }
+    result: null,          // sticky post-run message: { kind, message }
     resultPinned: false,   // result toast stays until the user clicks elsewhere
     firstFill: null,       // {col,row} of the first cell we filled — anchors the Undo
     filledCount: 0,
-    undoing: false,        // suppress the revoke-observer while WE drive undos
+    undoing: false,        // suppress the cell observer while WE drive undos
+    postFillSnapshot: null, // snapshotPencilmarks() captured right after a run (≥1 fill);
+                            // the floating button shows "Undo" only while the live puzzle
+                            // still matches it (see fsUndoAvailable / fsRefreshUndoButton)
+    buttonMode: 'idle',    // current floating-button mode: 'idle' | 'stop' | 'undo'
   };
-  var fsObserver = null;   // revokes a pending result the moment the user edits the puzzle
+  var fsObserver = null;   // watches the cell layers: revokes a pending result on edit AND
+                           // shows/hides the post-run Undo button as the player leaves/returns
 
   function fsScanValid() {
     var map = {};
@@ -6933,10 +6938,10 @@
   }
 
   // Low-level toast for this feature (distinct id from the action-button toast).
-  // NEVER auto-fades — visibility is driven by hover + pin state below.
+  // Purely informational — the Undo affordance now lives on the floating button
+  // (see fsArmUndo). NEVER auto-fades; visibility is driven by hover + pin state.
   function fsHideToast() { var t = document.getElementById('sp-fs-toast'); if (t) t.remove(); }
-  function fsRenderToast(colorKind, message, opts) {
-    opts = opts || {};
+  function fsRenderToast(colorKind, message) {
     fsHideToast();
     var colours = {
       success: { bg: '#2d4a36', border: '#3d8b54', text: '#cdebd1' },
@@ -6956,19 +6961,6 @@
     var msg = document.createElement('div');
     msg.textContent = message;
     toast.appendChild(msg);
-    if (opts.undo) {
-      var u = document.createElement('button');
-      u.type = 'button';
-      u.textContent = 'Undo';
-      Object.assign(u.style, {
-        marginTop: '8px', padding: '4px 14px', background: 'transparent', color: c.text,
-        border: '1px solid ' + c.border, borderRadius: '5px', cursor: 'pointer',
-        fontSize: '12px', fontWeight: '700',
-      });
-      spdrFxButton(u);
-      u.addEventListener('click', function (e) { e.stopPropagation(); fsDoUndo(); });
-      toast.appendChild(u);
-    }
     document.body.appendChild(toast);
   }
 
@@ -6985,7 +6977,7 @@
   // the mouse (the runner renders it at start; the mouseleave handler + fsShowOnHover
   // both leave it alone while fsState.running). Replaced by the result toast at the end.
   function fsRenderRunning() {
-    fsRenderToast('success', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.', {});
+    fsRenderToast('success', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.');
     var t = document.getElementById('sp-fs-toast');
     if (t) {
       t.style.cursor = 'pointer';
@@ -7023,10 +7015,10 @@
     function () { fsRenderExplainer({ empties: ['x'], zero: ['x'], singles: [] }); },        // explainer: not ready — a zero-candidate cell (yellow)
     function () { fsRenderExplainer({ empties: ['x', 'y'], zero: [], singles: [] }); },      // explainer: not ready — no single (yellow)
     function () { fsRenderRunning(); },                                                      // running: persistent "click Stop" popup (yellow)
-    function () { fsRenderToast('success', fsResultMessage('complete', 12), {}); },          // result: complete (green)
-    function () { fsRenderToast('warning', fsResultMessage('stuck', 5), {}); },              // result: stuck (yellow)
-    function () { fsRenderToast('error',   fsResultMessage('broken', 7, '5,3'), { undo: true }); },  // result: broken (red + Undo)
-    function () { fsRenderToast('warning', fsResultMessage('stopped', 3), { undo: true }); },        // result: user-stopped (yellow + Undo)
+    function () { fsRenderToast('success', fsResultMessage('complete', 12)); },          // result: complete (green)
+    function () { fsRenderToast('warning', fsResultMessage('stuck', 5)); },              // result: stuck (yellow)
+    function () { fsRenderToast('error',   fsResultMessage('broken', 7, '5,3')); },      // result: broken (red)
+    function () { fsRenderToast('warning', fsResultMessage('stopped', 3)); },            // result: user-stopped (yellow)
 
     // ── Action-button popups: direct toasts ──────────────────────────────────
     // (No "busy" popup: the 3 fill/clear buttons finish in a fraction of a second
@@ -7069,33 +7061,52 @@
     var r = fsState.result;
     if (!r) return;
     var col = r.kind === 'complete' ? 'success' : (r.kind === 'broken' ? 'error' : 'warning');
-    fsRenderToast(col, r.message, { undo: r.canUndo });
+    fsRenderToast(col, r.message);
   }
   async function fsShowOnHover() {
-    if (fsState.running) return;                      // button reads "Stop"; no popup mid-run
+    if (fsState.running) return;                              // button reads "Stop"; no popup mid-run
+    if (fsState.buttonMode === 'undo') { fsRenderUndoExplainer(); return; }  // button reads "Undo"; explain the undo, not a run
     if (fsState.result) { fsState.resultPinned = true; fsRenderResult(); return; } // re-show a sticky result AND re-pin it (stays until the next click-elsewhere)
     var app = await Framework.getApp();
     fsRenderExplainer(fsAnalyse(app));
   }
+  // Hover popup while the button is the post-run "Undo": prefer the outcome message
+  // (it has the count + context); otherwise (the button RETURNED via native-undo, so
+  // the one-shot message is long gone) a short generic explanation.
+  function fsRenderUndoExplainer() {
+    if (fsState.result) { fsState.resultPinned = true; fsRenderResult(); return; }
+    var n = fsState.filledCount;
+    fsRenderToast('success', 'Click to undo the auto-fill — it removes the ' + n + ' digit' + (n === 1 ? '' : 's') +
+      ' it placed.\n\nStays available while the puzzle still matches the auto-filled state.');
+  }
 
-  // Pending-result lifecycle. A result stays available (via hover) until the user
-  // edits the puzzle, which revokes it (and its Undo).
-  function fsStartRevokeObserver() {
+  // ── Cell observer + post-run lifecycle ─────────────────────────────────────
+  // One MutationObserver on the cell layers does double duty: (1) revoke a pending
+  // one-shot result toast the moment the player edits, and (2) drive the persistent
+  // "Undo" button — shown only while the live puzzle still matches the snapshot we
+  // took right after the run, so it disappears on any edit and RETURNS if the player
+  // native-undoes back to that state. Active whenever a result OR an armed undo exists.
+  function fsStartCellObserver() {
     if (fsObserver) return;
     var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
       .map(function (s) { return document.querySelector(s); }).filter(Boolean);
     if (!targets.length) return;
     fsObserver = new MutationObserver(function () {
-      if (!fsState.result || fsState.undoing) return;   // ignore our own undo-driven mutations
-      fsClearResult();
+      if (fsState.undoing) return;          // ignore our own undo-driven mutations
+      if (fsState.result) fsClearResult();  // one-shot outcome toast: gone on first edit
+      fsRefreshUndoButton();                // button: "Undo" iff state still matches the snapshot
     });
     targets.forEach(function (t) { fsObserver.observe(t, { childList: true, subtree: true, characterData: true }); });
   }
-  function fsStopRevokeObserver() { if (fsObserver) { fsObserver.disconnect(); fsObserver = null; } }
-  function fsSetResult(kind, message, canUndo) {
-    fsState.result = { kind: kind, message: message, canUndo: !!canUndo };
+  function fsStopCellObserver() { if (fsObserver) { fsObserver.disconnect(); fsObserver = null; } }
+  function fsSyncObserver() {
+    if (fsState.result || fsState.postFillSnapshot) fsStartCellObserver();
+    else fsStopCellObserver();
+  }
+  function fsSetResult(kind, message) {
+    fsState.result = { kind: kind, message: message };
     fsState.resultPinned = true;
-    fsStartRevokeObserver();
+    fsSyncObserver();
     // Respect the "Show action result notifications" setting (settings.showToasts) for
     // the auto-pop. Exception: a 'broken' result (a cell has NO valid candidates left)
     // is an error the player must see, so it always pops — same policy as the
@@ -7110,18 +7121,44 @@
   function fsClearResult() {
     fsState.result = null;
     fsState.resultPinned = false;
-    fsStopRevokeObserver();
+    fsSyncObserver();     // keep observing if an Undo is still armed
     fsHideToast();
+  }
+
+  // The post-run Undo lives on the floating button. It is offered exactly while the
+  // live puzzle still equals fsState.postFillSnapshot — captured right after the run.
+  function fsUndoAvailable() {
+    if (!fsState.postFillSnapshot || !fsState.firstFill || !fsState.filledCount) return false;
+    return diffEmpty(diffSnapshots(fsState.postFillSnapshot, snapshotPencilmarks()));
+  }
+  function fsRefreshUndoButton() {
+    if (fsState.running) return;   // 'Stop' owns the button mid-run
+    fsSetButtonLabel(fsUndoAvailable() ? 'undo' : 'idle');
+  }
+  // Arm the post-run Undo: snapshot the auto-filled state, start watching, show "Undo".
+  function fsArmUndo() {
+    fsState.postFillSnapshot = snapshotPencilmarks();
+    fsSyncObserver();
+    fsRefreshUndoButton();
+  }
+  // Retire it: forget the snapshot, stop watching (unless a result lingers), normal label.
+  function fsDisarmUndo() {
+    fsState.postFillSnapshot = null;
+    fsSyncObserver();
+    fsRefreshUndoButton();
   }
 
   // Rewind exactly our run: re-click the native undo button until the FIRST cell
   // we filled is empty again (LIFO ⇒ that undoes all our placements, candidates
-  // restored), capped at filledCount so a stuck state can't loop forever.
+  // restored), capped at filledCount so a stuck state can't loop forever. Only
+  // reachable while the button reads "Undo" (i.e. state == snapshot), so our fills
+  // are the top of the undo stack and this undoes them and nothing else.
   async function fsDoUndo() {
-    if (!fsState.result || !fsState.result.canUndo || fsState.undoing) return;
+    if (fsState.undoing || !fsState.postFillSnapshot) return;
     var first = fsState.firstFill, max = fsState.filledCount;
-    if (!first || !max) { fsClearResult(); return; }
+    if (!first || !max) { fsDisarmUndo(); return; }
     fsState.undoing = true;
+    fsClearResult();   // drop any lingering outcome toast
     var undoBtn = getModeButton('undo');
     var i = 0;
     while (i < max && cellHasValueOrGiven(first.col, first.row)) {
@@ -7131,20 +7168,28 @@
       await sleep(fsUndoDelay());
     }
     fsState.undoing = false;
-    fsClearResult();
+    fsDisarmUndo();    // auto-fill rewound → retire the Undo affordance
   }
 
   function fsSetButtonLabel(mode) {
+    fsState.buttonMode = mode;
     var btn = document.getElementById('sp-fill-single-btn');
     if (!btn) return;
     if (mode === 'stop') {
       btn.style.whiteSpace = 'nowrap';
       btn.style.fontSize   = '15px';
       btn.textContent      = 'Stop';
+      btn.title            = 'Stop the auto-fill';
+    } else if (mode === 'undo') {
+      btn.style.whiteSpace = 'nowrap';
+      btn.style.fontSize   = '15px';
+      btn.textContent      = 'Undo';
+      btn.title            = 'Undo the auto-fill (removes the digits it placed). Stays here until you change the puzzle.';
     } else {
       btn.style.whiteSpace = 'pre-line';   // honour the explicit line breaks
       btn.style.fontSize   = '9px';        // small enough that 4 lines fit the square
       btn.textContent      = 'Auto-fill\nany single\ncandidate\ncells';
+      btn.title            = 'Auto-fill cells that currently have a single valid (non-conflict) candidate';
     }
   }
 
@@ -7166,6 +7211,7 @@
     }
 
     fsClearResult();                 // drop any prior sticky result
+    fsDisarmUndo();                  // supersede any prior armed Undo (this run replaces it)
     fsState.running = true;
     fsState.aborted = false;
     fsState.filledCount = 0;
@@ -7181,8 +7227,7 @@
         app.deselect();
         if (cellByKey[zeroKey]) app.select([cellByKey[zeroKey]]);   // park the selection on the offending cell
       }
-      var canUndo = (kind === 'broken' || kind === 'stopped') && n > 0;
-      fsSetResult(kind, fsResultMessage(kind, n, zeroKey), canUndo);
+      fsSetResult(kind, fsResultMessage(kind, n, zeroKey));
     }
 
     try {
@@ -7205,7 +7250,10 @@
     } finally {
       fsState.running = false;
       actionInProgress = false;
-      fsSetButtonLabel('idle');
+      // Anything placed → the button becomes "Undo" (stays while the state holds, returns
+      // if the player native-undoes back to it). Nothing placed → normal label.
+      if (fsState.filledCount > 0) fsArmUndo();
+      else fsDisarmUndo();
     }
   }
 
@@ -7256,7 +7304,13 @@
     btn.style.setProperty('color', textColor, 'important');
     btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
     spdrFxButton(btn);          // hover-brighten + active-depress + click flash
-    btn.addEventListener('click', function (e) { e.stopPropagation(); fillSingleCandidates(); });
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      // While running, a click is a Stop request (fillSingleCandidates sets aborted).
+      // Post-run, the button is "Undo" → rewind the auto-fill. Otherwise → run.
+      if (!fsState.running && fsState.buttonMode === 'undo') fsDoUndo();
+      else fillSingleCandidates();
+    });
     btn.addEventListener('mouseenter', function () { fsShowOnHover(); });
     btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned && !fsState.running) fsHideToast(); });   // keep the running popup up regardless of mouse position
     document.body.appendChild(btn);
