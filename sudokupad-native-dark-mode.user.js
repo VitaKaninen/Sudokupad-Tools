@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.45.0
+// @version      3.46.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.45.0';
+  var SCRIPT_VERSION = '3.46.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5326,14 +5326,14 @@
   function buildActionButton(opts) {
     // opts: { id, wrapId, shortLabel, fullLabel, settingsKey, onClick }
     //
-    // Architecture:
-    //   wrap (div, fixed btnW×btnH in grid) — never resizes, so expanding never shifts page layout
-    //     clipper (div, position:absolute, overflow:hidden) — transitions width rightward on hover
-    //       label (div, EXPANDED_W wide) — single text element; textContent swaps at expand/collapse
+    // A static toolbar button matching the native controls-tool buttons. It shows
+    // the short label; the full description is the native hover tooltip (title attr).
     //
-    // Single element means both states share identical position — no sliding or alignment mismatch.
-    // Because clipper is position:absolute inside wrap, its growth is out-of-flow and
-    // cannot push the banner, puzzle, or any other page element.
+    //   wrap (div, 100%×100% grid cell) — in-flow grid item, sizes like its neighbours
+    //     btn (div, position:absolute, inset by the native margins, btnW×btnH)
+    //
+    // btn is absolutely positioned so it sits exactly where a native button would
+    // (margin inset) without depending on the grid cell's exact computed size.
     var refBtn    = document.querySelector('[data-control="normal"]');
     var refStyle  = refBtn ? getComputedStyle(refBtn) : null;
     var btnW      = (refBtn && refBtn.offsetWidth  > 0) ? refBtn.offsetWidth  : 56;
@@ -5357,134 +5357,59 @@
     var textColor = 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
-    var EXPANDED_W = 245;    // ← expanded button width in pixels — change to taste
-    var DELAY_MS   = 300;    // ← hover delay before expanding (ms)
-    var EXPAND_S   = '0.4s'; // ← expansion animation duration
-    var COLLAPSE_S = '0.15s'; // ← collapse animation duration
-
-    function applyColors(el, props) {
-      Object.keys(props).forEach(function (p) { el.style.setProperty(p, props[p], 'important'); });
-    }
 
     // Wrapper: fills the grid cell (100%×100%) so sizing matches neighboring buttons
     var wrap = document.createElement('div');
     wrap.id = opts.wrapId;
     Object.assign(wrap.style, {
       position:   'relative',
-      overflow:   'visible',
       width:      '100%',
       height:     '100%',
       visibility: settings[opts.settingsKey] === false ? 'hidden' : 'visible',
     });
 
-    // Clipper: absolutely-positioned within wrap; top:2px nudges it down to align with neighbors.
-    // overflow:hidden clips the label; width transitions reveal/hide the full label text.
-    var clipper = document.createElement('div');
-    Object.assign(clipper.style, {
-      position:     'absolute',
-      left:         btnMarginL + 'px',  // matches margin-left of neighboring toolbar buttons
-      top:          btnMarginT + 'px',  // matches margin-top of neighboring toolbar buttons
-      width:        btnW + 'px',
-      height:       btnH + 'px',
-      overflow:     'hidden',
-      borderRadius: borderRad,
-      boxSizing:    'border-box',
-      cursor:       'pointer',
-    });
-    // Record the collapsed width so mouseleave always collapses to the live
-    // value — syncClipperOffsets updates this after CSS settles, preventing
-    // the button from collapsing to a stale (pre-CSS-load) smaller size.
-    clipper.dataset.collapsedW = btnW;
-    applyColors(clipper, { 'background-color': bgColor, 'border': '1px solid ' + borderCol });
-
-    // Calculate padding-left so the short label appears centered in btnW.
-    // Both collapsed and expanded text use the same paddingLeft, so they share the same x position.
-    var _canvas = document.createElement('canvas');
-    var _ctx = _canvas.getContext('2d');
-    _ctx.font = '700 14px Roboto, Arial, sans-serif';  // ← keep in sync with the label fontSize/weight below
-    var _maxLineW = Math.max.apply(null, opts.shortLabel.split('\n').map(function(l) { return _ctx.measureText(l).width; }));
-    var labelPadLeft = Math.max(2, Math.round((btnW - _maxLineW) / 2));
-
-    // Single label element. Two rendering modes:
-    //   Collapsed: width=btnW, justifyContent+textAlign center → each short-label line centered
-    //              independently (works for "Clear\nAll" — both lines center individually)
-    //   Expanded:  width=EXPANDED_W, left-aligned at paddingLeft=labelPadLeft → same start x
-    //              as the centered short text, so the swap is seamless
-    var label = document.createElement('div');
-    label.id = opts.id;
-    Object.assign(label.style, {
+    // The button: absolutely positioned within wrap, inset by the native margins
+    // and sized to a native button. Short label centered (white-space:pre renders
+    // the "Clear\nAll" newline; flex+textAlign centers each line independently).
+    var btn = document.createElement('div');
+    btn.id = opts.id;
+    Object.assign(btn.style, {
       position:       'absolute',
-      left: '0', top: '0',
-      width:          btnW + 'px',     // starts at collapsed width
+      left:           btnMarginL + 'px',  // matches margin-left of neighboring toolbar buttons
+      top:            btnMarginT + 'px',  // matches margin-top of neighboring toolbar buttons
+      width:          btnW + 'px',
       height:         btnH + 'px',
       display:        'flex',
-      alignItems:     'center',        // vertical center
-      justifyContent: 'center',        // horizontal center of the text block within btnW
-      textAlign:      'center',        // centers each line within the text block
-      whiteSpace:     'pre',           // preserves \n in shortLabel
+      alignItems:     'center',           // vertical center
+      justifyContent: 'center',           // horizontal center
+      textAlign:      'center',           // centers each line within the text block
+      whiteSpace:     'pre',              // preserves \n in shortLabel
+      borderRadius:   borderRad,
       boxSizing:      'border-box',
-      fontSize:       '14px',          // ← font size — change to taste (keep canvas font above in sync)
+      fontSize:       '14px',             // ← font size — change to taste
       fontFamily:     'Roboto, Arial, sans-serif',
-      fontWeight:     '700',           // ← weight — 700=bold, 800/900=heavier
+      fontWeight:     '700',              // ← weight — 700=bold, 800/900=heavier
       lineHeight:     '1.2',
-      pointerEvents:  'none',
-      zIndex:         '2',
+      cursor:         'pointer',
     });
-    applyColors(label, { 'color': textColor });
-    label.textContent = opts.shortLabel;
+    btn.style.setProperty('background-color', bgColor, 'important');
+    btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    btn.style.setProperty('color', textColor, 'important');
+    btn.textContent = opts.shortLabel;
+    btn.title = opts.fullLabel;   // native hover tooltip (replaces the old expand-on-hover)
 
-    clipper.appendChild(label);
-    wrap.appendChild(clipper);
+    btn.addEventListener('click', function (e) { e.stopPropagation(); opts.onClick(); });
+    spdrFxButton(btn);   // hover-brighten + active-depress + click flash (matches the floating Fill-single button + native buttons)
 
-    // Interaction: clipper is the visible mouse target
-    clipper.addEventListener('click', function (e) { e.stopPropagation(); opts.onClick(); });
-    spdrFxButton(clipper);   // hover-brighten + active-depress + click flash (matches the floating Fill-single button + native buttons)
-
-    var expandTimer, collapseEndTimer;
-    clipper.addEventListener('mouseenter', function () {
-      clearTimeout(collapseEndTimer);
-      expandTimer = setTimeout(function () {
-        // Switch to expanded mode: left-aligned, starting at same x as the centered short text
-        label.style.width          = EXPANDED_W + 'px';
-        label.style.justifyContent = 'flex-start';
-        label.style.textAlign      = 'left';
-        label.style.paddingLeft    = labelPadLeft + 'px';
-        label.style.paddingRight   = '12px';
-        label.style.whiteSpace     = 'nowrap';
-        label.textContent          = opts.fullLabel;
-        clipper.style.transition   = 'width ' + EXPAND_S + ' ease, filter .18s ease';
-        clipper.style.width        = EXPANDED_W + 'px';
-      }, DELAY_MS);
-    });
-    clipper.addEventListener('mouseleave', function () {
-      clearTimeout(expandTimer);
-      clearTimeout(collapseEndTimer);
-      // Read the live collapsed width (syncClipperOffsets keeps this current
-      // after CSS settles); avoids collapsing to the stale build-time value.
-      var cw = parseInt(clipper.dataset.collapsedW, 10) || btnW;
-      clipper.style.transition = 'width ' + COLLAPSE_S + ' ease, filter .18s ease';
-      clipper.style.width      = cw + 'px';
-      var collapseMs = Math.round(parseFloat(COLLAPSE_S) * 1000);
-      collapseEndTimer = setTimeout(function () {
-        // Restore collapsed mode: centered short text
-        label.style.width          = cw + 'px';
-        label.style.justifyContent = 'center';
-        label.style.textAlign      = 'center';
-        label.style.paddingLeft    = '0';
-        label.style.paddingRight   = '0';
-        label.style.whiteSpace     = 'pre';
-        label.textContent          = opts.shortLabel;
-      }, collapseMs);
-    });
-
+    wrap.appendChild(btn);
     return wrap;
   }
 
   // Re-reads the reference button geometry and colour, then applies them to every
-  // action-button clipper. Called right after DOM insertion (handles the common case
-  // where SudokuPad CSS is already applied) and again at 100 ms / 500 ms to cover the
-  // race where the CSS loads late.
-  function syncClipperOffsets() {
+  // action button. Called right after DOM insertion (handles the common case where
+  // SudokuPad CSS is already applied) and again at 100 ms / 500 ms to cover the race
+  // where the CSS loads late.
+  function syncActionButtonGeometry() {
     var ref = document.querySelector('[data-control="normal"]');
     if (!ref) return;
     var cs = getComputedStyle(ref);
@@ -5504,16 +5429,12 @@
     ['sp-fill-btn-wrap', 'sp-clear-btn-wrap', 'sp-clearall-btn-wrap'].forEach(function(id) {
       var wrap = document.getElementById(id);
       if (!wrap || !wrap.firstElementChild) return;
-      var clipper = wrap.firstElementChild;
-      if (ml) clipper.style.left = ml + 'px';
-      if (mt) clipper.style.top  = mt + 'px';
-      if (bw) { clipper.style.width = bw + 'px'; clipper.dataset.collapsedW = bw; }
-      if (bh) clipper.style.height = bh + 'px';
-      if (bg) clipper.style.setProperty('background-color', bg, 'important');
-      // Keep label dimensions in sync so collapsed-state centering stays correct.
-      var label = clipper.firstElementChild;
-      if (label && bw) label.style.width = bw + 'px';
-      if (label && bh) label.style.height = bh + 'px';
+      var btn = wrap.firstElementChild;
+      if (ml) btn.style.left = ml + 'px';
+      if (mt) btn.style.top  = mt + 'px';
+      if (bw) btn.style.width = bw + 'px';
+      if (bh) btn.style.height = bh + 'px';
+      if (bg) btn.style.setProperty('background-color', bg, 'important');
     });
   }
 
@@ -5557,9 +5478,9 @@
     toolContainer.appendChild(fillWrap);
     toolContainer.appendChild(clearWrap);
     toolContainer.appendChild(clearAllWrap);
-    syncClipperOffsets();                  // immediate: correct if CSS already applied
-    setTimeout(syncClipperOffsets, 100);   // early retry: covers most race conditions
-    setTimeout(syncClipperOffsets, 500);   // late safety net: always correct after 500 ms
+    syncActionButtonGeometry();                  // immediate: correct if CSS already applied
+    setTimeout(syncActionButtonGeometry, 100);   // early retry: covers most race conditions
+    setTimeout(syncActionButtonGeometry, 500);   // late safety net: always correct after 500 ms
     if (buttonsAnyEnabled() && needsDigitSetCheck()) runDigitSetCheck();
     return true;
   }
@@ -7064,7 +6985,7 @@
   // the mouse (the runner renders it at start; the mouseleave handler + fsShowOnHover
   // both leave it alone while fsState.running). Replaced by the result toast at the end.
   function fsRenderRunning() {
-    fsRenderToast('warning', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.', {});
+    fsRenderToast('success', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.', {});
     var t = document.getElementById('sp-fs-toast');
     if (t) {
       t.style.cursor = 'pointer';
