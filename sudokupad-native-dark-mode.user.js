@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.48.0
+// @version      3.49.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.48.0';
+  var SCRIPT_VERSION = '3.49.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -336,7 +336,7 @@
     regionColorFillEnabled:       false,      // fill entire cell backgrounds with region colors
     regionColorFillOpacity:       0.3,        // opacity of cell-fill backgrounds (independent of border opacity)
 
-    shadedRegionColorEnabled:     false,      // recolor puzzle "extra region" grey shadings (#cages path.cage-extraregion) with the region palette
+    shadedRegionColorEnabled:     false,      // colour puzzle "extra regions" with the region palette — grey #cages path.cage-extraregion shadings, grey #underlay cells, AND model-only regions with no shading (Windoku windows); auto-enabled per puzzle when extra regions are detected
     shadedRegionColorOpacity:     0.5,        // opacity of the recolored shaded-region fills
 
     cellColorsOpacity:            0.6,        // 0..1; opacity of #cell-colors. Matches SudokuPad's native --cell-color-opacity (0.6), so enabling at default = no visible change
@@ -1355,7 +1355,10 @@
   // (hidden-killer / extraregion cages rendered as grey cells; see getDomShadedRegionMap).
   function puzzleHasShadedRegions() {
     if (document.querySelector('#cages path.cage-extraregion')) return true;
-    return !!getDomShadedRegionMap();   // DOM-only, cached, no Framework — safe anywhere
+    if (getDomShadedRegionMap()) return true;   // grey #underlay rects (DOM-only, cached)
+    // Model-defined regions with no DOM shading at all (Windoku-style). Synchronous,
+    // guarded model read; returns null before the app exists, real data after.
+    return !!getModelShadedRegionMap();
   }
 
   // Assign each cage-extraregion path a palette index (0-3) such that any two
@@ -1996,6 +1999,7 @@
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
+    scheduleAutoShade();   // auto-enable Shaded mode if this puzzle has extra regions
     // Re-apply our fixes when SudokuPad re-renders the board (puzzle load, fog
     // reveal, etc. — all add fresh SVG nodes). We only need to watch childList:
     // with DarkReader locked out, nothing mutates our inline colours in place.
@@ -2015,7 +2019,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); scheduleAutoShade(); }
     }).observe(svg, { childList: true, subtree: true });
   }
 
@@ -2223,19 +2227,27 @@
       var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
         ? Framework.app.puzzle.currentPuzzle : null;
       if (!cp || !Array.isArray(cp.cages)) return null;
-      var extras = cp.cages.filter(function (c) {
-        return c && c.unique === true && c.type !== 'region' && c.type !== 'rowcol'
-          && (c.style === 'extraregion' || (c.hidden === true && c.sum == null && c.value == null));
-      });
-      if (!extras.length) return null;
-      var regions = extras.map(function (c) {
+      // An "extra region" = any cage with conflict-checking (unique:true) that is NOT
+      // one of the native sudoku constraints (the 9 boxes are type 'region', rows/cols
+      // are type 'rowcol') and that spans exactly one full no-repeat region — i.e. its
+      // cell count equals the number of digits in play ("Digit Set for this puzzle").
+      // This deliberately simple size test catches extra regions no matter HOW they
+      // are authored or drawn: style:'extraregion', hidden sum-less cages drawn as grey
+      // cells (We Live Here, zax289niwv), AND sum-less unique cages drawn only as dashed
+      // killer outlines with no shading at all (a Windoku's four windows, 5krkgmjq7q).
+      var want = (settings.digitSet && settings.digitSet.length)
+        ? settings.digitSet.length : detectGridSize();
+      if (!want || want < 2) return null;
+      var regions = [];
+      cp.cages.forEach(function (c) {
+        if (!c || c.unique !== true || c.type === 'region' || c.type === 'rowcol') return;
         var cells = [];
         String(c.cells || '').split(',').forEach(function (rc) {
           var m = /r(\d+)c(\d+)/i.exec(rc.trim());
           if (m) cells.push([parseInt(m[1], 10) - 1, parseInt(m[2], 10) - 1]);
         });
-        return cells;
-      }).filter(function (cells) { return cells.length; });
+        if (cells.length === want) regions.push(cells);
+      });
       return regions.length ? regions : null;
     } catch (e) { return null; }
   }
@@ -2352,6 +2364,69 @@
       }, 250);
     }
     return _domShadedCache.map;
+  }
+
+  // Model-defined extra regions that have NO visual shading to recolour — neither a
+  // grey #underlay rect nor a cage-extraregion path (e.g. a Windoku whose windows are
+  // sum-less unique cages drawn only as dashed killer outlines, 5krkgmjq7q). Pure
+  // model read (readModelExtraRegions, via the safe synchronous Framework.app getter),
+  // 4-coloured so two regions that touch differ. Returns cell → palette idx, or null.
+  // Cached per puzzle once the model is readable (null before that → a later paint,
+  // e.g. getModelRegionMap's async repaint, retries). This drives drawRegionSplitBorders'
+  // model-shading pass; the grey-rect path (getDomShadedRegionMap) is unaffected.
+  var _modelShadedCache = { key: null, map: null };
+  function getModelShadedRegionMap() {
+    var key = modelRegionCacheKey();
+    if (_modelShadedCache.key === key) return _modelShadedCache.map;
+    var regions = readModelExtraRegions();
+    var map = null;
+    if (regions && regions.length) {
+      var colors = colourShadedRegions(regions);
+      map = {};
+      regions.forEach(function (cells, i) {
+        var idx = (colors[i] != null && colors[i] >= 0) ? colors[i] : 0;
+        cells.forEach(function (rc) { map[rc[0] + ',' + rc[1]] = idx; });
+      });
+    }
+    var modelReadable = (typeof Framework !== 'undefined' && Framework.app
+      && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
+    if (modelReadable) _modelShadedCache = { key: key, map: map };
+    return map;
+  }
+
+  // ── Auto-enable Shaded mode on puzzles that have extra regions ───────────────
+  // When a puzzle has extra regions, turn ON the Easy Shade button's first option
+  // (Shaded) automatically so the regions are coloured without a manual click. The
+  // change is in MEMORY only — never persisted: storage keeps the user's own saved
+  // preference, and the effective state is recomputed fresh per puzzle as
+  // "has extra regions ? on : saved preference", so a puzzle WITHOUT extra regions
+  // falls back to that saved value and the auto-on never leaks onto ordinary puzzles.
+  // Decided once per puzzle (keyed by URL); afterwards the user can toggle it off and
+  // it stays off (the per-key guard stops any re-fire on the same puzzle).
+  var _autoShadePollKey = null;
+  function applyAutoShade() {
+    var modelReadable = (typeof Framework !== 'undefined' && Framework.app
+      && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
+    if (!modelReadable) return false;             // wait until detection is trustworthy
+    var savedShaded = !!loadSettings().shadedRegionColorEnabled;
+    var want = puzzleHasShadedRegions() ? true : savedShaded;
+    if (settings.shadedRegionColorEnabled !== want) {
+      settings.shadedRegionColorEnabled = want;   // in-memory only — do NOT saveSettings
+      applySettings();
+      if (controlSyncers['shadedRegionColorEnabled']) controlSyncers['shadedRegionColorEnabled']();
+    }
+    return true;
+  }
+  function scheduleAutoShade() {
+    var key = modelRegionCacheKey();
+    if (_autoShadePollKey === key) return;        // already decided / polling this puzzle
+    _autoShadePollKey = key;
+    var tries = 0;
+    (function poll() {
+      if (modelRegionCacheKey() !== key) return;  // navigated away — its own schedule takes over
+      if (applyAutoShade()) return;               // model ready, decision made
+      if (++tries < 40) setTimeout(poll, 150);    // else wait up to ~6s for the model to load
+    })();
   }
 
   // Map each geometric region (connected cell group) to a logical group id. With
@@ -3074,6 +3149,51 @@
         shadedGroup.appendChild(clone);
       });
       mainGroup.insertBefore(shadedGroup, mainGroup.firstChild);
+    }
+
+    // Shaded extra-regions defined ONLY in the model — no cage-extraregion path to
+    // clone and no grey #underlay rect to recolour (e.g. a Windoku whose four windows
+    // are sum-less unique cages drawn as dashed killer outlines, 5krkgmjq7q). Draw a
+    // full-cell rect for each region cell, inserted below the borders. Skipped when the
+    // puzzle renders its extra regions as cage-extraregion paths (cloned above), and
+    // per-cell when that cell already carries a full-cell #underlay rect (recoloured in
+    // place by fixUnderlayRect) so grey-shaded regions are never double-painted.
+    if (settings.shadedRegionColorEnabled
+        && !document.querySelector('#cages path.cage-extraregion')) {
+      var modelShaded = getModelShadedRegionMap();
+      if (modelShaded) {
+        var shOpM = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+        var shPalM = [
+          hexToRgba(settings.regionColorPalette0 || '#e05252', shOpM),
+          hexToRgba(settings.regionColorPalette1 || '#5294e0', shOpM),
+          hexToRgba(settings.regionColorPalette2 || '#52a84e', shOpM),
+          hexToRgba(settings.regionColorPalette3 || '#e8a030', shOpM),
+        ];
+        var covered = {};
+        svg.querySelectorAll('#underlay rect').forEach(function (r) {
+          var col = parseColor(r.getAttribute('fill') || '');
+          if (!col || col.a === 0) return;
+          var rw = parseFloat(r.getAttribute('width')),  rh = parseFloat(r.getAttribute('height'));
+          var rx = parseFloat(r.getAttribute('x')),      ry = parseFloat(r.getAttribute('y'));
+          if (!isFinite(rw) || !isFinite(rh) || !isFinite(rx) || !isFinite(ry)) return;
+          if (rw < cs * 0.75 || rh < cs * 0.75) return;
+          covered[Math.floor((ry + rh / 2) / cs) + ',' + Math.floor((rx + rw / 2) / cs)] = true;
+        });
+        var modelShadeGroup = document.createElementNS(NS, 'g');
+        modelShadeGroup.setAttribute('pointer-events', 'none');
+        Object.keys(modelShaded).forEach(function (k) {
+          if (covered[k]) return;
+          var rc = k.split(',');
+          var rr = parseInt(rc[0], 10), ccx = parseInt(rc[1], 10);
+          var rect = document.createElementNS(NS, 'rect');
+          rect.setAttribute('x', ccx * cs); rect.setAttribute('y', rr * cs);
+          rect.setAttribute('width', cs);   rect.setAttribute('height', cs);
+          rect.style.setProperty('fill', shPalM[(modelShaded[k] || 0) % 4], 'important');
+          rect.setAttribute('shape-rendering', 'crispEdges');
+          modelShadeGroup.appendChild(rect);
+        });
+        if (modelShadeGroup.firstChild) mainGroup.insertBefore(modelShadeGroup, mainGroup.firstChild);
+      }
     }
 
     // Insert mainGroup immediately after #cell-colors so our borders render above
