@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.54.0
+// @version      3.55.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.54.0';
+  var SCRIPT_VERSION = '3.55.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5573,23 +5573,25 @@
     return dots;
   }
 
-  // Compute which centre candidates violate a Kropki dot, in a SINGLE pass over
-  // every dot evaluated against the CURRENT board (deliberately NOT iterated to a
-  // fixpoint). A candidate d in a cell is removed if, for some dot the cell sits
-  // on, the neighbour cell can't currently hold a partner of d — black: e==2d or
-  // d==2e; white: |d-e|==1 — over the puzzle's digit set. A value/given cell
-  // contributes its single digit; an empty cell (no value, no marks) counts as the
-  // full digit set, so it never forces a removal, and is itself never modified.
-  // We intentionally do NOT cascade removals back through the web: deep
-  // arc-consistency over a dense Kropki chain strips candidates several steps away
-  // that the solver would rather deduce themselves (on the "Kropki Pairs" test
-  // puzzle 264wvenhmu the fixpoint collapsed a 1-2-4-6-8-9 / 1-2-4-6-8-9 pair to
-  // just 8-9 instead of the correct 1-2-8-9). The user's "two passes" — drop
-  // impossible-ratio digits like 5/7/9 on a black dot, then drop digits with no
-  // neighbour support — both fall out of this one rule (an impossible-ratio digit
-  // has no partner anywhere, so no neighbour can support it). Re-click to run
-  // another pass against the new state. Pure: reads the DOM, returns the removal
-  // list without touching the board.
+  // Compute which centre candidates violate the Kropki dots, by constraint
+  // propagation (arc consistency) iterated to a FIXPOINT. A candidate d in a
+  // markable cell is removed when some dot the cell sits on has no partner for d in
+  // the neighbour's CURRENT set — black: e==2d or d==2e; white: |d-e|==1 — over the
+  // puzzle's digit set. Because each removal shrinks a set that other dots read, we
+  // sweep every dot repeatedly until a full pass changes nothing, so an elimination
+  // propagates all the way down a Kropki chain (e.g. on "Kropki Pairs" 264wvenhmu a
+  // 1-2-4-6-8-9 / 1-2-4-6-8-9 white pair settles to 8-9 / 8-9 — the correct deep
+  // result: once the wider web is propagated, 1/2/4/6 have no surviving partner.
+  // Verified the fixpoint empties 0 cells there and on the dense all-Kropki
+  // algxlb0a1z, i.e. it never contradicts — it's sound, just deep).
+  // A value/given cell contributes its single digit; an empty cell (no value, no
+  // marks) counts as the full digit set, so it never forces a removal and is never
+  // itself modified. NOTE the fixpoint trusts the current marks as COMPLETE: run
+  // mid-solve on a partially-pencilled grid it propagates those partial marks and
+  // can remove more than is "obviously" invalid — cleanest on a fully-pencilled
+  // grid. Monotonic (sets only shrink) so it always terminates; the pass guard is
+  // belt-and-braces. Pure w.r.t. the board: reads the DOM and mutates only
+  // in-memory sets, returning the removal list without touching the board.
   function computeKropkiRemovals() {
     var digitChars = (settings.digitSet || '').split('');
     if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) {
@@ -5649,29 +5651,34 @@
       return false;
     }
 
-    // One pass over every dot, each cell's candidates checked against the
-    // neighbour's CURRENT set (no cascade — see the function header).
+    // Sweep every dot (both directions), deleting unsupported candidates from the
+    // live working set so removals cascade; repeat until a pass changes nothing.
+    var markedKeys = Object.keys(centre);   // cells that started with centre marks
     var removals = [], seen = {};
     function consider(self, other, type) {
       if (values[self] != null || !centre[self]) return;   // only modifiable candidate cells
-      var os = neighbourSet(other);
-      centre[self].forEach(function (d) {
+      var os = neighbourSet(other);                         // live set for marked neighbours → cascade
+      Array.from(centre[self]).forEach(function (d) {       // snapshot: we mutate the set inside the loop
         if (!hasPartner(type, d, os)) {
+          centre[self].delete(d);
           var k = self + '/' + d;
           if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: self, digit: String(d) }); }
         }
       });
     }
-    dots.forEach(function (dot) {
-      consider(dot.a, dot.b, dot.type);
-      consider(dot.b, dot.a, dot.type);
-    });
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      var before = removals.length;
+      dots.forEach(function (dot) {
+        consider(dot.a, dot.b, dot.type);
+        consider(dot.b, dot.a, dot.type);
+      });
+      changed = removals.length > before;
+    }
 
-    // Cells where EVERY current candidate is being removed → contradiction worth flagging.
-    var perCell = {};
-    removals.forEach(function (r) { perCell[r.cellKey] = (perCell[r.cellKey] || 0) + 1; });
+    // Cells whose candidate set the fixpoint wiped out entirely → contradiction worth flagging.
     var emptied = 0;
-    Object.keys(perCell).forEach(function (k) { if (centre[k] && perCell[k] >= centre[k].size) emptied++; });
+    markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
 
     return { removals: removals, dotCount: dots.length, emptiedCells: emptied };
   }
