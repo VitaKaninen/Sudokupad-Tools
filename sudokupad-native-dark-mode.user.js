@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.56.0
+// @version      3.57.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.56.0';
+  var SCRIPT_VERSION = '3.57.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -325,6 +325,7 @@
     showValidateButton:           true,   // show/hide the floating "Validate Constraints" button (Kropki validation, more constraints later)
     validateKropkiEnabled:        true,   // "Validate Constraints": run the Kropki-dot validator (future per-validator toggle)
     validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
+    validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
     fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
@@ -5859,6 +5860,220 @@
     return { removals: removals, cageCount: active.length, emptiedCells: emptied };
   }
 
+  // ── Little-killer validator ───────────────────────────────────────────────
+  // A little killer constrains the SUM along a diagonal. Unlike a cage, digits
+  // may REPEAT along the diagonal — except where ordinary Sudoku rules forbid
+  // it: two diagonal cells in the same BOX, or the same uniqueness CAGE, must
+  // differ. (Two cells on a diagonal never share a row or column, so those never
+  // apply.) A candidate d in a diagonal cell is removed only when NO assignment
+  // of digits to the whole diagonal — each within its current candidates,
+  // summing to the target, with every box-/cage-sharing pair distinct — places d
+  // in that cell. Independent of the other validators (own board read + removal
+  // list), iterated to a fixpoint like the cage validator.
+
+  // Regular box dimensions for an N×N grid: { h: rows, w: cols }. h = the largest
+  // divisor of N that is ≤ √N (so 9→3×3, 6→2×3, 8→2×4, 12→3×4, 16→4×4). Used for
+  // the box-conflict test; jigsaw/irregular regions aren't derived here, so on
+  // such a (rare) puzzle the box constraint is simply under-applied, never wrong.
+  function regularBoxDims(N) {
+    var h = 1;
+    for (var k = 1; k * k <= N; k++) if (N % k === 0) h = k;
+    return { h: h, w: N / h };
+  }
+
+  // Cell-key sets for every cage that forbids repeats (unique !== false), incl.
+  // sum-less "region" cages — any such cage makes two diagonal cells in it differ.
+  // Separate from getKillerCages (which needs a numeric sum); here only uniqueness
+  // matters. Returns [Set<"col,row">]. Cells "r1c3" 1-indexed → "col,row" 0-indexed.
+  function getUniqueCageCellSets() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return [];
+    var N = detectGridSize();
+    var out = [];
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.unique === false) return;
+      var keys = [], m, re = /r(\d+)c(\d+)/gi, s = cage.cells || '';
+      while ((m = re.exec(s)) !== null) {
+        var col = Number(m[2]) - 1, row = Number(m[1]) - 1;
+        if (col >= 0 && row >= 0 && col < N && row < N) keys.push(col + ',' + row);
+      }
+      if (keys.length >= 2) out.push(new Set(keys));
+    });
+    return out;
+  }
+
+  // Read the puzzle's little killers as [{ keys:[<col,row>…], sum }]. Detection is
+  // DOM-based and era-independent: SudokuPad renders every little killer (native
+  // SCL or legacy-cosmetic, e.g. vurjqaca3k) the same way — a numeric label
+  // anchored just OUTSIDE the grid plus a short diagonal arrow in #arrows. We read
+  // the sum from the label and the diagonal's family (c−r vs c+r) from the arrow
+  // shaft's vector, then walk the line across the grid. Guards keep it specific
+  // (only an outside-grid numeric label matched to an outside-grid ~45° arrow
+  // counts), so sandwich/X-sum frame numbers and in-grid arrow constraints are
+  // ignored; if a future puzzle renders LKs differently it simply isn't detected
+  // (under-removal, safe) rather than mis-detected. Extensible: add another source
+  // returning the same { keys, sum } shape and union it in.
+  function getLittleKillers() {
+    var cs = getGridCellSize();
+    var svg = document.getElementById('svgrenderer');
+    if (!cs || !svg) return [];
+    var N = detectGridSize();
+    var gridPx = N * cs;
+    function outside(px, py) {
+      return px < -cs * 0.1 || py < -cs * 0.1 || px > gridPx + cs * 0.1 || py > gridPx + cs * 0.1;
+    }
+
+    // 1) Diagonal arrow shafts (~45°) whose START is outside the grid. The first
+    //    "M x y L x y" coordinate pair is the shaft tail (out near the label); the
+    //    sign of dx·dy picks the diagonal family. The arrowhead marker paths in
+    //    each <g>'s <defs> start near the origin (inside) → filtered out here.
+    var shafts = [];
+    var arrowsLayer = document.getElementById('arrows');
+    if (arrowsLayer) {
+      arrowsLayer.querySelectorAll('path').forEach(function (p) {
+        var d = p.getAttribute('d') || '';
+        var nums = d.match(/-?\d+(?:\.\d+)?/g);
+        if (!nums || nums.length < 4) return;
+        var x1 = +nums[0], y1 = +nums[1], x2 = +nums[2], y2 = +nums[3];
+        var dx = x2 - x1, dy = y2 - y1;
+        if (Math.abs(dx) < cs * 0.05 || Math.abs(dy) < cs * 0.05) return;   // must be diagonal
+        if (Math.abs(Math.abs(dx) - Math.abs(dy)) > cs * 0.3) return;        // ~45° only
+        if (!outside(x1, y1)) return;                                        // tail outside grid
+        shafts.push({ x: x1, y: y1, fam: dx * dy > 0 ? 1 : -1, used: false });
+      });
+    }
+    if (shafts.length === 0) return [];
+
+    // 2) Numeric labels positioned outside the grid, each matched to the nearest
+    //    unused shaft tail (within ~1 cell). Label x/y ≈ the anchor cell centre in
+    //    px, so ar = y/cs, ac = x/cs (continuous, half-integer-ish).
+    var out = [], seen = {};
+    svg.querySelectorAll('text').forEach(function (t) {
+      var txt = (t.textContent || '').trim();
+      if (!/^\d+$/.test(txt)) return;
+      var x = parseFloat(t.getAttribute('x')), y = parseFloat(t.getAttribute('y'));
+      if (!isFinite(x) || !isFinite(y) || !outside(x, y)) return;
+      var best = null, bestD = cs * 1.0;
+      shafts.forEach(function (s) {
+        if (s.used) return;
+        var dist = Math.hypot(s.x - x, s.y - y);
+        if (dist < bestD) { bestD = dist; best = s; }
+      });
+      if (!best) return;
+      best.used = true;
+      var ar = y / cs, ac = x / cs;
+      var K = Math.round(best.fam > 0 ? ac - ar : ac + ar);   // c−r=K (fam>0) or c+r=K (fam<0)
+      var keys = [];
+      for (var r = 0; r < N; r++) {
+        var c = best.fam > 0 ? r + K : K - r;
+        if (c >= 0 && c < N) keys.push(c + ',' + r);
+      }
+      if (keys.length < 1) return;
+      var sig = keys.join(' ') + '=' + txt;
+      if (seen[sig]) return;
+      seen[sig] = 1;
+      out.push({ keys: keys, sum: Number(txt) });
+    });
+    return out;
+  }
+
+  // Compute centre-candidate removals forced by the little killers, iterated to a
+  // fixpoint (a removal can invalidate another diagonal's support; diagonals may
+  // also cross-share cells). Pure w.r.t. the board — works on copies of the
+  // candidate sets and returns the removal list.
+  function computeLittleKillerRemovals() {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var lks = getLittleKillers();
+    if (lks.length === 0) return { noLittleKillers: true };
+
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var cageSets = getUniqueCageCellSets();
+    function boxId(key) { var p = key.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
+    function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
+    function conflict(a, b) { return boxId(a) === boxId(b) || shareCage(a, b); }
+
+    // Per-diagonal conflict matrix (which cell pairs must differ).
+    var diags = lks.map(function (lk) {
+      var keys = lk.keys;
+      var conf = keys.map(function (_, i) { return keys.map(function (__, j) { return i !== j && conflict(keys[i], keys[j]); }); });
+      return { keys: keys, sum: lk.sum, conf: conf };
+    });
+
+    // Working copies of the player's centre marks (the only cells we may modify).
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                // empty cell → unconstrained, never modified
+    }
+
+    // Which (cell-index, digit) pairs the diagonal can still place: enumerate every
+    // assignment hitting the target sum with all box/cage-sharing pairs distinct,
+    // each cell drawing from its CURRENT candidate set, and union the digits used
+    // per cell. Backtracking with exact-sum suffix-bound + conflict pruning. A node
+    // cap guards a pathological search; if hit we bail (no removals from this
+    // diagonal this pass — never over-remove).
+    function computeSupported(diag) {
+      var keys = diag.keys, n = keys.length, conf = diag.conf, target = diag.sum;
+      var sets = keys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
+      if (sets.some(function (s) { return s.length === 0; })) return { supported: null, bailed: false, empty: true };
+      var sufMin = new Array(n + 1).fill(0), sufMax = new Array(n + 1).fill(0);
+      for (var i = n - 1; i >= 0; i--) {
+        sufMin[i] = sufMin[i + 1] + sets[i][0];
+        sufMax[i] = sufMax[i + 1] + sets[i][sets[i].length - 1];
+      }
+      var supported = keys.map(function () { return new Set(); });
+      var assign = new Array(n), nodes = 0, CAP = 300000, bailed = false;
+      (function dfs(idx, sum) {
+        if (bailed) return;
+        if (nodes++ > CAP) { bailed = true; return; }
+        if (idx === n) { if (sum === target) for (var k = 0; k < n; k++) supported[k].add(assign[k]); return; }
+        if (sum + sufMin[idx] > target || sum + sufMax[idx] < target) return;
+        var opts = sets[idx];
+        for (var oi = 0; oi < opts.length; oi++) {
+          var d = opts[oi];
+          if (sum + d + sufMin[idx + 1] > target) break;          // sorted asc → larger d only worse
+          var ok = true;
+          for (var j = 0; j < idx; j++) if (conf[idx][j] && assign[j] === d) { ok = false; break; }
+          if (!ok) continue;
+          assign[idx] = d;
+          dfs(idx + 1, sum + d);
+          if (bailed) return;
+        }
+      })(0, 0);
+      return { supported: supported, bailed: bailed, empty: false };
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      diags.forEach(function (diag) {
+        var res = computeSupported(diag);
+        if (res.bailed || res.empty || !res.supported) return;    // give up safely on this diagonal
+        diag.keys.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C]) return;           // only cells with player marks
+          Array.from(work[C]).forEach(function (d) {              // snapshot: set mutates in loop
+            if (!res.supported[i].has(d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, lkCount: diags.length, emptiedCells: emptied };
+  }
+
   // Worker: remove a specific list of centre candidates via SudokuPad's own
   // candidates op (one undo group). Mirrors _removeInvalidPencilmarksInternal but
   // takes an explicit [{cellKey,digit}] list instead of scanning .conflict marks.
@@ -5933,6 +6148,8 @@
         compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
       { name: 'cage',   unitNoun: 'cage', enabled: function () { return settings.validateCagesEnabled  !== false; },
         compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
+      { name: 'little killer', unitNoun: 'little killer', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
+        compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
     ];
   }
 
