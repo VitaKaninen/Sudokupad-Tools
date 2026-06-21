@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.58.0
+// @version      3.59.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.58.0';
+  var SCRIPT_VERSION = '3.59.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6150,89 +6150,219 @@
   // `compute` returns { removals, emptiedCells, <unitCount>, unsupported?, <none>? }.
   function constraintValidators() {
     return [
-      { name: 'Kropki', unitNoun: 'dot',  enabled: function () { return settings.validateKropkiEnabled !== false; },
+      { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots', enabled: function () { return settings.validateKropkiEnabled !== false; },
         compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
-      { name: 'cage',   unitNoun: 'cage', enabled: function () { return settings.validateCagesEnabled  !== false; },
+      { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages', enabled: function () { return settings.validateCagesEnabled  !== false; },
         compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
-      { name: 'little killer', unitNoun: 'little killer', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
+      { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
         compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
     ];
   }
 
-  // Public entry point for the "Validate Constraints" button. Runs every enabled
-  // validator, unions their removals (a candidate invalid under EITHER constraint
-  // is removed; deduped per cell/digit), and applies the merged list in one undo
-  // group via _removeCandidatesInternal.
-  function validateConstraints() {
-    if (actionInProgress) return;   // locked out (no popup) — same as the other action buttons
+  // ── "Validate Constraints" button: menu + runners ─────────────────────────
+  // Clicking the button opens a dropdown (openValidateMenu). The user picks ONE
+  // validator to run alone, or "Run all" to run every enabled validator in
+  // sequence, repeating the whole cycle until a full pass removes nothing — a
+  // cross-constraint fixpoint (e.g. a cage removal that unlocks a further Kropki
+  // removal, which the old single combined pass would have missed, forcing the
+  // user to click again). Nothing runs concurrently any more: each validator is
+  // its own compute → apply (its own undo group).
 
-    var vals = constraintValidators().filter(function (v) { return v.enabled(); });
-    if (vals.length === 0) {
-      showRemoveInvalidToast('No constraint validators are enabled. Turn one on in Settings.', 'warning');
-      return;
-    }
+  function pluralUnit(unitNoun, n) { return unitNoun + (n === 1 ? '' : 's'); }
 
-    var results = vals.map(function (v) { return { def: v, comp: v.compute() }; });
+  // Cell keys ("col,row") currently holding centre marks (value cells excluded).
+  // Diffed before/after a run to count how many marked cells were EMPTIED —
+  // accurate across a multi-pass run-all (summing per-pass counts double-counts).
+  function markedCellKeys() {
+    var st = readValidatorBoardState();
+    return st ? new Set(Object.keys(st.centre)) : new Set();
+  }
+  function countEmptiedSince(beforeSet) {
+    var st = readValidatorBoardState();
+    if (!st) return 0;
+    var n = 0;
+    beforeSet.forEach(function (k) { if (st.values[k] == null && !st.centre[k]) n++; });
+    return n;
+  }
+  function emptiedSuffix(emptied) {
+    if (emptied <= 0) return '';
+    return ' ⚠ ' + emptied + ' cell' + (emptied === 1 ? '' : 's') +
+           ' now ha' + (emptied === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
+  }
+  function validateAbortToast(reverted) {
+    if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+    else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+  }
 
-    if (results.some(function (r) { return r.comp.unsupported; })) {
-      showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning');
-      return;
-    }
-
-    // Validators that actually found their constraint in this puzzle.
-    var present = results.filter(function (r) { return !r.comp[r.def.noneKey]; });
-    if (present.length === 0) {
-      var nouns = vals.map(function (v) { return v.unitNoun + 's'; }).join(' or ');
-      showRemoveInvalidToast('No ' + nouns + ' found in this puzzle.', 'success');
-      return;
-    }
-
-    // Union the removals, deduped by cell/digit.
-    var seen = {}, merged = [];
-    present.forEach(function (r) {
-      (r.comp.removals || []).forEach(function (rm) {
-        var k = rm.cellKey + '/' + rm.digit;
-        if (!seen[k]) { seen[k] = 1; merged.push(rm); }
-      });
-    });
-
-    // "Checked N dots and M cages" summary fragment, built from the present validators.
-    function checkedClause() {
-      return present.map(function (r) {
-        var n = r.comp[r.def.countKey] || 0;
-        return n + ' ' + r.def.unitNoun + (n === 1 ? '' : 's');
-      }).join(' and ');
-    }
-
-    if (merged.length === 0) {
-      showRemoveInvalidToast('Checked ' + checkedClause() + ' — no invalid candidates to remove.', 'success');
-      return;
-    }
-
-    var emptiedCells = present.reduce(function (s, r) { return s + (r.comp.emptiedCells || 0); }, 0);
-
-    actionInProgress = true;
+  // Apply ONE validator against the CURRENT board (compute → apply its removals
+  // via the shared paste-path worker). Reads the live DOM, so each call sees prior
+  // removals (this is what lets run-all cross-feed). No lock toggle, no toast —
+  // callers own those. Resolves to { unsupported } | { present:false } |
+  // { present:true, removed, count, aborted?, reverted? }.
+  async function applyOneValidator(def) {
+    var comp = def.compute();
+    if (comp.unsupported) return { unsupported: true };
+    if (comp[def.noneKey]) return { present: false, removed: 0 };
+    var count = comp[def.countKey] || 0;
+    var removals = comp.removals || [];
+    if (removals.length === 0) return { present: true, removed: 0, count: count };
     var preSnap = snapshotPencilmarks();
+    var r = await _removeCandidatesInternal(removals);
+    if (r.aborted) {
+      var reverted = await revertToSnapshot(preSnap, 12);
+      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted };
+    }
+    return { present: true, removed: r.removed, count: count };
+  }
+
+  // Run a single validator (a menu pick): lock, compute+apply once, toast.
+  function runSingleValidator(def) {
+    if (actionInProgress) return;
+    actionInProgress = true;
+    var before = markedCellKeys();
     var t0 = performance.now();
-    _removeCandidatesInternal(merged).then(async function (r) {
-      if (r.aborted) {
-        var reverted = await revertToSnapshot(preSnap, 12);
-        if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating constraints. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
-        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating constraints and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+    applyOneValidator(def).then(function (res) {
+      if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+      if (!res.present) { showRemoveInvalidToast('No ' + pluralUnit(def.unitNoun, 0) + ' found in this puzzle.', 'success'); return; }
+      if (res.aborted) { validateAbortToast(res.reverted); return; }
+      var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
+      if (res.removed === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
+      var emptied = countEmptiedSince(before);
+      var msg = 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
+                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.' + emptiedSuffix(emptied);
+      showRemoveInvalidToast(msg, emptied > 0 ? 'warning' : 'success');
+    }).finally(function () { actionInProgress = false; });
+  }
+
+  // Run every ENABLED validator in sequence, repeating the whole cycle until a
+  // full pass removes nothing (cross-constraint fixpoint). One combined toast.
+  function runAllValidators() {
+    if (actionInProgress) return;
+    var defs = constraintValidators().filter(function (v) { return v.enabled(); });
+    if (defs.length === 0) { showRemoveInvalidToast('No constraint validators are enabled. Turn one on in Settings.', 'warning'); return; }
+    actionInProgress = true;
+    var before = markedCellKeys();
+    var t0 = performance.now();
+    (async function () {
+      var totalRemoved = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
+      var changed = true, guard = 0;
+      while (changed && guard++ < 50) {
+        changed = false;
+        for (var i = 0; i < defs.length; i++) {
+          var res = await applyOneValidator(defs[i]);
+          if (res.unsupported) { unsupported = true; break; }
+          if (res.aborted) { aborted = true; reverted = res.reverted; break; }
+          if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
+          if (res.removed > 0) { totalRemoved += res.removed; changed = true; }
+        }
+        passes++;
+        if (unsupported || aborted) break;
+      }
+      return { totalRemoved: totalRemoved, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted };
+    })().then(function (s) {
+      if (s.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+      if (s.aborted) { validateAbortToast(s.reverted); return; }
+      var names = Object.keys(s.present);
+      if (names.length === 0) {
+        var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
+        showRemoveInvalidToast('No ' + nouns + ' found in this puzzle.', 'success');
         return;
       }
-      var n = r.removed;
-      var msg = 'Removed ' + n + ' invalid candidate' + (n === 1 ? '' : 's') +
-                ' across ' + checkedClause() +
-                ' in ' + formatDuration(performance.now() - t0) + '.';
-      if (emptiedCells > 0) {
-        msg += ' ⚠ ' + emptiedCells + ' cell' + (emptiedCells === 1 ? '' : 's') +
-               ' now ha' + (emptiedCells === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
-        showRemoveInvalidToast(msg, 'warning');
-      } else {
-        showRemoveInvalidToast(msg, 'success');
-      }
+      var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
+      if (s.totalRemoved === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
+      var emptied = countEmptiedSince(before);
+      var msg = 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
+                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
+                ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').' + emptiedSuffix(emptied);
+      showRemoveInvalidToast(msg, emptied > 0 ? 'warning' : 'success');
     }).finally(function () { actionInProgress = false; });
+  }
+
+  // ── Validate dropdown menu ────────────────────────────────────────────────
+  function closeValidateMenu() {
+    var m = document.getElementById('sp-validate-menu');
+    if (m) m.remove();
+    document.removeEventListener('mousedown', onValidateMenuDocDown, true);
+    window.removeEventListener('resize', closeValidateMenu);
+  }
+  function onValidateMenuDocDown(e) {
+    var m = document.getElementById('sp-validate-menu');
+    var btn = document.getElementById('sp-validate-btn');
+    if (m && !m.contains(e.target) && e.target !== btn) closeValidateMenu();
+  }
+  function toggleValidateMenu() {
+    if (document.getElementById('sp-validate-menu')) closeValidateMenu();
+    else openValidateMenu();
+  }
+  function openValidateMenu() {
+    var btn = document.getElementById('sp-validate-btn');
+    if (!btn) return;
+    var bs = getComputedStyle(btn);
+    var bg = bs.backgroundColor || 'rgb(34, 36, 38)';
+    var border = bs.borderColor || 'rgb(62, 68, 70)';
+    var text = bs.color || 'rgb(181, 104, 228)';
+
+    var menu = document.createElement('div');
+    menu.id = 'sp-validate-menu';
+    Object.assign(menu.style, {
+      position: 'fixed', zIndex: '901',
+      minWidth: Math.max(btn.offsetWidth, 180) + 'px',
+      borderRadius: '8px', padding: '4px', boxSizing: 'border-box',
+      fontFamily: 'Roboto, Arial, sans-serif',
+      boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
+    });
+    menu.style.setProperty('background-color', bg, 'important');
+    menu.style.setProperty('border', '1px solid ' + border, 'important');
+
+    function addItem(label, onClick, primary) {
+      var it = document.createElement('div');
+      it.textContent = label;
+      Object.assign(it.style, {
+        padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '13px', fontWeight: primary ? '700' : '600',
+        whiteSpace: 'nowrap', userSelect: 'none',
+      });
+      it.style.setProperty('color', text, 'important');
+      it.addEventListener('mouseenter', function () { it.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+      it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', 'transparent', 'important'); });
+      it.addEventListener('click', function (e) { e.stopPropagation(); closeValidateMenu(); onClick(); });
+      menu.appendChild(it);
+    }
+
+    addItem('Run all (loop until stable)', runAllValidators, true);
+    var sep = document.createElement('div');
+    Object.assign(sep.style, { height: '1px', margin: '4px 6px' });
+    sep.style.setProperty('background-color', border, 'important');
+    menu.appendChild(sep);
+    constraintValidators().filter(function (v) { return v.enabled(); }).forEach(function (def) {
+      addItem(def.menuLabel || def.name, function () { runSingleValidator(def); }, false);
+    });
+
+    document.body.appendChild(menu);
+    positionValidateMenu(menu, btn);
+    // defer so the click that opened the menu doesn't immediately close it
+    setTimeout(function () {
+      document.addEventListener('mousedown', onValidateMenuDocDown, true);
+      window.addEventListener('resize', closeValidateMenu);
+    }, 0);
+  }
+  // Align the menu's right edge to the button; open UPWARD when a downward menu
+  // would run off the bottom (the button sits near the bottom), else downward.
+  // Clamp into view if neither direction fully fits.
+  function positionValidateMenu(menu, btn) {
+    var br = btn.getBoundingClientRect();
+    var mh = menu.offsetHeight, gap = 6, vh = window.innerHeight;
+    menu.style.right = (window.innerWidth - br.right) + 'px';
+    menu.style.left = 'auto';
+    var fitsDown = br.bottom + gap + mh <= vh;
+    var fitsUp = br.top - gap - mh >= 0;
+    if (!fitsDown && fitsUp) {
+      menu.style.bottom = (vh - br.top + gap) + 'px'; menu.style.top = 'auto';
+    } else if (fitsDown) {
+      menu.style.top = (br.bottom + gap) + 'px'; menu.style.bottom = 'auto';
+    } else {
+      menu.style.top = Math.max(8, vh - mh - 8) + 'px'; menu.style.bottom = 'auto';
+    }
   }
 
   function buildActionButton(opts) {
@@ -8287,9 +8417,8 @@
 
   // Floating "Validate Constraints" button — sits above the Auto-fill button in the
   // bottom-right cluster (gear → Auto-fill → Validate). Wider than the square trio so
-  // its label fits; the full description is the native hover tooltip. For now it
-  // validates Kropki dots; future constraints (XV, quadruples, cages) will extend
-  // validateConstraints() and this tooltip.
+  // its label fits; the full description is the native hover tooltip. Clicking it
+  // opens a dropdown (toggleValidateMenu) to run one validator or "Run all".
   function buildValidateButton() {
     if (document.getElementById('sp-validate-btn')) return;
     var colorRefBtn = document.querySelector('[data-control="pen"]') ||
@@ -8305,7 +8434,7 @@
     var btn = document.createElement('button');
     btn.id    = 'sp-validate-btn';
     btn.type  = 'button';
-    btn.title = 'This will remove any invalid digits from cells on Kropki dots';
+    btn.title = 'Validate constraints — opens a menu: run one validator (Kropki dots, cages, little killers) or "Run all" to loop them until no more candidates can be removed';
     btn.textContent = 'Validate Constraints';
     Object.assign(btn.style, {
       position:   'fixed',
@@ -8331,7 +8460,7 @@
     btn.style.setProperty('color', textColor, 'important');
     btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
     spdrFxButton(btn);          // hover-brighten + active-depress + click flash
-    btn.addEventListener('click', function (e) { e.stopPropagation(); validateConstraints(); });
+    btn.addEventListener('click', function (e) { e.stopPropagation(); toggleValidateMenu(); });
     document.body.appendChild(btn);
 
     function applyVisibility() { btn.style.display = settings.showValidateButton !== false ? 'flex' : 'none'; }
