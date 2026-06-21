@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.52.0
+// @version      3.53.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.52.0';
+  var SCRIPT_VERSION = '3.53.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -322,6 +322,7 @@
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
     showEasyShadeButton:          true,   // show/hide the Easy Shade button in the controls bar
     showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
+    showValidateButton:           true,   // show/hide the floating "Validate Constraints" button (Kropki validation, more constraints later)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
     fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
@@ -4840,8 +4841,14 @@
     if (panel && panel.style.display !== 'none') {
       return (56 + panel.offsetHeight + 8) + 'px';
     }
-    // Otherwise clear the floating "Fill single candid." button (sits at
-    // bottom:56px above the gear) so toasts don't cover it.
+    // Otherwise clear the topmost visible floating button in the bottom-right
+    // cluster (gear → Auto-fill → Validate) so toasts don't cover it. The Validate
+    // button sits highest when shown; fall back to the Auto-fill button, then the gear.
+    var vBtn = document.getElementById('sp-validate-btn');
+    if (vBtn && vBtn.offsetHeight > 0 && vBtn.style.display !== 'none') {
+      var vb = parseFloat(getComputedStyle(vBtn).bottom) || 120;
+      return (vb + vBtn.offsetHeight + 8) + 'px';
+    }
     var fsBtn = document.getElementById('sp-fill-single-btn');
     if (fsBtn && fsBtn.offsetHeight > 0) return (56 + fsBtn.offsetHeight + 8) + 'px';
     return '56px';
@@ -5511,6 +5518,253 @@
         if (originalMode) await ensureMode(originalMode);
       }
     })().finally(function () { actionInProgress = false; });
+  }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  //  Validate Constraints — remove candidates that no constraint can satisfy.
+  //  For now this validates KROPKI dots only (black = 2:1 ratio, white =
+  //  consecutive); XV / quadruples / cages are planned but not implemented.
+  //  It only ever REMOVES centre candidates — never adds — so a player's prior
+  //  eliminations are preserved.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Collect every STANDARD Kropki dot (unlabeled black/white circle on a cell
+  // border) and the two cells it joins. Labeled dots (difference-N, ratio-N,
+  // XV/Roman) are skipped — those aren't plain 2:1/consecutive constraints.
+  // Returns [{ type:'black'|'white', a:'col,row', b:'col,row' }]. Reuses the
+  // same detection predicates as the Kropki renderer (isKropkiCircle / fill /
+  // isOnCellBorder / getKropkiAdjacentText), so it claims exactly the dots the
+  // script already treats as Kropki.
+  function collectKropkiDots() {
+    var svg = document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return [];
+    var N = detectGridSize();
+    var dots = [];
+    var seen = {};
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+    svg.querySelectorAll('rect.feature-kropki, rect.textbg, #overlay rect, #underlay rect').forEach(function (rect) {
+      if (!isKropkiCircle(rect)) return;
+      var f = (rect.getAttribute('fill') || '').toUpperCase();
+      if (f !== '#FFFFFF' && f !== '#000000') return;
+      if (!isOnCellBorder(rect, cs)) return;
+      if (getKropkiAdjacentText(rect)) return;   // labeled dot → not a plain Kropki constraint
+      var x = parseFloat(rect.getAttribute('x') || 0), y = parseFloat(rect.getAttribute('y') || 0);
+      var w = parseFloat(rect.getAttribute('width') || 0), h = parseFloat(rect.getAttribute('height') || 0);
+      var cx = x + w / 2, cy = y + h / 2;
+      function gridDist(v) { var m = ((v % cs) + cs) % cs; return Math.min(m, cs - m); }
+      var tol = cs * 0.15, half = cs / 2;
+      var onVert = gridDist(cx) < tol && Math.abs(gridDist(cy) - half) < tol;
+      var a, b;
+      if (onVert) {                              // vertical border → left | right cells
+        var bc = Math.round(cx / cs), r = Math.floor(cy / cs);
+        a = (bc - 1) + ',' + r; b = bc + ',' + r;
+      } else {                                   // horizontal border → top | bottom cells
+        var br = Math.round(cy / cs), c = Math.floor(cx / cs);
+        a = c + ',' + (br - 1); b = c + ',' + br;
+      }
+      var ap = a.split(',').map(Number), bp = b.split(',').map(Number);
+      if (!inGrid(ap[0], ap[1]) || !inGrid(bp[0], bp[1])) return;
+      var key = a + '|' + b + '|' + f;
+      if (seen[key]) return;
+      seen[key] = 1;
+      dots.push({ type: f === '#000000' ? 'black' : 'white', a: a, b: b });
+    });
+    return dots;
+  }
+
+  // Compute which centre candidates violate every Kropki dot they sit on, by
+  // constraint propagation to a fixpoint. A candidate d in cell A (on a dot with
+  // cell B) survives only if B can still hold a partner of d — black: e==2d or
+  // d==2e; white: |d-e|==1 — over the puzzle's digit set. Cells with a value/given
+  // contribute that single digit; empty cells (no value, no marks) are treated as
+  // the full digit set (so they never force a removal) and are never modified. A
+  // removal on one dot can invalidate a candidate on another dot the cell shares,
+  // so we iterate until nothing changes. Pure: reads the DOM, mutates only in-memory
+  // sets, returns the removal list. (Two-pass reasoning — first drop digits with no
+  // possible partner at all, e.g. 5/7/9 on a black dot in 9×9, then drop digits with
+  // no partner in the actual neighbour — falls out of this single rule, because a
+  // digit with no partner anywhere has no partner in the neighbour's set either.)
+  function computeKropkiRemovals() {
+    var digitChars = (settings.digitSet || '').split('');
+    if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) {
+      return { unsupported: true };   // letters / empty → ratio & consecutive are undefined
+    }
+    var uni = {};
+    digitChars.forEach(function (c) { uni[Number(c)] = 1; });
+    function blackPartners(d) {
+      var r = [];
+      if (uni[2 * d] && 2 * d !== d) r.push(2 * d);
+      if (d % 2 === 0 && uni[d / 2] && d / 2 !== d) r.push(d / 2);
+      return r;
+    }
+    function whitePartners(d) {
+      var r = [];
+      if (uni[d - 1]) r.push(d - 1);
+      if (uni[d + 1]) r.push(d + 1);
+      return r;
+    }
+    function partners(type, d) { return type === 'black' ? blackPartners(d) : whitePartners(d); }
+
+    var dots = collectKropkiDots();
+    if (dots.length === 0) return { noDots: true };
+
+    // Read current board state from the DOM.
+    var values = {};   // cellKey → digit value (given or placed)
+    document.querySelectorAll('#cell-values text, #cell-givens text, text.cell-given').forEach(function (t) {
+      var x = t.getAttribute('x'), y = t.getAttribute('y');
+      if (x == null || y == null) return;
+      var v = (t.textContent || '').trim();
+      if (/^[0-9]$/.test(v)) values[cellKeyFromMarkXY(x, y)] = Number(v);
+    });
+    var centre = {};   // cellKey → Set<num> of player's centre candidates (numeric, in digit set)
+    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (text) {
+      var ck = cellKeyFromMarkXY(text.getAttribute('x'), text.getAttribute('y'));
+      if (values[ck] != null) return;   // a placed value owns the cell; ignore stray marks
+      var s = centre[ck] || (centre[ck] = new Set());
+      text.querySelectorAll('tspan').forEach(function (sp) {
+        var dv = sp.getAttribute('data-val');
+        if (/^[0-9]$/.test(dv) && uni[Number(dv)]) s.add(Number(dv));
+      });
+      if (s.size === 0) delete centre[ck];
+    });
+
+    var fullSet = new Set(Object.keys(uni).map(Number));
+    function effSet(key) {
+      if (values[key] != null) return { set: new Set([values[key]]), mod: false };
+      if (centre[key]) return { set: centre[key], mod: true };
+      return { set: fullSet, mod: false };   // unknown cell → universe, never modified
+    }
+    function hasPartner(type, d, otherSet) {
+      var ps = partners(type, d);
+      for (var i = 0; i < ps.length; i++) if (otherSet.has(ps[i])) return true;
+      return false;
+    }
+
+    var removals = [];
+    var changed = true, guard = 0;
+    while (changed && guard++ < 500) {
+      changed = false;
+      dots.forEach(function (dot) {
+        var A = effSet(dot.a), B = effSet(dot.b);
+        if (A.mod) Array.from(A.set).forEach(function (d) {
+          if (!hasPartner(dot.type, d, B.set)) { A.set.delete(d); removals.push({ cellKey: dot.a, digit: String(d) }); changed = true; }
+        });
+        if (B.mod) Array.from(B.set).forEach(function (d) {
+          if (!hasPartner(dot.type, d, A.set)) { B.set.delete(d); removals.push({ cellKey: dot.b, digit: String(d) }); changed = true; }
+        });
+      });
+    }
+
+    // Cells whose candidate list was wiped out entirely → contradiction worth flagging.
+    var emptied = {};
+    removals.forEach(function (r) { if (centre[r.cellKey] && centre[r.cellKey].size === 0) emptied[r.cellKey] = 1; });
+
+    return { removals: removals, dotCount: dots.length, emptiedCells: Object.keys(emptied).length };
+  }
+
+  // Worker: remove a specific list of centre candidates via SudokuPad's own
+  // candidates op (one undo group). Mirrors _removeInvalidPencilmarksInternal but
+  // takes an explicit [{cellKey,digit}] list instead of scanning .conflict marks.
+  // Groups by digit so each digit is one api-select + one toggle (every selected
+  // cell already HAS the digit, so the toggle only removes). Verifies the net diff
+  // and rolls its group back on any unexpected change. Returns
+  // { removed, aborted, rollbackOk, elapsedMs }.
+  async function _removeCandidatesInternal(removals) {
+    var start = performance.now();
+    var app = await Framework.getApp();
+    var cellByKey = {};
+    app.puzzle.cells.forEach(function (c) { cellByKey[c.col + ',' + c.row] = c; });
+    var originalSelection = Array.from(app.puzzle.selectedCells || []);
+    var preSnap = snapshotPencilmarks();
+
+    var byDigit = new Map();
+    removals.forEach(function (r) {
+      if (!byDigit.has(r.digit)) byDigit.set(r.digit, []);
+      byDigit.get(r.digit).push(r.cellKey);
+    });
+
+    try {
+      app.act({ type: 'groupstart' });
+      var iter = byDigit.entries(), step;
+      while (!(step = iter.next()).done) {
+        var digit = step.value[0];
+        var cells = step.value[1].map(function (k) { return cellByKey[k]; }).filter(Boolean);
+        if (cells.length === 0) continue;
+        app.deselect();
+        app.select(cells);
+        app.act({ type: 'candidates', arg: digit });
+        await sleep(20);
+      }
+      app.act({ type: 'groupend' });
+      await sleep(20);
+
+      // Verify: the only legitimate change is removing exactly the listed centre marks.
+      var diff = diffSnapshots(preSnap, snapshotPencilmarks());
+      var expected = new Set(removals.map(function (r) { return r.cellKey + ',' + r.digit; }));
+      var badRemoved = diff.removed.centre.filter(function (k) { return !expected.has(k); }).length;
+      var unexpected = diff.added.centre.length + diff.added.corner.length +
+                       diff.added.values.length + diff.added.colors.length +
+                       diff.removed.corner.length + diff.removed.values.length +
+                       diff.removed.colors.length + badRemoved;
+      if (unexpected > 0) {
+        console.error('[spDR-fix] VALIDATE unexpected diff', diff);
+        var undoBtn = getModeButton('undo');
+        var rollbackOk = false;
+        if (undoBtn) {
+          dispatchClickEl(undoBtn);
+          for (var att = 0; att < 8; att++) {
+            await sleep(25);
+            if (diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
+          }
+        }
+        return { removed: 0, aborted: true, rollbackOk: rollbackOk, elapsedMs: performance.now() - start };
+      }
+      return { removed: diff.removed.centre.length, aborted: false, elapsedMs: performance.now() - start };
+    } finally {
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
+    }
+  }
+
+  // Public entry point for the "Validate Constraints" button.
+  function validateConstraints() {
+    if (actionInProgress) return;   // locked out (no popup) — same as the other action buttons
+    var comp = computeKropkiRemovals();
+    if (comp.unsupported) {
+      showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning');
+      return;
+    }
+    if (comp.noDots) {
+      showRemoveInvalidToast('No Kropki dots found in this puzzle.', 'success');
+      return;
+    }
+    if (comp.removals.length === 0) {
+      showRemoveInvalidToast('Checked ' + comp.dotCount + ' Kropki dot' + (comp.dotCount === 1 ? '' : 's') + ' — no invalid candidates to remove.', 'success');
+      return;
+    }
+    actionInProgress = true;
+    var preSnap = snapshotPencilmarks();
+    var t0 = performance.now();
+    _removeCandidatesInternal(comp.removals).then(async function (r) {
+      if (r.aborted) {
+        var reverted = await revertToSnapshot(preSnap, 12);
+        if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating Kropki dots. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating Kropki dots and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+        return;
+      }
+      var n = r.removed;
+      var msg = 'Removed ' + n + ' invalid Kropki candidate' + (n === 1 ? '' : 's') +
+                ' across ' + comp.dotCount + ' dot' + (comp.dotCount === 1 ? '' : 's') +
+                ' in ' + formatDuration(performance.now() - t0) + '.';
+      if (comp.emptiedCells > 0) {
+        msg += ' ⚠ ' + comp.emptiedCells + ' cell' + (comp.emptiedCells === 1 ? '' : 's') +
+               ' now ha' + (comp.emptiedCells === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
+        showRemoveInvalidToast(msg, 'warning');
+      } else {
+        showRemoveInvalidToast(msg, 'success');
+      }
+    }).finally(function () { actionInProgress = false; });
   }
 
   function buildActionButton(opts) {
@@ -6351,7 +6605,7 @@
       flexShrink: '0',
     });
     spdrFxButton(actionResetBtn);
-    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'showFillSingleButton', 'fsSelectDelayMs', 'fsFillDelayMs', 'fsUndoDelayMs', 'suppressStartDialog', 'showToasts', 'toastPersist'];
+    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'showFillSingleButton', 'showValidateButton', 'fsSelectDelayMs', 'fsFillDelayMs', 'fsUndoDelayMs', 'suppressStartDialog', 'showToasts', 'toastPersist'];
     actionResetBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       ACTION_RESET_KEYS.forEach(function (k) { if (k in DEFAULTS) settings[k] = DEFAULTS[k]; });
@@ -6423,6 +6677,31 @@
       controlSyncers['showFillSingleButton'] = function () {
         if (btnSync) btnSync();
         fsVisCb.checked = settings.showFillSingleButton !== false;
+      };
+    })();
+
+    // "Validate Constraints" button visibility (Kropki validation; more constraints later)
+    var validateVisCbRow = document.createElement('label');
+    validateVisCbRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-size:12px;';
+    var validateVisCb = document.createElement('input');
+    validateVisCb.id = 'sp-validate-vis-cb';
+    validateVisCb.type = 'checkbox';
+    validateVisCb.checked = settings.showValidateButton !== false;
+    Object.assign(validateVisCb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+    validateVisCb.addEventListener('change', function () {
+      settings.showValidateButton = validateVisCb.checked;
+      saveSettings(settings);
+      if (controlSyncers['showValidateButton']) controlSyncers['showValidateButton']();
+    });
+    validateVisCbRow.appendChild(validateVisCb);
+    validateVisCbRow.appendChild(document.createTextNode('Show Validate Constraints button'));
+    actionSection.appendChild(validateVisCbRow);
+    // Keep the checkbox in sync when the button's controlSyncer is invoked (e.g. section reset).
+    (function () {
+      var btnSync = controlSyncers['showValidateButton'];
+      controlSyncers['showValidateButton'] = function () {
+        if (btnSync) btnSync();
+        validateVisCb.checked = settings.showValidateButton !== false;
       };
     })();
 
@@ -7538,10 +7817,65 @@
     setTimeout(resize, 500);
   }
 
+  // Floating "Validate Constraints" button — sits above the Auto-fill button in the
+  // bottom-right cluster (gear → Auto-fill → Validate). Wider than the square trio so
+  // its label fits; the full description is the native hover tooltip. For now it
+  // validates Kropki dots; future constraints (XV, quadruples, cages) will extend
+  // validateConstraints() and this tooltip.
+  function buildValidateButton() {
+    if (document.getElementById('sp-validate-btn')) return;
+    var colorRefBtn = document.querySelector('[data-control="pen"]') ||
+                      document.querySelector('[data-control="corner"]') ||
+                      document.querySelector('[data-control="centre"]') ||
+                      document.querySelector('[data-control="normal"]');
+    var colorRefStyle = colorRefBtn ? getComputedStyle(colorRefBtn) : null;
+    var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
+                      ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
+    var textColor = 'rgb(181, 104, 228)';                                  // literal theme purple (stable; see buildActionButton)
+    var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
+
+    var btn = document.createElement('button');
+    btn.id    = 'sp-validate-btn';
+    btn.type  = 'button';
+    btn.title = 'This will remove any invalid digits from cells on Kropki dots';
+    btn.textContent = 'Validate Constraints';
+    Object.assign(btn.style, {
+      position:   'fixed',
+      bottom:     '120px',         // above the Auto-fill button (bottom:56px, 56px tall) with an 8px gap
+      right:      '12px',          // right edge aligns with the gear / Auto-fill column
+      height:     '36px',
+      padding:    '0 12px',
+      borderRadius: '8px',
+      cursor:     'pointer',
+      fontFamily: 'Roboto, Arial, sans-serif',
+      fontWeight: '700',
+      fontSize:   '13px',
+      lineHeight: '1.2',
+      whiteSpace: 'nowrap',
+      display:    'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex:     '900',           // below the native dialog scrim (z 1000) so it dims with the page
+      boxShadow:  '0 2px 8px rgba(0,0,0,0.4)',
+      boxSizing:  'border-box',
+    });
+    btn.style.setProperty('background-color', bgColor, 'important');
+    btn.style.setProperty('color', textColor, 'important');
+    btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    spdrFxButton(btn);          // hover-brighten + active-depress + click flash
+    btn.addEventListener('click', function (e) { e.stopPropagation(); validateConstraints(); });
+    document.body.appendChild(btn);
+
+    function applyVisibility() { btn.style.display = settings.showValidateButton !== false ? 'flex' : 'none'; }
+    applyVisibility();
+    controlSyncers['showValidateButton'] = applyVisibility;
+  }
+
   function buildAllUI() {
     suppressStartDialog();
     buildVersionLabel();
     buildFillSingleButton();
+    buildValidateButton();
     startGapAutoScan();   // TEMP migration dev tool (see GAPSCAN_AUTO)
     buildSettingsUI();
     // Selection-border offset observer is feature-independent of DarkReader
