@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.50.0
+// @version      3.51.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.50.0';
+  var SCRIPT_VERSION = '3.51.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1406,29 +1406,62 @@
   // paths, not just bulb-matched shafts (was the v2.122 thermo-only rule; bulbless
   // line puzzles like 9p6eahqmux were missed before v2.140). Stroke width is never
   // touched.
+  //
+  // TWO shapes the path's-own-stroke rule used to miss, both now covered (v3.51):
+  //  • GROUP-stroked arrows — some authors stroke the whole arrow <g> and leave the
+  //    shaft path + arrowhead <marker> to inherit it (Bill Murphy "Pathfinder"
+  //    nr59t9p34q, ~160 catalog puzzles). lineStrokeSrc resolves the inherited colour
+  //    and we set the inline override on the visible paths (incl. the marker's content
+  //    path, which recolours the rendered arrowhead — verified), never the <g>, so
+  //    apply + highlight stay on the same element set.
+  //  • FILLED arrow shapes — block arrows (clover "Cupid"), diamonds (clover
+  //    "Borderlands" lte0wsz2f0), filled directional arrows (Bill Murphy "Dead or
+  //    Alive" 1q8ntzcmyn) are an #arrows <path fill="#CFCFCF">. The fill is the bulk
+  //    of the shape, so shading only the stroke left the gray body bright; shade the
+  //    fill through the same gray/colour router.
+  // ATTRIBUTES only (never our inline style) → re-applying is idempotent.
+  function lineStrokeSrc(el) {
+    for (var n = el; n && n.id !== 'arrows'; n = n.parentElement) {
+      if (n.getAttribute) { var s = n.getAttribute('stroke'); if (s) return s; }
+    }
+    return null;
+  }
   function applyLineStroke(el) {
-    var c = parseColor(el.getAttribute('stroke') || '');
-    if (!c || c.a === 0) return;
-    if (!settings.underlayEnabled) {
-      clearInline(el, 'stroke');
-      return;
-    }
+    if (!settings.underlayEnabled) { clearInline(el, 'stroke'); return; }
+    var c = parseColor(lineStrokeSrc(el) || '');
+    if (!c || c.a === 0) { clearInline(el, 'stroke'); return; }
     var sh = computeObjectShade(c);
-    if (!sh) {
-      clearInline(el, 'stroke');
-      return;
-    }
+    if (!sh) { clearInline(el, 'stroke'); return; }
     el.style.setProperty('stroke', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
     el.style.setProperty('stroke-opacity', String(sh.a), 'important');
   }
+  function applyLineFill(el) {
+    if (!settings.underlayEnabled) { clearInline(el, 'fill'); return; }
+    var c = parseColor(el.getAttribute('fill') || '');
+    if (!c || c.a === 0) { clearInline(el, 'fill'); return; }
+    var sh = computeObjectShade(c);
+    if (!sh) { clearInline(el, 'fill'); return; }
+    el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
+    el.style.setProperty('fill-opacity', String(sh.a), 'important');
+  }
   function isLineStroke(el) {
     if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
-    var s = el.getAttribute('stroke');
-    return !!(s && s !== 'none');
+    var s = lineStrokeSrc(el);
+    if (!s || s === 'none') return false;
+    var c = parseColor(s);
+    return !!(c && c.a !== 0);
+  }
+  function isLineFill(el) {
+    if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
+    var f = el.getAttribute('fill');
+    if (!f || f === 'none') return false;
+    var c = parseColor(f);
+    return !!(c && c.a !== 0);
   }
   function fixAllLines(svg) {
-    svg.querySelectorAll('#arrows path[stroke]').forEach(function (el) {
+    svg.querySelectorAll('#arrows path').forEach(function (el) {
       if (isLineStroke(el)) applyLineStroke(el);
+      if (isLineFill(el))   applyLineFill(el);
     });
   }
 
@@ -4312,8 +4345,13 @@
     hqa(CAGE_FILL_SEL).forEach(function (e) { out.push(e); });
     return out;
   }
-  // The exact set of line strokes Object-shading governs — mirrors fixAllLines.
-  function objLineSources() { return hqa('#arrows path[stroke]').filter(isLineStroke); }
+  // The exact sets of line strokes / line fills Object-shading governs — mirror
+  // fixAllLines (incl. group-inherited strokes via isLineStroke/lineStrokeSrc and
+  // filled arrow shapes via isLineFill). A path that is both stroked AND filled (the
+  // #CFCFCF block arrows / diamonds) appears in both; harmless — the objColored/objGray
+  // highlight de-dupes to cell outlines.
+  function objLineStrokeSources() { return hqa('#arrows path').filter(isLineStroke); }
+  function objLineFillSources()   { return hqa('#arrows path').filter(isLineFill); }
   // The grayscale #overlay marker texts Object-shading governs — mirrors
   // fixOverlayMarkerText's gates (skip Kropki labels; original colour must be gray).
   // Always gray (coloured overlay text is left to DR), so they only ever feed the
@@ -4334,15 +4372,16 @@
     });
   }
   function fillColorIsGray(el) { var c = parseColor(el.getAttribute('fill') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
-  function strokeColorIsGray(el) { var c = parseColor(el.getAttribute('stroke') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
   function hasPaintedStroke(el) { var s = el.getAttribute('stroke'); if (!s || s === 'none') return false; var c = parseColor(s); return !!(c && c.a !== 0); }
   // Colored vs gray routing matches computeObjectShade: fills by fill colour, lines
   // by stroke colour. Borders = shape OUTLINES only (applyShapeStroke targets), NOT
   // lines — lines route through the colored/gray sliders, not the Border slider.
+  function lineStrokeColorIsGray(el) { var c = parseColor(lineStrokeSrc(el) || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
   function objShade(wantGray) {
     var out = [];
     objFillSources().forEach(function (e) { var g = fillColorIsGray(e); if (g === wantGray) out.push(e); });
-    objLineSources().forEach(function (e) { var g = strokeColorIsGray(e); if (g === wantGray) out.push(e); });
+    objLineStrokeSources().forEach(function (e) { var g = lineStrokeColorIsGray(e); if (g === wantGray) out.push(e); });
+    objLineFillSources().forEach(function (e) { var g = fillColorIsGray(e); if (g === wantGray) out.push(e); });
     if (wantGray) objTextSources().forEach(function (e) { out.push(e); });  // gray overlay marker text
     return out;
   }
