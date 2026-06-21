@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.57.0
+// @version      3.58.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.57.0';
+  var SCRIPT_VERSION = '3.58.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5907,8 +5907,12 @@
   // DOM-based and era-independent: SudokuPad renders every little killer (native
   // SCL or legacy-cosmetic, e.g. vurjqaca3k) the same way — a numeric label
   // anchored just OUTSIDE the grid plus a short diagonal arrow in #arrows. We read
-  // the sum from the label and the diagonal's family (c−r vs c+r) from the arrow
-  // shaft's vector, then walk the line across the grid. Guards keep it specific
+  // the sum from the label and, from the arrow, its TIP (which points at a real
+  // grid corner) plus its direction signs; the first in-grid cell is the corner's
+  // neighbour in the pointing direction, then we walk the diagonal by (±1,±1).
+  // (Using the tip-corner + direction — rather than a c±r constant off the label
+  // centre — avoids the half-cell off-by-one that the anti-diagonal otherwise
+  // hits.) Guards keep it specific
   // (only an outside-grid numeric label matched to an outside-grid ~45° arrow
   // counts), so sandwich/X-sum frame numbers and in-grid arrow constraints are
   // ignored; if a future puzzle renders LKs differently it simply isn't detected
@@ -5940,7 +5944,8 @@
         if (Math.abs(dx) < cs * 0.05 || Math.abs(dy) < cs * 0.05) return;   // must be diagonal
         if (Math.abs(Math.abs(dx) - Math.abs(dy)) > cs * 0.3) return;        // ~45° only
         if (!outside(x1, y1)) return;                                        // tail outside grid
-        shafts.push({ x: x1, y: y1, fam: dx * dy > 0 ? 1 : -1, used: false });
+        shafts.push({ x: x1, y: y1, tipx: x2, tipy: y2,
+          sgnx: Math.sign(dx), sgny: Math.sign(dy), used: false });
       });
     }
     if (shafts.length === 0) return [];
@@ -5962,12 +5967,13 @@
       });
       if (!best) return;
       best.used = true;
-      var ar = y / cs, ac = x / cs;
-      var K = Math.round(best.fam > 0 ? ac - ar : ac + ar);   // c−r=K (fam>0) or c+r=K (fam<0)
+      // Arrow tip → the grid corner it points at; first cell = the corner's
+      // neighbour in the pointing direction; then walk the diagonal by (sgn,sgn).
+      var R = Math.round(best.tipy / cs), C = Math.round(best.tipx / cs);
       var keys = [];
-      for (var r = 0; r < N; r++) {
-        var c = best.fam > 0 ? r + K : K - r;
-        if (c >= 0 && c < N) keys.push(c + ',' + r);
+      for (var r = best.sgny > 0 ? R : R - 1, c = best.sgnx > 0 ? C : C - 1;
+           r >= 0 && r < N && c >= 0 && c < N; r += best.sgny, c += best.sgnx) {
+        keys.push(c + ',' + r);
       }
       if (keys.length < 1) return;
       var sig = keys.join(' ') + '=' + txt;
