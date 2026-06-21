@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.55.0
+// @version      3.56.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.55.0';
+  var SCRIPT_VERSION = '3.56.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -323,6 +323,8 @@
     showEasyShadeButton:          true,   // show/hide the Easy Shade button in the controls bar
     showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
     showValidateButton:           true,   // show/hide the floating "Validate Constraints" button (Kropki validation, more constraints later)
+    validateKropkiEnabled:        true,   // "Validate Constraints": run the Kropki-dot validator (future per-validator toggle)
+    validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
     fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
@@ -5592,13 +5594,46 @@
   // grid. Monotonic (sets only shrink) so it always terminates; the pass guard is
   // belt-and-braces. Pure w.r.t. the board: reads the DOM and mutates only
   // in-memory sets, returning the removal list without touching the board.
-  function computeKropkiRemovals() {
+  // Shared board read for the constraint validators (Kropki, cages, …). Returns
+  // null when the digit set isn't numeric (ratio/sum/consecutive are undefined for
+  // letter grids). Otherwise a snapshot of the CURRENT board:
+  //   uni     — { digit:1 } membership map of the puzzle's digit set
+  //   fullSet — Set<num> of that digit set (an empty/unmarked cell stands in as this)
+  //   values  — cellKey → placed/given digit (a value owns its cell)
+  //   centre  — cellKey → Set<num> of the player's centre pencilmarks (numeric, in set)
+  // Read-only w.r.t. the board: every validator works on copies of these sets and
+  // returns a removal list without touching the DOM. Cell keys are "col,row"
+  // 0-indexed (cellKeyFromMarkXY), matching app.puzzle.cells' c.col+','+c.row.
+  function readValidatorBoardState() {
     var digitChars = (settings.digitSet || '').split('');
-    if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) {
-      return { unsupported: true };   // letters / empty → ratio & consecutive are undefined
-    }
+    if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) return null;
     var uni = {};
     digitChars.forEach(function (c) { uni[Number(c)] = 1; });
+    var values = {};
+    document.querySelectorAll('#cell-values text, #cell-givens text, text.cell-given').forEach(function (t) {
+      var x = t.getAttribute('x'), y = t.getAttribute('y');
+      if (x == null || y == null) return;
+      var v = (t.textContent || '').trim();
+      if (/^[0-9]$/.test(v)) values[cellKeyFromMarkXY(x, y)] = Number(v);
+    });
+    var centre = {};
+    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (text) {
+      var ck = cellKeyFromMarkXY(text.getAttribute('x'), text.getAttribute('y'));
+      if (values[ck] != null) return;   // a placed value owns the cell; ignore stray marks
+      var s = centre[ck] || (centre[ck] = new Set());
+      text.querySelectorAll('tspan').forEach(function (sp) {
+        var dv = sp.getAttribute('data-val');
+        if (/^[0-9]$/.test(dv) && uni[Number(dv)]) s.add(Number(dv));
+      });
+      if (s.size === 0) delete centre[ck];
+    });
+    return { uni: uni, fullSet: new Set(Object.keys(uni).map(Number)), values: values, centre: centre };
+  }
+
+  function computeKropkiRemovals() {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };   // letters / empty → ratio & consecutive are undefined
+    var uni = st.uni;
     function blackPartners(d) {
       var r = [];
       if (uni[2 * d] && 2 * d !== d) r.push(2 * d);
@@ -5616,27 +5651,7 @@
     var dots = collectKropkiDots();
     if (dots.length === 0) return { noDots: true };
 
-    // Read current board state from the DOM.
-    var values = {};   // cellKey → digit value (given or placed)
-    document.querySelectorAll('#cell-values text, #cell-givens text, text.cell-given').forEach(function (t) {
-      var x = t.getAttribute('x'), y = t.getAttribute('y');
-      if (x == null || y == null) return;
-      var v = (t.textContent || '').trim();
-      if (/^[0-9]$/.test(v)) values[cellKeyFromMarkXY(x, y)] = Number(v);
-    });
-    var centre = {};   // cellKey → Set<num> of player's centre candidates (numeric, in digit set)
-    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (text) {
-      var ck = cellKeyFromMarkXY(text.getAttribute('x'), text.getAttribute('y'));
-      if (values[ck] != null) return;   // a placed value owns the cell; ignore stray marks
-      var s = centre[ck] || (centre[ck] = new Set());
-      text.querySelectorAll('tspan').forEach(function (sp) {
-        var dv = sp.getAttribute('data-val');
-        if (/^[0-9]$/.test(dv) && uni[Number(dv)]) s.add(Number(dv));
-      });
-      if (s.size === 0) delete centre[ck];
-    });
-
-    var fullSet = new Set(Object.keys(uni).map(Number));
+    var values = st.values, centre = st.centre, fullSet = st.fullSet;
     // A neighbour cell's candidate set: its value/given (one digit), its centre
     // marks, or — for an empty cell — the full digit set (so an unfilled neighbour
     // never forces a removal). Read-only: never mutated during the pass.
@@ -5681,6 +5696,167 @@
     markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
 
     return { removals: removals, dotCount: dots.length, emptiedCells: emptied };
+  }
+
+  // ── Cage validator ────────────────────────────────────────────────────────
+  // Standard killer cages (a small total in a corner, no repeated digit). For
+  // each cage we generate every distinct-digit combination matching its size and
+  // sum, then remove any centre candidate that NO combination can place — where
+  // "can place" means there's a full distinct-cell assignment of one such
+  // combination to the cage's cells (respecting every cell's current candidates)
+  // with this candidate in this cell. Independent of the Kropki validator (own
+  // board read, own removal list) so the two can be toggled separately later.
+
+  // Read the puzzle's killer cages from the parsed model (synchronous, side-effect
+  // -free Framework.app getter — same access pattern as readModelExtraRegions).
+  // Returns [{ keys:[<col,row>…], sum:<num> }] for cages we can validate: a numeric
+  // total, distinct digits (unique !== false), at least two cells, all cells in
+  // grid. Cages without a sum (plain regions, sandwich clues) or that allow repeats
+  // are skipped. Cell strings "r1c3" are 1-indexed (row,col) → 0-indexed "col,row".
+  function getKillerCages() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return [];
+    var N = detectGridSize();
+    var out = [];
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.unique === false) return;
+      var sum = typeof cage.sum === 'number' ? cage.sum : Number(cage.value);
+      if (!isFinite(sum)) return;
+      var cellStr = cage.cells || '';
+      var keys = [], ok = true, m, re = /r(\d+)c(\d+)/gi;
+      while ((m = re.exec(cellStr)) !== null) {
+        var col = Number(m[2]) - 1, row = Number(m[1]) - 1;
+        if (col < 0 || row < 0 || col >= N || row >= N) { ok = false; break; }
+        keys.push(col + ',' + row);
+      }
+      if (ok && keys.length >= 2) out.push({ keys: keys, sum: sum });
+    });
+    return out;
+  }
+
+  // All distinct-digit combinations of `size` digits drawn from `digits` (sorted
+  // ascending) that sum to `target`. Each combination is returned as an array of
+  // numbers. Plain subset-sum recursion; digit counts are tiny (≤ grid size).
+  function cageCombinations(digits, size, target) {
+    var res = [];
+    (function rec(start, chosen, remaining, need) {
+      if (need === 0) { if (remaining === 0) res.push(chosen.slice()); return; }
+      for (var i = start; i < digits.length; i++) {
+        var d = digits[i];
+        if (d > remaining) break;                       // sorted → no larger digit fits
+        chosen.push(d);
+        rec(i + 1, chosen, remaining - d, need - 1);
+        chosen.pop();
+      }
+    })(0, [], target, size);
+    return res;
+  }
+
+  // Can the digits be placed one-per-cell (a perfect matching), where digit i may
+  // occupy cell j iff allowed(i, j)? Kuhn's augmenting-path bipartite matching;
+  // returns true only when every digit finds a distinct cell. With equal counts
+  // that means every cell is filled — i.e. a complete legal fill of the cage.
+  function hasPerfectMatching(numDigits, numCells, allowed) {
+    var matchCell = new Array(numCells).fill(-1);   // cell → digit index, or -1
+    function augment(di, visited) {
+      for (var cj = 0; cj < numCells; cj++) {
+        if (allowed(di, cj) && !visited[cj]) {
+          visited[cj] = true;
+          if (matchCell[cj] === -1 || augment(matchCell[cj], visited)) {
+            matchCell[cj] = di;
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    for (var di = 0; di < numDigits; di++) {
+      if (!augment(di, new Array(numCells).fill(false))) return false;
+    }
+    return true;
+  }
+
+  // Compute centre-candidate removals forced by the killer cages, iterated to a
+  // fixpoint (a removal in one cell can invalidate a neighbour's only supporting
+  // combination, so we re-sweep until a full pass changes nothing). Pure w.r.t. the
+  // board — works on copies of the candidate sets and returns the removal list.
+  function computeCageRemovals() {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cages = getKillerCages();
+    if (cages.length === 0) return { noCages: true };
+
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
+
+    // Per-cage combination list. A cage with ZERO valid combinations (an impossible
+    // total, or a digit set that doesn't match the puzzle's) is dropped rather than
+    // allowed to wipe out every candidate — the validator must never over-remove.
+    var active = [];
+    cages.forEach(function (cage) {
+      var combos = cageCombinations(digitList, cage.keys.length, cage.sum)
+        .map(function (c) { return { arr: c, set: new Set(c) }; });
+      if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
+    });
+    if (active.length === 0) return { noCages: true };
+
+    // Working copies of the player's centre marks (the only cells we may modify).
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                // empty cell → unconstrained, never modified
+    }
+
+    // Does some combination of `cage` admit a full fill with digit d in cell C?
+    // Fix d→C, then require a perfect matching of the combo's remaining digits onto
+    // the cage's remaining cells (each respecting that cell's current candidates).
+    function cageSupports(cage, cIdx, d) {
+      var keys = cage.keys;
+      for (var ci = 0; ci < cage.combos.length; ci++) {
+        var combo = cage.combos[ci];
+        if (!combo.set.has(d)) continue;
+        // remaining digits (the combo minus one occurrence of d) and cells (minus C)
+        var digits = [], used = false;
+        for (var i = 0; i < combo.arr.length; i++) {
+          if (!used && combo.arr[i] === d) { used = true; continue; }
+          digits.push(combo.arr[i]);
+        }
+        var cells = [];
+        for (var j = 0; j < keys.length; j++) if (j !== cIdx) cells.push(cellSet(keys[j]));
+        // each remaining cell must still be able to hold a combo digit; matching
+        // confirms a *distinct*-cell assignment exists.
+        if (hasPerfectMatching(digits.length, cells.length, function (a, b) {
+          return cells[b].has(digits[a]);
+        })) return true;
+      }
+      return false;
+    }
+
+    var removals = [], seen = {};
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      active.forEach(function (cage) {
+        cage.keys.forEach(function (C, cIdx) {
+          if (st.values[C] != null || !work[C]) return;   // only cells with player marks
+          Array.from(work[C]).forEach(function (d) {       // snapshot: set mutates in loop
+            if (!cageSupports(cage, cIdx, d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, cageCount: active.length, emptiedCells: emptied };
   }
 
   // Worker: remove a specific list of centre candidates via SudokuPad's own
@@ -5747,39 +5923,88 @@
     }
   }
 
-  // Public entry point for the "Validate Constraints" button.
+  // The validators wired into the button. Each is independent (own board read, own
+  // removal list) so a future Settings panel can toggle them individually — to add
+  // one, append an entry here. `enabled` reads its settings flag (default on);
+  // `compute` returns { removals, emptiedCells, <unitCount>, unsupported?, <none>? }.
+  function constraintValidators() {
+    return [
+      { name: 'Kropki', unitNoun: 'dot',  enabled: function () { return settings.validateKropkiEnabled !== false; },
+        compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
+      { name: 'cage',   unitNoun: 'cage', enabled: function () { return settings.validateCagesEnabled  !== false; },
+        compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
+    ];
+  }
+
+  // Public entry point for the "Validate Constraints" button. Runs every enabled
+  // validator, unions their removals (a candidate invalid under EITHER constraint
+  // is removed; deduped per cell/digit), and applies the merged list in one undo
+  // group via _removeCandidatesInternal.
   function validateConstraints() {
     if (actionInProgress) return;   // locked out (no popup) — same as the other action buttons
-    var comp = computeKropkiRemovals();
-    if (comp.unsupported) {
+
+    var vals = constraintValidators().filter(function (v) { return v.enabled(); });
+    if (vals.length === 0) {
+      showRemoveInvalidToast('No constraint validators are enabled. Turn one on in Settings.', 'warning');
+      return;
+    }
+
+    var results = vals.map(function (v) { return { def: v, comp: v.compute() }; });
+
+    if (results.some(function (r) { return r.comp.unsupported; })) {
       showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning');
       return;
     }
-    if (comp.noDots) {
-      showRemoveInvalidToast('No Kropki dots found in this puzzle.', 'success');
+
+    // Validators that actually found their constraint in this puzzle.
+    var present = results.filter(function (r) { return !r.comp[r.def.noneKey]; });
+    if (present.length === 0) {
+      var nouns = vals.map(function (v) { return v.unitNoun + 's'; }).join(' or ');
+      showRemoveInvalidToast('No ' + nouns + ' found in this puzzle.', 'success');
       return;
     }
-    if (comp.removals.length === 0) {
-      showRemoveInvalidToast('Checked ' + comp.dotCount + ' Kropki dot' + (comp.dotCount === 1 ? '' : 's') + ' — no invalid candidates to remove.', 'success');
+
+    // Union the removals, deduped by cell/digit.
+    var seen = {}, merged = [];
+    present.forEach(function (r) {
+      (r.comp.removals || []).forEach(function (rm) {
+        var k = rm.cellKey + '/' + rm.digit;
+        if (!seen[k]) { seen[k] = 1; merged.push(rm); }
+      });
+    });
+
+    // "Checked N dots and M cages" summary fragment, built from the present validators.
+    function checkedClause() {
+      return present.map(function (r) {
+        var n = r.comp[r.def.countKey] || 0;
+        return n + ' ' + r.def.unitNoun + (n === 1 ? '' : 's');
+      }).join(' and ');
+    }
+
+    if (merged.length === 0) {
+      showRemoveInvalidToast('Checked ' + checkedClause() + ' — no invalid candidates to remove.', 'success');
       return;
     }
+
+    var emptiedCells = present.reduce(function (s, r) { return s + (r.comp.emptiedCells || 0); }, 0);
+
     actionInProgress = true;
     var preSnap = snapshotPencilmarks();
     var t0 = performance.now();
-    _removeCandidatesInternal(comp.removals).then(async function (r) {
+    _removeCandidatesInternal(merged).then(async function (r) {
       if (r.aborted) {
         var reverted = await revertToSnapshot(preSnap, 12);
-        if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating Kropki dots. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
-        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating Kropki dots and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+        if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating constraints. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating constraints and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
         return;
       }
       var n = r.removed;
-      var msg = 'Removed ' + n + ' invalid Kropki candidate' + (n === 1 ? '' : 's') +
-                ' across ' + comp.dotCount + ' dot' + (comp.dotCount === 1 ? '' : 's') +
+      var msg = 'Removed ' + n + ' invalid candidate' + (n === 1 ? '' : 's') +
+                ' across ' + checkedClause() +
                 ' in ' + formatDuration(performance.now() - t0) + '.';
-      if (comp.emptiedCells > 0) {
-        msg += ' ⚠ ' + comp.emptiedCells + ' cell' + (comp.emptiedCells === 1 ? '' : 's') +
-               ' now ha' + (comp.emptiedCells === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
+      if (emptiedCells > 0) {
+        msg += ' ⚠ ' + emptiedCells + ' cell' + (emptiedCells === 1 ? '' : 's') +
+               ' now ha' + (emptiedCells === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
         showRemoveInvalidToast(msg, 'warning');
       } else {
         showRemoveInvalidToast(msg, 'success');
