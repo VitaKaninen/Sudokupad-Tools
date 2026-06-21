@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.51.0
+// @version      3.52.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features. The 3.x successor to the DarkReader-fighting 2.x (main branch); install ONE of the two at a time.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -215,7 +215,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.51.0';
+  var SCRIPT_VERSION = '3.52.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1456,7 +1456,15 @@
     var f = el.getAttribute('fill');
     if (!f || f === 'none') return false;
     var c = parseColor(f);
-    return !!(c && c.a !== 0);
+    if (!c || c.a === 0) return false;
+    // White / near-white fills are a SEMANTIC distinct from grey and must NOT be
+    // shaded to the same grey as #CFCFCF fills — e.g. Bill Murphy's "Dead or Alive"
+    // arrows (gbvrbw6nh8, 1q8ntzcmyn): WHITE arrows vs GREY arrows must stay tellable
+    // apart. Leaving white to the native dark theme ([fill=#FFFFFF]→dm-black) renders
+    // it as a hollow/dark arrow, distinct from the solid grey ones. Mirrors
+    // shouldShadeOverlayRect's near-white skip (the grey #CFCFCF=207 fills still shade).
+    if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false;
+    return true;
   }
   function fixAllLines(svg) {
     svg.querySelectorAll('#arrows path').forEach(function (el) {
