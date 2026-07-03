@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.63.0
+// @version      3.64.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.63.0';
+  var SCRIPT_VERSION = '3.64.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5678,6 +5678,15 @@
     var out = [];
     cp.cages.forEach(function (cage) {
       if (!cage || cage.unique === false) return;
+      // cp.cages also carries SudokuPad's auto-generated standard-region pseudo-cages
+      // (each row/column/box modeled as its own unique-sum-45 "cage") alongside
+      // user-authored killer cages. Only style:'killer' is a real killer cage;
+      // row/col are style:undefined,type:'rowcol' and boxes are style:'box' — both
+      // must be excluded or this validator silently does full row/col/box elimination
+      // (naked/hidden singles) instead of killer-cage-only checks. Found via puzzle
+      // https://sudokupad.app/d1ibvjjncd, whose cp.cages held 14 real cages + 9 box +
+      // 18 row/col pseudo-cages, all of which were being validated as killer cages.
+      if (cage.style !== 'killer') return;
       var sum = typeof cage.sum === 'number' ? cage.sum : Number(cage.value);
       if (!isFinite(sum)) return;
       var cellStr = cage.cells || '';
