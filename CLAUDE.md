@@ -1,19 +1,17 @@
-# SudokuPad – DarkReader Fix
+# SudokuPad – Native Dark Mode
 
-TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on SudokuPad (`sudokupad.app` and related domains) and adds quality-of-life features. Single file: `sudokupad-native-dark-mode.user.js`. Tested on Chrome + TamperMonkey + DarkReader.
+TamperMonkey userscript that dark-themes SudokuPad (`sudokupad.app` and related domains): it locks DarkReader out of the page and runs a self-owned frozen copy of SudokuPad's native dark mode, then fixes the gaps that leaves — plus quality-of-life features. Single file: `sudokupad-native-dark-mode.user.js`. Tested on Chrome + TamperMonkey. (The 2.x DarkReader-fighting predecessor was retired 2026-07; it lives only in git history before the `native-mode` merge.)
 
 ## Project knowledge — read before substantive work
 - [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — current state, architecture, features, terminology, testing setup, test-puzzle URLs.
 - [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) — what beats DarkReader and what doesn't, dead ends, removed features. **Check this before debugging a rendering issue** so we don't re-solve a solved problem.
 - [`docs/Catalog/`](docs/Catalog/) — inventory of 1890 real puzzles + their render buckets, for predicting side effects of broad changes. **See "Cross-referencing the puzzle catalog" below before consulting it — query it, never read it into context.**
 - [`docs/CATALOG_AUDIT.md`](docs/CATALOG_AUDIT.md) — open checklist of catalog buckets the script may not handle yet (Group A first; **fog last**). Resolve each to handled-or-acknowledged; record the decision inline as you go.
-- [`docs/NATIVE_MODE_MIGRATION.md`](docs/NATIVE_MODE_MIGRATION.md) — **active work**: the migration off DarkReader onto SudokuPad's native dark mode (branch `native-mode`). Open functional TODOs + the DR-reference cleanup checklist. Read this if working on the `native-mode` branch.
-
-**Finding code:** the script is one ~4,200-line IIFE with 120+ functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region.
+**Finding code:** the script is one ~8,500-line IIFE with 120+ functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region.
 
 When you add, rename, or remove a function listed in the Code map — or add a new feature — update the Code map in the same change; keep it coarse (entry points per feature, not every helper).
 
-**Record discoveries as you go (compaction-safe).** Conversation context is lost when it compacts; files are not. The moment you confirm a new fix, dead end, or non-obvious fact, fold it into `LESSONS_LEARNED.md` / `PROJECT_SUMMARY.md` — do not hold it only in the conversation. Record genuine discoveries, not routine progress. Every 5–10 sessions (or when it feels stale) rewrite `PROJECT_SUMMARY.md` fresh rather than appending. Git history is the changelog — don't keep narrative history in these docs. (`docs/archive/` holds the pre-2026-05-29 handoff file for human reference only; don't load it.)
+**Record discoveries as you go (compaction-safe).** Conversation context is lost when it compacts; files are not. The moment you confirm a new fix, dead end, or non-obvious fact, fold it into `LESSONS_LEARNED.md` / `PROJECT_SUMMARY.md` — do not hold it only in the conversation. Record genuine discoveries, not routine progress. Every 5–10 sessions (or when it feels stale) rewrite `PROJECT_SUMMARY.md` fresh rather than appending. Git history is the changelog — don't keep narrative history in these docs. (`docs/archive/` holds the pre-2026-05-29 handoff file and the closed `NATIVE_MODE_MIGRATION.md` checklist for human reference only; don't load them.)
 
 ## Standing instructions
 
@@ -39,6 +37,6 @@ Bump `@version` in the `==UserScript==` header for every change — semver minor
 
 **Don't self-verify fixes in-browser.** Reload/inspect/screenshot round-trips are expensive. After committing, give a brief "done" and let the user run the first check — end the turn as **Clear to stop**, not Open. Pending testing isn't a loose end: don't hold the turn open for confirmation, and don't ask the user to confirm it works. Skip "what to expect" unless the result is genuinely non-obvious. Re-inspect only if the user reports it's still wrong or asks you to.
 
-**Variant flips are self-serve; the DarkReader *extension* isn't.** Both scripts stay enabled in TamperMonkey, gated per-tab by `#variant=a|b` (see [PROJECT_SUMMARY](docs/PROJECT_SUMMARY.md) → Testing setup). Switch the live script yourself — don't ask: nav your tab to `#variant=a` (DarkReader Fix 2.x) or `#variant=b` (Native 3.x). ⚠️ Hash-only nav does NOT reload — the userscript keeps running the OLD variant. Force a reload (`location.reload()` or nav to the bare URL), *then* re-check `window.spdrVersion`/`spdrEdition`; never trust state read right after the hash nav. Plain visual comparison → ask (via popup) for a screenshot. Drive the flip yourself only when you need computed values (exact `rgb()`, border widths). DarkReader extension on/off is the one state you can't set — ask the user. (`spdrEdition`: `'native'` vs absent; `spdrVersion`: 2.x vs 3.x.)
+**The DarkReader *extension* isn't self-serve.** The script locks DarkReader out of SudokuPad, so the extension's on/off state shouldn't matter — but if a test genuinely needs it toggled (e.g. verifying the lock), ask the user; you can't set it. Plain visual comparison → ask (via popup) for a screenshot; inspect yourself only when you need computed values (exact `rgb()`, border widths). Live-build check: `window.spdrVersion` (and `window.spdrEdition === 'native'`).
 
 **Stale TamperMonkey version → ask, don't give up.** If after reload `window.spdrVersion` is still older than the repo's `@version`, don't work around it or proceed against the old script. Use `AskUserQuestion` with one option "Try again", e.g. "TamperMonkey still serving stale vX.Y.Z (repo is vA.B.C). I'll wait while you reload the tracking tab." "Try again" means they expect it fixed → reload and re-check. Still stale → ask the same question again. Repeat until versions match; deviate only on a write-in.

@@ -1,4 +1,12 @@
-# Native Dark Mode migration — working checklist
+# Native Dark Mode migration — working checklist [CLOSED 2026-07-03]
+
+> **Migration complete — archived for reference.** The 2.x DarkReader edition was retired: the A/B
+> test harness was removed (v3.60.0), `@updateURL`/`@downloadURL` now point at `main`,
+> `native-mode` was merged into `main` and deleted, and the `Sudokupad-main` worktree removed.
+> The 2.x script exists only in git history before the merge.
+> Deliberately NOT done at close (do on demand, not owed): the cosmetic DR-comment sweep,
+> `isDarkReader()` naming audit, repo rename, `PROJECT_SUMMARY.md` fresh rewrite, and removal of
+> the TEMP auto gap-scan badge (`GAPSCAN_AUTO` block) — the badge is still active in the script.
 
 The pivot (branch `native-mode`, started 2026-06-05): **stop fighting DarkReader; lock it out of SudokuPad and dark-theme the page off SudokuPad's own dark mode (DMA)**, fixing the small finite set of gaps it leaves. Background + the confirmed mechanism (DR-lock works, native palette + coverage map, the 3 gaps) is in [LESSONS_LEARNED.md](LESSONS_LEARNED.md) → "Native dark mode — the substrate swap". `main` stays the 2.x DarkReader-fighting edition (fallback + A/B). The two coexist in TamperMonkey as separate scripts (distinct `@name`, **shared** author namespace — that's the correct convention; uniqueness comes from the name, not the namespace).
 

@@ -1,19 +1,19 @@
-# SudokuPad DarkReader Fix — Project Summary
+# SudokuPad Native Dark Mode — Project Summary
 
-*Current state, architecture, and conventions. Rewritten fresh periodically — last rewrite 2026-05-29. For the running history see `git log`; for hard-won do/don't knowledge see [LESSONS_LEARNED.md](LESSONS_LEARNED.md).*
+*Current state, architecture, and conventions. Rewritten fresh periodically — last rewrite 2026-05-29 (pre native-mode consolidation 2026-07-03; due a fresh rewrite). For the running history see `git log`; for hard-won do/don't knowledge see [LESSONS_LEARNED.md](LESSONS_LEARNED.md).*
 
 ## What this is
-A single-file TamperMonkey userscript that fixes DarkReader / dark-theme visual issues on SudokuPad, and adds several quality-of-life features on top.
+A single-file TamperMonkey userscript that dark-themes SudokuPad: it locks DarkReader out of the page, runs a self-owned frozen copy of SudokuPad's native dark mode (`FROZEN_DARK_CSS` under `.spdr-dark`), fixes the gaps that leaves, and adds several quality-of-life features on top. (The 2.x DarkReader-fighting edition was retired 2026-07-03 — history-only, before the `native-mode` merge into `main`.)
 
-- **File:** `sudokupad-darkreader-fix.user.js` — one ~4,200-line IIFE
+- **File:** `sudokupad-native-dark-mode.user.js` — one ~8,500-line IIFE
 - **Version:** bump in **two** places every release — the `@version` header (TamperMonkey uses this) **and** the `SCRIPT_VERSION` const near the top of the IIFE (drives `window.spdrVersion` + the on-screen version label). They must match; if `window.spdrVersion` lags `@version`, `SCRIPT_VERSION` was missed.
 - **Repo:** https://github.com/VitaKaninen/Sudokupad-darkreader-fix.git (branch `main`)
 - **Matched URLs:** `sudokupad.app/*`, `beta.sudokupad.app/*`, `app.crackingthecryptic.com/*`, `crackingthecryptic.com/*`
-- **Tested on:** Chrome + TamperMonkey, LibreWolf + ViolentMonkey, and Brave + ViolentMonkey (all with the DarkReader extension).
+- **Tested on:** Chrome + TamperMonkey, LibreWolf + ViolentMonkey, and Brave + ViolentMonkey (DarkReader extension state irrelevant — the script locks it out of SudokuPad).
 
 ## What it fixes / does
 
-**DarkReader visual fixes (the original purpose):**
+**Dark-theme gap fixes (originally built against DarkReader; now fix the same classes of issue on the frozen native theme):**
 1. White label boxes (cage sums, little-killer clues) staying white in dark mode
 2. Black colour-picker swatches (DarkReader overrides `--cell-color-*`)
 3. White text halo on SVG text
@@ -80,7 +80,7 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
   - **ONSHOW examples** (overlay-only / transient, never edit the puzzle model, matched to the section's chosen colour+opacity): `given`/`userDigit` → `drawDigitExample` (full-size demo digits when none exist); `centerMarks`/`cornerMarks` → `drawPencilExample(kind)` — 3 empty cells: **valid** (1 2 3), **invalid** (4 5 6), **mixed** of both (center = centred cluster, corner = corner positions). Each example also gets a `addCellBox` outline. **Example digit sizes match the real puzzle** (measured: digit 0.75×cell ≈ 48px, center mark 0.30×, corner mark 0.275×, all weight 400, Tahoma) — set in `drawDigitExample`/`drawPencilExample`. `regCenter`/`regMulti` → `drawRegionBoundaryExample` when no clones drawn; `selection` → `selectExampleCells` (real `app.select`, left selected on purpose).
   - **Empty-state = hover tooltip** (`spdrTip`, a small div beside the pointer), NOT an in-panel warning (the old `HILITE`/`spdrEmptyCheckers`/`refreshEmptyHints` system was removed). `EMPTY_HINT[key]` = `{test, msg}` for the keys with no example to simulate — `labelBg`/`cellColors`/`kropki`/`objColored`/`objGray`/`objBorders`; on hover, if `test()` finds none of that element, the tooltip shows `msg`. Sections that simulate an example (digits, pencilmarks, region borders, selection) show the example instead. **Eyeball placement:** per-control by default, but single-target sections (Cell shading etc.) put the icon on the **section label** via `buildSection`'s `hilite`. Tool-button ids `#control-normal`/`#control-colour`/`#control-centre`/`#control-corner`. **Board svg = `#svgrenderer` (it IS the `<svg>`).**
 - **Colour / geometry helpers:** `parseColor`/`rgbToHsl`/`hslToRgb`/`hexToRgba`, `getGridCellSize`/`detectGridSize`.
-- **Diagnostics:** `spdrGapScan()` (exposed as `window.spdrGapScan`) — native-dark-mode gap detector; flags board elements that paint but render near-invisible vs the page bg and aren't fixed by us (`!important` filter). See `docs/NATIVE_MODE_MIGRATION.md` Audit log.
+- **Diagnostics:** `spdrGapScan()` (exposed as `window.spdrGapScan`) — native-dark-mode gap detector; flags board elements that paint but render near-invisible vs the page bg and aren't fixed by us (`!important` filter). See the Audit log in [`archive/NATIVE_MODE_MIGRATION.md`](archive/NATIVE_MODE_MIGRATION.md) (closed).
 
 ## Terminology
 - **Region / cage-box** — a bordered area; its boundaries are `#cell-grids path:not(.cell-grid)`.
@@ -103,8 +103,6 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
   - **Native Kropki render as `rect.feature-kropki`** (not cosmetic `textbg`), on cell borders → `isKropkiCircle` matches them directly and the v2.164 `isOnCellBorder` gate handles them correctly (validated — the quadruple here even exposes its digits as adjacent text, but the position gate is what protects it).
   - **X-diagonal (`sudokuX`)** renders as a coloured stroked path in **`#overlay`** (`#34BBE6`), *not* `#arrows` — so `fixAllLines` does **not** shade it (renders fine, left to DR; see LESSONS_LEARNED Lines).
   - Native **Arrow** (bulb + shaft, shaft shaded as an `#arrows` line), a custom **green-bordered killer cage**, and cosmetic squares/circles/lines/letters.
-- **Repo layout (local, two worktrees):** the `native-mode` branch is checked out in the primary dir (`…/Sudokupad`); `main` is checked out in a **sibling worktree** `…/Sudokupad-main`. So `git checkout main` from the primary dir **fails** ("already used by worktree") — to touch the main/2.x file (`sudokupad-darkreader-fix.user.js`), edit it in the `Sudokupad-main` worktree (or `git -C …/Sudokupad-main`). `git worktree list` shows both.
-- **A/B comparison rig (test-only; both scripts installed):** the 2.x DarkReader-Fix and 3.x Native scripts are both installed in TM (distinct `@name`) and kept **both enabled** — you don't toggle them. An **A/B TEST HARNESS** at the top of each file (fenced `REMOVE BEFORE RELEASE`; see [migration cleanup](NATIVE_MODE_MIGRATION.md)) gates which one runs per tab via `#variant=a|b` in the URL hash (per-tab, reload-safe): `a`=DarkReader Fix, `b`=Native, **no hash → Native (b)** wins (deterministic, never a double-run). The active script paints a fixed bottom-center radio bar; clicking A/B writes the hash + reloads so either party can flip the live script and both see which is active. Open `…/<puzzle>#variant=a` vs `#variant=b` in two tabs to compare side-by-side. (Verified 2026-06-05: SudokuPad keeps the puzzle id in the path, never touches the hash, so the marker survives the SPA load + reloads.)
 - **Workflow:** edit the file on disk → TamperMonkey auto-updates → the user refreshes their own test tab → visual confirm.
 - **Claude in Chrome (MCP):** standing permission to connect (see CLAUDE.md). **Always `location.reload()` before inspecting** — the user refreshes all tabs after edits, so the MCP tab may be stale.
 - **Version check:** `window.spdrVersion === 'X.Y.Z'`.
