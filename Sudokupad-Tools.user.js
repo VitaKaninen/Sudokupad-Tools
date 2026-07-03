@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.66.0
+// @version      3.67.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.66.0';
+  var SCRIPT_VERSION = '3.67.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -282,6 +282,7 @@
     validateKropkiEnabled:        true,   // "Validate Constraints": run the Kropki-dot validator (future per-validator toggle)
     validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
     validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
+    validateThermoEnabled:        true,   // "Validate Constraints": run the thermometer validator (future per-validator toggle)
     validateRunAllMode:           false,  // "Validate Constraints" menu checkbox: any validator click runs ALL detected validators to a cross-constraint fixpoint
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
@@ -6067,6 +6068,242 @@
     return { removals: removals, lkCount: diags.length, emptiedCells: emptied };
   }
 
+  // ── Thermo validator ──────────────────────────────────────────────────────
+  // A thermometer: digits strictly increase from the round bulb to the tip. A
+  // SLOW thermometer relaxes this to non-decreasing (repeats allowed), EXCEPT
+  // where ordinary Sudoku rules would forbid the repeat anyway (same row,
+  // column, region, or cage) — there it must still strictly increase. Bulbs
+  // may branch into several tips (one bulb + stem, multiple arms).
+
+  // Read the puzzle's thermometers from the MODEL (cp.thermos) — SudokuPad's
+  // native constraint key, unlike DOM line-scanning which can't tell a thermo
+  // shaft from a palindrome/whisper/region-sum line (all render as plain
+  // #arrows paths). cp.thermos is a FLAT list of entries, one per rendered
+  // polyline ARM; entries sharing the same `line` object are the same arm
+  // (grouped by object identity, not a stringified compare). A branching
+  // thermometer (one bulb, several tips) is instead SEVERAL distinct `line`
+  // groups whose waypoint chains share a common cell PREFIX starting at the
+  // same bulb — SudokuPad re-draws the whole arm from the bulb for each tip, so
+  // the shared stem is simply repeated in every arm's chain. Cluster every
+  // chain starting at the same bulb cell and trie-insert it into one tree, so
+  // the shared stem collapses to one set of edges and each branch point fans
+  // out correctly. Returns [{ keys:[<col,row>… every cell], edges:[[parentKey,
+  // childKey]…], root:<col,row>, leaves:[<col,row>…] }] — one entry per bulb.
+  function getThermos() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.thermos) || cp.thermos.length === 0) return [];
+    var N = detectGridSize();
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+
+    var groups = new Map();   // line object identity -> wayPoints
+    cp.thermos.forEach(function (t) {
+      if (!t || !t.line || !Array.isArray(t.line.wayPoints)) return;
+      if (!groups.has(t.line)) groups.set(t.line, t.line.wayPoints);
+    });
+    var chains = [];
+    groups.forEach(function (wp) {
+      var chain = [];
+      for (var i = 0; i < wp.length; i++) {
+        var col = Math.round(wp[i][0] - 0.5), row = Math.round(wp[i][1] - 0.5);
+        if (!inGrid(col, row)) { chain = null; break; }
+        chain.push(col + ',' + row);
+      }
+      if (chain && chain.length >= 2) chains.push(chain);
+    });
+    if (chains.length === 0) return [];
+
+    var byBulb = {};
+    chains.forEach(function (c) { (byBulb[c[0]] = byBulb[c[0]] || []).push(c); });
+
+    var out = [];
+    Object.keys(byBulb).forEach(function (bulbKey) {
+      var childrenOf = {}, allKeys = {};
+      byBulb[bulbKey].forEach(function (chain) {
+        allKeys[chain[0]] = 1;
+        for (var i = 1; i < chain.length; i++) {
+          allKeys[chain[i]] = 1;
+          var set = childrenOf[chain[i - 1]] || (childrenOf[chain[i - 1]] = {});
+          set[chain[i]] = 1;
+        }
+      });
+      var edges = [];
+      Object.keys(childrenOf).forEach(function (p) {
+        Object.keys(childrenOf[p]).forEach(function (c) { edges.push([p, c]); });
+      });
+      var leaves = Object.keys(allKeys).filter(function (k) { return !childrenOf[k]; });
+      out.push({ keys: Object.keys(allKeys), edges: edges, root: bulbKey, leaves: leaves });
+    });
+    return out;
+  }
+
+  // Cell-pair sets that forbid a repeat under ordinary Sudoku rules: box/jigsaw
+  // regions (cp.cages type:'region', enumerated in full) plus other
+  // uniqueness cages. Row/column pseudo-cages are EXCLUDED here (and row/col
+  // are compared directly by coordinate instead) — the model encodes them as a
+  // dash RANGE ("r1c1-r1c9"), which a plain r#c# scan would misread as just the
+  // two endpoints, silently under-covering the row/column.
+  function getThermoRegionCageSets() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return [];
+    var N = detectGridSize();
+    var out = [];
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.unique === false || cage.type === 'rowcol') return;
+      var keys = [], m, re = /r(\d+)c(\d+)/gi, s = cage.cells || '';
+      while ((m = re.exec(s)) !== null) {
+        var col = Number(m[2]) - 1, row = Number(m[1]) - 1;
+        if (col >= 0 && row >= 0 && col < N && row < N) keys.push(col + ',' + row);
+      }
+      if (keys.length >= 2) out.push(new Set(keys));
+    });
+    return out;
+  }
+  // Slow-thermo repeat is legal on edge (a,b) only when the two cells are in
+  // neither the same column, the same row, nor a region/cage together.
+  function thermoRepeatAllowed(a, b, regionCageSets) {
+    var ap = a.split(','), bp = b.split(',');
+    if (ap[0] === bp[0] || ap[1] === bp[1]) return false;
+    for (var i = 0; i < regionCageSets.length; i++) {
+      if (regionCageSets[i].has(a) && regionCageSets[i].has(b)) return false;
+    }
+    return true;
+  }
+
+  // Auto-detect whether the puzzle's thermometers are SLOW (best-effort; the
+  // player can always override via the menu's "Slow" checkbox). Two signals,
+  // tried in order:
+  //  1. GEOMETRY — an arm longer than the digit set can only be strictly
+  //     increasing up to that many distinct digits; an arm exceeding it is
+  //     only solvable if repeats are allowed, so it MUST be slow.
+  //  2. RULES TEXT — the puzzle's title + rules mention slow-thermo phrasing.
+  //     Plain "slow thermo" alone misses common phrasings (verified against
+  //     the puzzle catalog's slow_thermo-tagged puzzles — 5 of 32 use
+  //     "increase or stay the same" / "must not decrease" without ever saying
+  //     "slow thermo"), so several phrasings are matched.
+  var SLOW_THERMO_PHRASES = [
+    'slow thermo', 'increase or stay the same', 'increase or remain the same',
+    'must not decrease', 'never decrease', 'non-decreasing', 'nondecreasing',
+  ];
+  function autoDetectThermoSlow(thermos) {
+    try {
+      var st = readValidatorBoardState();
+      var n = st ? st.fullSet.size : 9;
+      var tooLong = thermos.some(function (t) {
+        var childrenOf = {};
+        t.edges.forEach(function (e) { (childrenOf[e[0]] = childrenOf[e[0]] || []).push(e[1]); });
+        var maxDepth = 1;
+        (function walk(node, depth) {
+          maxDepth = Math.max(maxDepth, depth);
+          (childrenOf[node] || []).forEach(function (c) { walk(c, depth + 1); });
+        })(t.root, 1);
+        return maxDepth > n;
+      });
+      if (tooLong) return true;
+    } catch (e) {}
+    try {
+      var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+        ? Framework.app.puzzle.currentPuzzle : null;
+      var blob = (((cp && cp.title) || '') + ' ' +
+        ((cp && Array.isArray(cp.rules)) ? cp.rules.join(' ') : '')).toLowerCase();
+      return SLOW_THERMO_PHRASES.some(function (p) { return blob.indexOf(p) !== -1; });
+    } catch (e) {}
+    return false;
+  }
+
+  // In-memory (never persisted) "Slow" state, keyed per-puzzle like
+  // scheduleAutoShade's auto-enable: re-detected fresh on every puzzle
+  // (auto value recomputed, manual override cleared), so navigating to a
+  // different puzzle in the SPA never carries a stale answer forward.
+  var _thermoSlowState = { key: null, override: null, auto: false };
+  function thermoSlowPuzzleKey() { return location.pathname + location.search; }
+  function ensureThermoSlowState() {
+    var key = thermoSlowPuzzleKey();
+    if (_thermoSlowState.key !== key) {
+      _thermoSlowState = { key: key, override: null, auto: autoDetectThermoSlow(getThermos()) };
+    }
+    return _thermoSlowState;
+  }
+  function effectiveThermoSlow() {
+    var s = ensureThermoSlowState();
+    return s.override !== null ? s.override : s.auto;
+  }
+  function setThermoSlowOverride(val) { ensureThermoSlowState().override = val; }
+
+  // Compute centre-candidate removals forced by the thermometers, iterated to a
+  // fixpoint (forward min-propagation bulb→tip, backward max-propagation
+  // tip→bulb; both need to re-run as the other narrows a shared cell). Pure
+  // w.r.t. the board — works on copies of the candidate sets and returns the
+  // removal list. Edge order doesn't need to be topological: the fixpoint loop
+  // converges regardless (monotonic shrinking sets), same pattern as the cage
+  // and little-killer validators.
+  function computeThermoRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var thermos = getThermos();
+    if (unitFilter) thermos = thermos.filter(function (t) { return unitFilter(t.keys); });
+    if (thermos.length === 0) return { noThermos: true };
+
+    var slow = effectiveThermoSlow();
+    var regionCageSets = slow ? getThermoRegionCageSets() : [];
+
+    var values = st.values, fullSet = st.fullSet;
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (values[key] != null) return new Set([values[key]]);
+      if (work[key]) return work[key];
+      return fullSet;                                  // empty cell → unconstrained, never modified
+    }
+    function minOf(set) { return Math.min.apply(null, Array.from(set)); }
+    function maxOf(set) { return Math.max.apply(null, Array.from(set)); }
+
+    var removals = [], seen = {};
+    function removeIf(key, pred) {
+      if (values[key] != null || !work[key]) return false;
+      var changed = false;
+      Array.from(work[key]).forEach(function (d) {         // snapshot: set mutates in loop
+        if (pred(d)) {
+          work[key].delete(d);
+          var k = key + '/' + d;
+          if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: key, digit: String(d) }); }
+          changed = true;
+        }
+      });
+      return changed;
+    }
+
+    var edges = [];
+    thermos.forEach(function (t) { t.edges.forEach(function (e) { edges.push(e); }); });
+
+    var changedAny = true, guard = 0;
+    while (changedAny && guard++ < 1000) {
+      changedAny = false;
+      edges.forEach(function (e) {                          // forward pass: parent's min bounds the child
+        var p = e[0], c = e[1];
+        var pSet = cellSet(p), cSet = cellSet(c);
+        if (pSet.size === 0 || cSet.size === 0) return;
+        var allowRepeat = slow && thermoRepeatAllowed(p, c, regionCageSets);
+        var pMin = minOf(pSet);
+        if (removeIf(c, function (d) { return allowRepeat ? d < pMin : d <= pMin; })) changedAny = true;
+      });
+      for (var i = edges.length - 1; i >= 0; i--) {          // backward pass: child's max bounds the parent
+        var e2 = edges[i], p2 = e2[0], c2 = e2[1];
+        var pSet2 = cellSet(p2), cSet2 = cellSet(c2);
+        if (pSet2.size === 0 || cSet2.size === 0) continue;
+        var allowRepeat2 = slow && thermoRepeatAllowed(p2, c2, regionCageSets);
+        var cMax = maxOf(cSet2);
+        if (removeIf(p2, function (d) { return allowRepeat2 ? d > cMax : d >= cMax; })) changedAny = true;
+      }
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied };
+  }
+
   // Worker: remove a specific list of centre candidates via SudokuPad's own
   // candidates op (one undo group). Mirrors _removeInvalidPencilmarksInternal but
   // takes an explicit [{cellKey,digit}] list instead of scanning .conflict marks.
@@ -6154,6 +6391,9 @@
       { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
         detect: function () { return getLittleKillers().length > 0; },
         compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
+      { name: 'thermo', unitNoun: 'thermometer', menuLabel: 'Thermometers', enabled: function () { return settings.validateThermoEnabled !== false; },
+        detect: function () { return getThermos().length > 0; },
+        compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
     ];
   }
   function detectedValidators() {
@@ -6413,6 +6653,42 @@
       sep.style.setProperty('background-color', border, 'important');
       menu.appendChild(sep);
     }
+    // The Thermo item, PLUS an inline "Slow" checkbox — auto-checked per
+    // puzzle (autoDetectThermoSlow via effectiveThermoSlow), overridable by
+    // the player for this puzzle/session (setThermoSlowOverride, never saved).
+    // Clicking the checkbox toggles Slow only; clicking the rest of the row
+    // runs the validator, same as a plain item.
+    function addThermoItem(def) {
+      var row = document.createElement('div');
+      Object.assign(row.style, {
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
+        padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '13px', fontWeight: '600',
+        whiteSpace: 'nowrap', userSelect: 'none',
+      });
+      row.style.setProperty('color', text, 'important');
+      var lbl = document.createElement('span');
+      lbl.textContent = def.menuLabel || def.name;
+      row.appendChild(lbl);
+
+      var slowLbl = document.createElement('label');
+      slowLbl.title = 'Check this if the thermometers in this puzzle are SLOW (digits along the line may repeat — increase or stay the same — instead of strictly increasing). Auto-detected where possible; override here if that guess is wrong.';
+      Object.assign(slowLbl.style, { display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' });
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = effectiveThermoSlow();
+      cb.style.cursor = 'pointer';
+      cb.addEventListener('click', function (e) { e.stopPropagation(); });
+      cb.addEventListener('change', function () { setThermoSlowOverride(cb.checked); });
+      slowLbl.appendChild(cb);
+      slowLbl.appendChild(document.createTextNode('Slow'));
+      row.appendChild(slowLbl);
+
+      row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+      row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
+      row.addEventListener('click', function (e) { e.stopPropagation(); onValidatorItemClick(def); });
+      menu.appendChild(row);
+    }
 
     // One item per validator DETECTED in this puzzle (re-checked on every open,
     // so late model loads / SPA puzzle switches are picked up).
@@ -6421,7 +6697,8 @@
       addNote('No supported constraints detected in this puzzle.');
     } else {
       detected.forEach(function (def) {
-        addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
+        if (def.name === 'thermo') addThermoItem(def);
+        else addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
       });
     }
     addSep();
