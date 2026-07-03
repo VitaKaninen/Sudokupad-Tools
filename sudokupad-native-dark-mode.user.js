@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.60.0
+// @version      3.61.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.60.0';
+  var SCRIPT_VERSION = '3.61.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -358,7 +358,7 @@
   // flags}, also console.table'd. Catches the "gray/dark object you can't see"
   // class. NB it does NOT catch wrong-but-VISIBLE shade mismatches (e.g. a circle
   // that's light-gray where it should be near-black) — those have high contrast;
-  // use the DR-vs-native diff procedure in docs/NATIVE_MODE_MIGRATION.md for them.
+  // use the DR-vs-native diff procedure in docs/archive/NATIVE_MODE_MIGRATION.md for them.
   function spdrGapScan(opts) {
     opts = opts || {};
     var TH = opts.threshold || 1.25;
@@ -7800,51 +7800,6 @@
     document.body.appendChild(label);
   }
 
-  // ── TEMP dev tool (native-mode migration): auto gap-scan badge ──────────────
-  // Runs spdrGapScan() automatically once the board settles and, if it finds
-  // invisible-object gaps, shows a small ⚠ badge beside the version label; click
-  // it to LIST the suspect cells inline (no console needed). DEBUGGING aid for
-  // the migration only — to retire it, flip GAPSCAN_AUTO to false (or delete this
-  // whole block + the buildAllUI call + optionally window.spdrGapScan). Tracked
-  // in the cleanup checklist in docs/NATIVE_MODE_MIGRATION.md.
-  var GAPSCAN_AUTO = true;
-  function startGapAutoScan() {
-    if (!GAPSCAN_AUTO) return;
-    var t0 = Date.now(), done = false;
-    (function poll() {
-      var svg = document.getElementById('svgrenderer');
-      if (svg && svg.querySelectorAll('#underlay rect,#overlay rect,#arrows path,#cages path').length) {
-        setTimeout(function () {            // let our fixes (object shading, label-bg) apply first
-          if (done) return; done = true;
-          var res; try { res = spdrGapScan({ quiet: true }); } catch (e) { return; }
-          renderGapBadge(res);
-        }, 2500);
-      } else if (Date.now() - t0 < 15000) {
-        setTimeout(poll, 300);
-      }
-    })();
-  }
-  function renderGapBadge(res) {
-    var old = document.getElementById('spdr-gap-badge'); if (old) old.remove();
-    if (!res || !res.gaps) return;
-    var badge = document.createElement('div');
-    badge.id = 'spdr-gap-badge';
-    badge.style.cssText = 'position:fixed;bottom:46px;right:56px;z-index:999999;background:#7a2b2b;color:#ffd7d7;font:600 11px system-ui,sans-serif;padding:3px 7px;border-radius:10px;cursor:pointer;pointer-events:auto;box-shadow:0 1px 4px rgba(0,0,0,.5);user-select:none';
-    badge.textContent = '⚠ ' + res.gaps + ' gap' + (res.gaps > 1 ? 's' : '');
-    badge.title = 'spdrGapScan: possible invisible render gap(s) on this puzzle — click to list cells';
-    var panel = null;
-    badge.addEventListener('click', function () {
-      if (panel) { panel.remove(); panel = null; return; }
-      panel = document.createElement('div');
-      panel.style.cssText = 'position:fixed;bottom:74px;right:56px;z-index:999999;background:#23232b;color:#e8e6e3;font:11px ui-monospace,monospace;padding:8px 10px;border-radius:6px;max-width:340px;max-height:42vh;overflow:auto;box-shadow:0 2px 10px rgba(0,0,0,.6);pointer-events:auto;white-space:pre';
-      panel.textContent = 'Possible invisible gap(s) — eyeball these cells:\n' +
-        res.flags.map(function (f) { return '  ' + (f.rc || '?') + '  ' + (f.layer || '') + '  ' + (f.fill || f.stroke || '') + ' → ' + f.eff + '  (contrast ' + f.contrast + ')'; }).join('\n') +
-        '\n\nLow-contrast & unfixed only. Full data: spdrGapScan() in console.';
-      document.body.appendChild(panel);
-    });
-    document.body.appendChild(badge);
-  }
-
   // Auto-dismiss SudokuPad's start gate — the "Start Puzzle" / "Resume Puzzle"
   // modal that displays the puzzle rules on load. The rules stay visible in the
   // side panel; only the blocking modal is skipped. Controlled by the
@@ -8429,7 +8384,6 @@
     buildVersionLabel();
     buildFillSingleButton();
     buildValidateButton();
-    startGapAutoScan();   // TEMP migration dev tool (see GAPSCAN_AUTO)
     buildSettingsUI();
     // Selection-border offset observer is feature-independent of DarkReader
     // (works the same in light themes), so start it here rather than gating

@@ -5,8 +5,9 @@
 > `native-mode` was merged into `main` and deleted, and the `Sudokupad-main` worktree removed.
 > The 2.x script exists only in git history before the merge.
 > Deliberately NOT done at close (do on demand, not owed): the cosmetic DR-comment sweep,
-> `isDarkReader()` naming audit, repo rename, `PROJECT_SUMMARY.md` fresh rewrite, and removal of
-> the TEMP auto gap-scan badge (`GAPSCAN_AUTO` block) — the badge is still active in the script.
+> `isDarkReader()` naming audit, repo rename, and `PROJECT_SUMMARY.md` fresh rewrite. (The TEMP
+> auto gap-scan badge was on this list too; removed in v3.61.0 — `window.spdrGapScan()` stays as
+> a manual console helper.)
 
 The pivot (branch `native-mode`, started 2026-06-05): **stop fighting DarkReader; lock it out of SudokuPad and dark-theme the page off SudokuPad's own dark mode (DMA)**, fixing the small finite set of gaps it leaves. Background + the confirmed mechanism (DR-lock works, native palette + coverage map, the 3 gaps) is in [LESSONS_LEARNED.md](LESSONS_LEARNED.md) → "Native dark mode — the substrate swap". `main` stays the 2.x DarkReader-fighting edition (fallback + A/B). The two coexist in TamperMonkey as separate scripts (distinct `@name`, **shared** author namespace — that's the correct convention; uniqueness comes from the name, not the namespace).
 
@@ -49,6 +50,6 @@ Re-base onto native, then **delete the DR code each step orphans** (don't defer 
   - [ ] `CLAUDE.md` title (`# SudokuPad – DarkReader Fix`) + intro line ("fixes DarkReader visual issues").
   - [ ] `PROJECT_SUMMARY.md` — rewrite fresh (it's periodically rewritten anyway) once the migration settles.
   - [ ] Repo rename `Sudokupad-darkreader-fix` → TBD (decide later; affects all raw URLs).
-  - [ ] **Remove the TEMP auto gap-scan badge** (the `GAPSCAN_AUTO` block + `startGapAutoScan`/`renderGapBadge` + the `buildAllUI` call). `window.spdrGapScan()` itself can stay as a manual helper or go.
+  - [x] **Remove the TEMP auto gap-scan badge** (the `GAPSCAN_AUTO` block + `startGapAutoScan`/`renderGapBadge` + the `buildAllUI` call). `window.spdrGapScan()` itself can stay as a manual helper or go. *(Done v3.61.0; `spdrGapScan()` kept as manual helper.)*
   - [ ] **Remove the A/B TEST HARNESS** (v3.6.0 / v2.196.0) — the fenced `A/B TEST HARNESS — REMOVE BEFORE RELEASE` block at the top of **both** files (right after `'use strict';`). Lets both scripts stay enabled in TM while only one runs per tab (hash-gated `#variant=a|b` + on-page radio bar); test-only. `grep -n "A/B TEST HARNESS"` finds it; delete the block in each. Once `native-mode` is the sole mainline this is pure dead weight.
   - [ ] **Merge `native-mode` → `main`**: reconcile `@name` / `@namespace` / `@updateURL` / filename for the mainline.
