@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         SudokuPad – Native Dark Mode
+// @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.65.0
-// @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features.
+// @version      3.66.0
+// @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
 // @match        https://beta.sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.65.0';
+  var SCRIPT_VERSION = '3.66.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -282,6 +282,8 @@
     validateKropkiEnabled:        true,   // "Validate Constraints": run the Kropki-dot validator (future per-validator toggle)
     validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
     validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
+    validateRunAllMode:           false,  // "Validate Constraints" menu checkbox: any validator click runs ALL detected validators to a cross-constraint fixpoint
+    validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
     fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
@@ -305,7 +307,7 @@
 
   // Settings that must NOT survive a page load (deliberately aggressive, per-puzzle
   // escape hatches). loadSettings forces each back to its default after merging.
-  var SESSION_ONLY_KEYS = ['regionHideAuthorBorders'];
+  var SESSION_ONLY_KEYS = ['regionHideAuthorBorders', 'validateSelectionOnly'];
 
   function loadSettings() {
     try {
@@ -3440,7 +3442,8 @@
       t.closest('#sp-fix-panel') || t.closest('#sp-fix-btn') ||
       t.closest('#sp-fill-btn-wrap') || t.closest('#sp-clear-btn-wrap') || t.closest('#sp-clearall-btn-wrap') ||
       t.closest('#sp-digit-prompt') ||
-      t.closest('#sp-easy-shade-btn') || t.closest('#sp-easy-shade-card')
+      t.closest('#sp-easy-shade-btn') || t.closest('#sp-easy-shade-card') ||
+      t.closest('#sp-validate-btn') || t.closest('#sp-validate-menu')
     );
   }
   BLOCKED_EVENTS.forEach(function (type) {
@@ -5603,7 +5606,7 @@
     return { uni: uni, fullSet: new Set(Object.keys(uni).map(Number)), values: values, centre: centre };
   }
 
-  function computeKropkiRemovals() {
+  function computeKropkiRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };   // letters / empty → ratio & consecutive are undefined
     var uni = st.uni;
@@ -5622,6 +5625,7 @@
     function partners(type, d) { return type === 'black' ? blackPartners(d) : whitePartners(d); }
 
     var dots = collectKropkiDots();
+    if (unitFilter) dots = dots.filter(function (dot) { return unitFilter([dot.a, dot.b]); });
     if (dots.length === 0) return { noDots: true };
 
     var values = st.values, centre = st.centre, fullSet = st.fullSet;
@@ -5763,10 +5767,11 @@
   // fixpoint (a removal in one cell can invalidate a neighbour's only supporting
   // combination, so we re-sweep until a full pass changes nothing). Pure w.r.t. the
   // board — works on copies of the candidate sets and returns the removal list.
-  function computeCageRemovals() {
+  function computeCageRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
     var cages = getKillerCages();
+    if (unitFilter) cages = cages.filter(function (cage) { return unitFilter(cage.keys); });
     if (cages.length === 0) return { noCages: true };
 
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
@@ -5969,10 +5974,11 @@
   // fixpoint (a removal can invalidate another diagonal's support; diagonals may
   // also cross-share cells). Pure w.r.t. the board — works on copies of the
   // candidate sets and returns the removal list.
-  function computeLittleKillerRemovals() {
+  function computeLittleKillerRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
     var lks = getLittleKillers();
+    if (unitFilter) lks = lks.filter(function (lk) { return unitFilter(lk.keys); });
     if (lks.length === 0) return { noLittleKillers: true };
 
     var N = detectGridSize();
@@ -6127,29 +6133,73 @@
 
   // The validators wired into the button. Each is independent (own board read, own
   // removal list) so a future Settings panel can toggle them individually — to add
-  // one, append an entry here. `enabled` reads its settings flag (default on);
-  // `compute` returns { removals, emptiedCells, <unitCount>, unsupported?, <none>? }.
+  // one, append an entry here. Contract per entry:
+  //   enabled()          — reads its settings flag (default on)
+  //   detect()           — CHEAP "does this puzzle contain any of these clues?"
+  //                        (menu only lists detected validators; re-run per menu open
+  //                        so late model loads / SPA navigation stay correct)
+  //   compute(unitFilter)— returns { removals, emptiedCells, <unitCount>, unsupported?,
+  //                        <none>? }. unitFilter (nullable) is fn(cellKeys[])→bool;
+  //                        the compute must DROP any clue/unit whose full cell list
+  //                        fails it BEFORE validating ("Validate selection only":
+  //                        a partially-selected clue is skipped, never half-checked).
   function constraintValidators() {
     return [
       { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots', enabled: function () { return settings.validateKropkiEnabled !== false; },
+        detect: function () { return collectKropkiDots().length > 0; },
         compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
       { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages', enabled: function () { return settings.validateCagesEnabled  !== false; },
+        detect: function () { return getKillerCages().length > 0; },
         compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
       { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
+        detect: function () { return getLittleKillers().length > 0; },
         compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
     ];
   }
+  function detectedValidators() {
+    return constraintValidators().filter(function (v) {
+      if (!v.enabled()) return false;
+      try { return v.detect(); } catch (e) { return false; }
+    });
+  }
 
   // ── "Validate Constraints" button: menu + runners ─────────────────────────
-  // Clicking the button opens a dropdown (openValidateMenu). The user picks ONE
-  // validator to run alone, or "Run all" to run every enabled validator in
-  // sequence, repeating the whole cycle until a full pass removes nothing — a
-  // cross-constraint fixpoint (e.g. a cage removal that unlocks a further Kropki
-  // removal, which the old single combined pass would have missed, forcing the
-  // user to click again). Nothing runs concurrently any more: each validator is
-  // its own compute → apply (its own undo group).
+  // The button TOGGLES a popup menu (toggleValidateMenu) that stays open across
+  // runs — only the button (or a window resize) closes it. The menu lists one
+  // item per validator DETECTED in the current puzzle (detect(), re-checked each
+  // open), plus two mode checkboxes at the bottom:
+  //   • "Run all until stable" — clicking ANY validator item runs every detected
+  //     validator in sequence, repeating the whole cycle until a full pass removes
+  //     nothing — a cross-constraint fixpoint (e.g. a cage removal that unlocks a
+  //     further Kropki removal). Off → the click runs just that one validator.
+  //   • "Validate selection only" (session-only) — validators only consider clues
+  //     whose ENTIRE cell list is inside the current selection; a partially-
+  //     selected clue is skipped outright (never half-checked).
+  // Nothing runs concurrently: each validator is its own compute → apply (its own
+  // undo group), guarded by the shared actionInProgress lock.
 
   function pluralUnit(unitNoun, n) { return unitNoun + (n === 1 ? '' : 's'); }
+
+  // Resolve the "Validate selection only" mode into a unit filter at click time.
+  // Returns { ok:true, filter:null } when the mode is off, { ok:true, filter:fn }
+  // when on with a selection (fn(cellKeys[]) → true iff EVERY cell of the unit is
+  // selected), or { ok:false } (after toasting) when on with nothing selected.
+  function selectionUnitFilter() {
+    if (settings.validateSelectionOnly !== true) return { ok: true, filter: null };
+    var sel = getSelectedCells();
+    if (sel.size === 0) {
+      showRemoveInvalidToast('"Validate selection only" is on, but no cells are selected. Select the cells that fully cover the clues to check, then try again.', 'warning');
+      return { ok: false };
+    }
+    return { ok: true, filter: function (keys) {
+      return keys.every(function (k) { return sel.has(k); });
+    } };
+  }
+  function noneFoundMsg(nouns, filtered) {
+    return filtered
+      ? 'No ' + nouns + ' fully inside the selection — a clue is only validated when every one of its cells is selected.'
+      : 'No ' + nouns + ' found in this puzzle.';
+  }
 
   // Cell keys ("col,row") currently holding centre marks (value cells excluded).
   // Diffed before/after a run to count how many marked cells were EMPTIED —
@@ -6178,10 +6228,11 @@
   // Apply ONE validator against the CURRENT board (compute → apply its removals
   // via the shared paste-path worker). Reads the live DOM, so each call sees prior
   // removals (this is what lets run-all cross-feed). No lock toggle, no toast —
-  // callers own those. Resolves to { unsupported } | { present:false } |
+  // callers own those. unitFilter (nullable) is forwarded to compute. Resolves to
+  // { unsupported } | { present:false } |
   // { present:true, removed, count, aborted?, reverted? }.
-  async function applyOneValidator(def) {
-    var comp = def.compute();
+  async function applyOneValidator(def, unitFilter) {
+    var comp = def.compute(unitFilter);
     if (comp.unsupported) return { unsupported: true };
     if (comp[def.noneKey]) return { present: false, removed: 0 };
     var count = comp[def.countKey] || 0;
@@ -6197,14 +6248,14 @@
   }
 
   // Run a single validator (a menu pick): lock, compute+apply once, toast.
-  function runSingleValidator(def) {
+  function runSingleValidator(def, unitFilter) {
     if (actionInProgress) return;
     actionInProgress = true;
     var before = markedCellKeys();
     var t0 = performance.now();
-    applyOneValidator(def).then(function (res) {
+    applyOneValidator(def, unitFilter).then(function (res) {
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
-      if (!res.present) { showRemoveInvalidToast('No ' + pluralUnit(def.unitNoun, 0) + ' found in this puzzle.', 'success'); return; }
+      if (!res.present) { showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return; }
       if (res.aborted) { validateAbortToast(res.reverted); return; }
       var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
       if (res.removed === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
@@ -6215,12 +6266,15 @@
     }).finally(function () { actionInProgress = false; });
   }
 
-  // Run every ENABLED validator in sequence, repeating the whole cycle until a
+  // Run every DETECTED validator in sequence, repeating the whole cycle until a
   // full pass removes nothing (cross-constraint fixpoint). One combined toast.
-  function runAllValidators() {
+  // unitFilter (nullable) is applied on every pass, so e.g. a fully-selected cage
+  // and a fully-selected Kropki dot re-feed each other while a half-selected clue
+  // stays out of the loop entirely.
+  function runAllValidators(unitFilter) {
     if (actionInProgress) return;
-    var defs = constraintValidators().filter(function (v) { return v.enabled(); });
-    if (defs.length === 0) { showRemoveInvalidToast('No constraint validators are enabled. Turn one on in Settings.', 'warning'); return; }
+    var defs = detectedValidators();
+    if (defs.length === 0) { showRemoveInvalidToast('No supported constraints were detected in this puzzle.', 'warning'); return; }
     actionInProgress = true;
     var before = markedCellKeys();
     var t0 = performance.now();
@@ -6230,7 +6284,7 @@
       while (changed && guard++ < 50) {
         changed = false;
         for (var i = 0; i < defs.length; i++) {
-          var res = await applyOneValidator(defs[i]);
+          var res = await applyOneValidator(defs[i], unitFilter);
           if (res.unsupported) { unsupported = true; break; }
           if (res.aborted) { aborted = true; reverted = res.reverted; break; }
           if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
@@ -6246,7 +6300,7 @@
       var names = Object.keys(s.present);
       if (names.length === 0) {
         var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
-        showRemoveInvalidToast('No ' + nouns + ' found in this puzzle.', 'success');
+        showRemoveInvalidToast(noneFoundMsg(nouns, !!unitFilter), 'success');
         return;
       }
       var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
@@ -6259,21 +6313,31 @@
     }).finally(function () { actionInProgress = false; });
   }
 
-  // ── Validate dropdown menu ────────────────────────────────────────────────
+  // ── Validate popup menu ───────────────────────────────────────────────────
+  // The menu is a TOGGLE: it stays open across validator runs and selection
+  // changes (so "Validate selection only" workflows don't fight it); only the
+  // button (or a window resize) closes it. Clicks inside it never reach SudokuPad
+  // (isInOurUI blocks mousedown/up), so opening it or picking an item never
+  // clears the player's cell selection.
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
-    document.removeEventListener('mousedown', onValidateMenuDocDown, true);
     window.removeEventListener('resize', closeValidateMenu);
-  }
-  function onValidateMenuDocDown(e) {
-    var m = document.getElementById('sp-validate-menu');
-    var btn = document.getElementById('sp-validate-btn');
-    if (m && !m.contains(e.target) && e.target !== btn) closeValidateMenu();
   }
   function toggleValidateMenu() {
     if (document.getElementById('sp-validate-menu')) closeValidateMenu();
     else openValidateMenu();
+  }
+  // A validator item was clicked: resolve the selection filter (may toast + bail),
+  // then either run just that validator or — with "Run all until stable" checked —
+  // redirect the click to the full cross-constraint fixpoint over every detected
+  // validator. The menu stays open either way.
+  function onValidatorItemClick(def) {
+    if (actionInProgress) return;
+    var sf = selectionUnitFilter();
+    if (!sf.ok) return;
+    if (settings.validateRunAllMode === true) runAllValidators(sf.filter);
+    else runSingleValidator(def, sf.filter);
   }
   function openValidateMenu() {
     var btn = document.getElementById('sp-validate-btn');
@@ -6295,37 +6359,80 @@
     menu.style.setProperty('background-color', bg, 'important');
     menu.style.setProperty('border', '1px solid ' + border, 'important');
 
-    function addItem(label, onClick, primary) {
+    function addItem(label, onClick) {
       var it = document.createElement('div');
       it.textContent = label;
       Object.assign(it.style, {
         padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
-        fontSize: '13px', fontWeight: primary ? '700' : '600',
+        fontSize: '13px', fontWeight: '600',
         whiteSpace: 'nowrap', userSelect: 'none',
       });
       it.style.setProperty('color', text, 'important');
       it.addEventListener('mouseenter', function () { it.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
       it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', 'transparent', 'important'); });
-      it.addEventListener('click', function (e) { e.stopPropagation(); closeValidateMenu(); onClick(); });
+      it.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
       menu.appendChild(it);
     }
+    function addNote(msg) {
+      var note = document.createElement('div');
+      note.textContent = msg;
+      Object.assign(note.style, {
+        padding: '8px 12px', fontSize: '12px', fontStyle: 'italic',
+        whiteSpace: 'nowrap', userSelect: 'none', opacity: '0.65',
+      });
+      note.style.setProperty('color', text, 'important');
+      menu.appendChild(note);
+    }
+    function addCheckbox(label, key, tip) {
+      var row = document.createElement('label');
+      row.title = tip;
+      Object.assign(row.style, {
+        display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '7px 12px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '13px', fontWeight: '600',
+        whiteSpace: 'nowrap', userSelect: 'none',
+      });
+      row.style.setProperty('color', text, 'important');
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = settings[key] === true;
+      cb.style.cursor = 'pointer';
+      cb.addEventListener('change', function () {
+        settings[key] = cb.checked;
+        saveSettings(settings);
+      });
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(label));
+      row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+      row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
+      menu.appendChild(row);
+    }
+    function addSep() {
+      var sep = document.createElement('div');
+      Object.assign(sep.style, { height: '1px', margin: '4px 6px' });
+      sep.style.setProperty('background-color', border, 'important');
+      menu.appendChild(sep);
+    }
 
-    addItem('Run all (loop until stable)', runAllValidators, true);
-    var sep = document.createElement('div');
-    Object.assign(sep.style, { height: '1px', margin: '4px 6px' });
-    sep.style.setProperty('background-color', border, 'important');
-    menu.appendChild(sep);
-    constraintValidators().filter(function (v) { return v.enabled(); }).forEach(function (def) {
-      addItem(def.menuLabel || def.name, function () { runSingleValidator(def); }, false);
-    });
+    // One item per validator DETECTED in this puzzle (re-checked on every open,
+    // so late model loads / SPA puzzle switches are picked up).
+    var detected = detectedValidators();
+    if (detected.length === 0) {
+      addNote('No supported constraints detected in this puzzle.');
+    } else {
+      detected.forEach(function (def) {
+        addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
+      });
+    }
+    addSep();
+    addCheckbox('Run all until stable', 'validateRunAllMode',
+      'Clicking any validator above runs ALL of them in a loop until no more candidates can be removed (removals from one constraint feed the others)');
+    addCheckbox('Validate selection only', 'validateSelectionOnly',
+      'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped (resets on page reload)');
 
     document.body.appendChild(menu);
     positionValidateMenu(menu, btn);
-    // defer so the click that opened the menu doesn't immediately close it
-    setTimeout(function () {
-      document.addEventListener('mousedown', onValidateMenuDocDown, true);
-      window.addEventListener('resize', closeValidateMenu);
-    }, 0);
+    window.addEventListener('resize', closeValidateMenu);
   }
   // Align the menu's right edge to the button; open UPWARD when a downward menu
   // would run off the bottom (the button sits near the bottom), else downward.
@@ -8354,7 +8461,8 @@
   // Floating "Validate Constraints" button — sits above the Auto-fill button in the
   // bottom-right cluster (gear → Auto-fill → Validate). Wider than the square trio so
   // its label fits; the full description is the native hover tooltip. Clicking it
-  // opens a dropdown (toggleValidateMenu) to run one validator or "Run all".
+  // TOGGLES the validator popup menu (toggleValidateMenu), which stays open until
+  // the button is clicked again.
   function buildValidateButton() {
     if (document.getElementById('sp-validate-btn')) return;
     var colorRefBtn = document.querySelector('[data-control="pen"]') ||
@@ -8370,7 +8478,7 @@
     var btn = document.createElement('button');
     btn.id    = 'sp-validate-btn';
     btn.type  = 'button';
-    btn.title = 'Validate constraints — opens a menu: run one validator (Kropki dots, cages, little killers) or "Run all" to loop them until no more candidates can be removed';
+    btn.title = 'Validate constraints — toggles a menu of the validators this puzzle supports (Kropki dots, cages, little killers, …), with "Run all until stable" and "Validate selection only" modes';
     btn.textContent = 'Validate Constraints';
     Object.assign(btn.style, {
       position:   'fixed',

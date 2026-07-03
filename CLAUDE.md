@@ -1,6 +1,6 @@
-# SudokuPad – Native Dark Mode
+# Sudoku Tools (SudokuPad userscript)
 
-TamperMonkey userscript that dark-themes SudokuPad (`sudokupad.app` and related domains): it locks DarkReader out of the page and runs a self-owned frozen copy of SudokuPad's native dark mode, then fixes the gaps that leaves — plus quality-of-life features. Single file: `Sudokupad-Tools.user.js`. Tested on Chrome + TamperMonkey. (The 2.x DarkReader-fighting predecessor was retired 2026-07; it lives only in git history before the `native-mode` merge.)
+TamperMonkey userscript (`@name` "Sudoku Tools", renamed from "SudokuPad – Native Dark Mode" in v3.66) for SudokuPad (`sudokupad.app` and related domains): quality-of-life features (constraint validators, auto-fill, pencilmark actions, region colouring/shading) on top of a dark-theme substrate — it locks DarkReader out of the page and runs a self-owned frozen copy of SudokuPad's native dark mode, then fixes the gaps that leaves. Single file: `Sudokupad-Tools.user.js`. Tested on Chrome + TamperMonkey. (The 2.x DarkReader-fighting predecessor was retired 2026-07; it lives only in git history before the `native-mode` merge.)
 
 ## Project knowledge — read before substantive work
 - [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — current state, architecture, features, terminology, testing setup, test-puzzle URLs.
