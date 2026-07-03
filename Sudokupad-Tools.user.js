@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.69.0
+// @version      3.70.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.69.0';
+  var SCRIPT_VERSION = '3.70.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6071,14 +6071,11 @@
 
   // ── German Whisper validator ──────────────────────────────────────────────
   // A German Whisper: every pair of cells ADJACENT ALONG THE LINE must differ by
-  // at least 5. SudokuPad has no native "whisper" model key — authors draw them
-  // as GREEN cosmetic lines (cp.lines, or an #arrows <path> for imported puzzles),
-  // the ≥5 rule living only in the puzzle text. Detection is therefore by COLOUR:
-  // a green-dominant line (community convention, verified across the catalog —
-  // German = green #67f067/#bbee9f…, Dutch = orange #ffa600 (≥4), palindrome =
-  // grey, region-sum = blue, renban = purple). Orange/grey/blue/purple are cleanly
-  // separated by hue, so a differently-coloured or exotic whisper simply isn't
-  // detected (safe UNDER-removal) rather than mis-detected as some other line.
+  // at least 5. SudokuPad has no native "whisper" model key — authors draw them as
+  // cosmetic lines (cp.lines, or an #arrows <path> for imported puzzles), the ≥5
+  // rule living only in the puzzle text. Detection is LAYERED (green → single line
+  // colour + rules cue → rules-named colour → manual-select fallback); the full
+  // policy + the catalog evidence behind it live above `classifyWhisperLines`.
   //
   // Validation is DELIBERATELY LOCAL — one cell at a time, looking ONLY at its
   // immediate neighbour(s) on the line (never longer-range line logic). A
@@ -6119,12 +6116,75 @@
     return keys;
   }
 
-  // Green lines from the MODEL (cp.lines), falling back to green #arrows <path>s
-  // for imported/cosmetic-only puzzles (or before the model has parsed). Reads the
-  // STROKE ATTRIBUTE — the author's ORIGINAL colour (our object-shading only
-  // rewrites inline style, never the attribute, so green detection survives it).
-  // Returns [[<col,row>…]…], each an ordered chain of adjacent cell keys.
-  function getWhisperLines() {
+  // ── Whisper-line DETECTION (layered; green is never enough on its own) ──────
+  // Colour alone can't find every German whisper — verified against the catalog:
+  // ~57% of ≥5 puzzles never write the phrase "German Whisper", and while GREEN is
+  // the overwhelming convention, real ones are drawn grey (#aaa — `6z3zy41pm6`,
+  // `qhcougnkg6`) or themed (#aa8d8d — `atfgvx1pgc`). Grey ALSO means palindrome,
+  // so a non-green line is only trusted when the rules confirm a whisper. Layers:
+  //   1. GREEN lines are always whispers (any green shade).
+  //   2. else, if the rules carry a ≥5 whisper cue AND every cosmetic line is ONE
+  //      single colour → that colour is the whisper (`atfgvx1pgc`, grey loops).
+  //   3. else, if the cue is present AND the rules NAME a colour for it ("grey
+  //      line … differ by 5") → lines of that colour are the whisper.
+  //   4. else, if the cue is present but the line can't be pinned → AMBIGUOUS: the
+  //      menu tells the player, and only lines they SELECT are validated (run for
+  //      the selected line regardless of colour). Option "any line" is deliberately
+  //      NOT offered — it would mis-flag palindromes/region-sum lines.
+
+  function getPuzzleRulesBlob() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp) return '';
+    var md = cp.metadata || {};
+    function rulesOf(o) { return Array.isArray(o.rules) ? o.rules.join(' ') : (typeof o.rules === 'string' ? o.rules : ''); }
+    return ((cp.title || md.title || '') + ' ' + rulesOf(cp) + ' ' + rulesOf(md)).toLowerCase();
+  }
+  // A "German whisper" ≥5 cue: the phrase itself, or a "differ/difference … 5/five"
+  // phrasing. Kept in sync with the catalog analysis that showed 83% of whisper
+  // puzzles carry exactly this signal (vs 40% for the bare phrase).
+  var WHISPER_CUE_RE = /(german\s+whisper)|(differ(?:ence)?\s*(?:by|of)?\s*(?:at least|a minimum of|minimum of|of at least)?\s*(?:5|five))|(minimum difference of (?:5|five))/;
+  function hasWhisperRuleCue() { return WHISPER_CUE_RE.test(getPuzzleRulesBlob()); }
+
+  // Match a rules colour-word ("grey"/"purple"/…) to an actual line colour. Only
+  // used in layer 3; kept to the common named line colours. Grey = low saturation.
+  function colorWordMatches(word, c) {
+    if (!c) return false;
+    var r = c.r, g = c.g, b = c.b, mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+    switch (word) {
+      case 'grey': case 'gray': return (mx - mn) < 40 && mx > 60 && mx < 235;
+      case 'red':    return r >= g + 40 && r >= b + 40;
+      case 'blue':   return b >= r + 40 && b >= g + 40;
+      case 'green':  return g > 90 && g >= r + 40 && g >= b + 40;
+      case 'purple': case 'violet': return r >= g + 40 && b >= g + 40;
+      case 'pink': case 'magenta':  return r >= g + 40 && b >= g;
+      case 'orange': return r >= b + 60 && g >= b + 30 && r >= g;
+      case 'yellow': return r >= b + 60 && g >= b + 60;
+      case 'brown':  return r > g && g > b && (mx - mn) >= 25 && mx < 200;
+      default: return false;
+    }
+  }
+  var WHISPER_COLOR_WORDS = ['grey', 'gray', 'purple', 'violet', 'red', 'blue', 'pink', 'magenta', 'orange', 'yellow', 'brown'];
+  // The colour word the rules tie to the whisper: scan clauses mentioning "whisper"
+  // or a ≥5 difference and return the first non-green colour word in them.
+  function whisperNamedColorWord() {
+    var blob = getPuzzleRulesBlob();
+    var clauses = blob.split(/[.\n;]/);
+    for (var i = 0; i < clauses.length; i++) {
+      var cl = clauses[i];
+      if (!/whisper|differ|difference/.test(cl)) continue;
+      for (var j = 0; j < WHISPER_COLOR_WORDS.length; j++) {
+        if (cl.indexOf(WHISPER_COLOR_WORDS[j]) !== -1) return WHISPER_COLOR_WORDS[j];
+      }
+    }
+    return null;
+  }
+
+  // Every cosmetic line as { color, keys } — from the MODEL (cp.lines), falling
+  // back to stroked #arrows <path>s for cosmetic-only puzzles. Reads the STROKE
+  // ATTRIBUTE (author's original colour; our object-shading only rewrites inline
+  // style). Thermos (cp.thermos) and arrows (marker-end) are excluded.
+  function getCosmeticLines() {
     var N = detectGridSize();
     function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
     var out = [];
@@ -6132,13 +6192,12 @@
       ? Framework.app.puzzle.currentPuzzle : null;
     if (cp && Array.isArray(cp.lines)) {
       cp.lines.forEach(function (l) {
-        if (!l || !Array.isArray(l.wayPoints) || l.wayPoints.length < 2 || !isGermanWhisperColor(l.color)) return;
+        if (!l || !Array.isArray(l.wayPoints) || l.wayPoints.length < 2) return;
         var keys = expandLineChain(l.wayPoints);
-        if (keys.length >= 2 && keys.every(inGrid)) out.push(keys);
+        if (keys.length >= 2 && keys.every(inGrid)) out.push({ color: l.color || '', keys: keys });
       });
+      if (out.length > 0) return out;
     }
-    if (out.length > 0) return out;
-
     var arrows = document.getElementById('arrows');
     var cs = getGridCellSize();
     if (!arrows || !cs) return out;
@@ -6146,26 +6205,85 @@
       if (p.getAttribute('marker-end')) return;                    // Arrow shaft, not a line clue
       var fill = p.getAttribute('fill');
       if (fill && fill !== 'none') return;
-      if (!isGermanWhisperColor(lineStrokeSrc(p))) return;
+      var stroke = lineStrokeSrc(p);
+      if (!stroke || stroke === 'none') return;
       var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
       if (!nums || nums.length < 4) return;
       var wp = [];
       for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
       var keys = expandLineChain(wp);
-      if (keys.length >= 2 && keys.every(inGrid)) out.push(keys);
+      if (keys.length >= 2 && keys.every(inGrid)) out.push({ color: stroke, keys: keys });
     });
     return out;
   }
 
+  // Normalise a colour string for "same colour" grouping (drop alpha, upper-case).
+  function normLineColor(c) {
+    var p = parseColor(c);
+    if (!p) return String(c || '').toUpperCase();
+    return p.r + ',' + p.g + ',' + p.b;
+  }
+
+  // Classify the puzzle's cosmetic lines into whisper lines + a confidence mode.
+  // Returns { mode:'confident'|'ambiguous'|'none', lines:[[keys]…], allLines:[{color,keys}] }.
+  function classifyWhisperLines() {
+    var all = getCosmeticLines();
+    if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
+    var green = all.filter(function (l) { return isGermanWhisperColor(l.color); });
+    if (green.length > 0) return { mode: 'confident', lines: green.map(function (l) { return l.keys; }), allLines: all };
+
+    var cue = hasWhisperRuleCue();
+    if (!cue) return { mode: 'none', lines: [], allLines: all };
+
+    // Layer 2 — cue + single line colour → that colour is the whisper.
+    var colors = {};
+    all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
+    if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
+
+    // Layer 3 — cue + a colour the rules name for the whisper.
+    var word = whisperNamedColorWord();
+    if (word) {
+      var matched = all.filter(function (l) { return colorWordMatches(word, parseColor(l.color)); });
+      if (matched.length > 0) return { mode: 'confident', lines: matched.map(function (l) { return l.keys; }), allLines: all };
+    }
+
+    // Layer 4 — a whisper is present but its line can't be pinned → manual select.
+    return { mode: 'ambiguous', lines: [], allLines: all };
+  }
+  function whisperDetected() { return classifyWhisperLines().mode !== 'none'; }
+  function whisperIsAmbiguous() { return classifyWhisperLines().mode === 'ambiguous'; }
+
   // Compute centre-candidate removals forced by the German whispers, one cell at a
   // time (local neighbour check above), iterated to a fixpoint. Pure w.r.t. the
-  // board — works on copies of the candidate sets and returns the removal list.
-  function computeWhisperRemovals(unitFilter) {
+  // board. SELECTION-AWARE, unlike the other validators: it reads the selection /
+  // fog directly (ignoring the shared whole-clue unitFilter) so it can validate a
+  // PARTIALLY-selected line — a cell at the selection edge still SEES the rest of
+  // the line, but only cells inside the selection are altered. In AMBIGUOUS mode a
+  // selection is REQUIRED, and every selected line is validated regardless of
+  // colour (the player's manual override).
+  function computeWhisperRemovals() {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
-    var lines = getWhisperLines();
-    if (unitFilter) lines = lines.filter(function (keys) { return unitFilter(keys); });
-    if (lines.length === 0) return { noWhispers: true };
+    var cls = classifyWhisperLines();
+    if (cls.mode === 'none') return { noWhispers: true };
+
+    var selection = getSelectedCells();                 // Set<"col,row"> (may be empty)
+    var isFogged = getFogTester();                      // fn|null (never remove from a fogged cell)
+    var selectionOnly = settings.validateSelectionOnly === true;
+    var ambiguous = cls.mode === 'ambiguous';
+
+    var lines, masked;
+    if (ambiguous) {
+      if (!selection || selection.size === 0) return { noWhispers: true, needSelection: true };
+      lines = cls.allLines.filter(function (l) { return l.keys.some(function (k) { return selection.has(k); }); })
+                          .map(function (l) { return l.keys; });
+      if (lines.length === 0) return { noWhispers: true, needSelection: true };
+      masked = true;                                    // only alter selected cells
+    } else {
+      lines = cls.lines;
+      masked = selectionOnly;
+      if (masked && (!selection || selection.size === 0)) return { noWhispers: true };
+    }
 
     var N = detectGridSize();
     var bd = regularBoxDims(N);
@@ -6178,11 +6296,22 @@
       var ap = a.split(','), bp = b.split(',');
       return ap[0] === bp[0] || ap[1] === bp[1] || boxId(a) === boxId(b) || shareCage(a, b);
     }
+    // May we DELETE candidates from cell C? Never from a fogged cell; when masked
+    // (selection-only or ambiguous), only from cells inside the selection.
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
 
     var values = st.values, fullSet = st.fullSet;
     var work = {};
     Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    // A neighbour's readable candidate set: a fogged cell reads as the full set (we
+    // never let hidden marks force a removal); otherwise value / working marks /
+    // full set. Non-removable neighbours are still READ from their (unshrunk) marks.
     function cellSet(key) {
+      if (isFogged && isFogged(key)) return fullSet;
       if (values[key] != null) return new Set([values[key]]);
       if (work[key]) return work[key];
       return fullSet;                                  // empty cell → unconstrained, never modified
@@ -6213,7 +6342,7 @@
       lines.forEach(function (chain) {
         for (var i = 0; i < chain.length; i++) {
           var C = chain[i];
-          if (values[C] != null || !work[C]) continue;        // only cells with player marks
+          if (values[C] != null || !work[C] || !mayRemove(C)) continue;   // only alterable marked cells
           var left = i > 0 ? chain[i - 1] : null;
           var right = i < chain.length - 1 ? chain[i + 1] : null;
           Array.from(work[C]).forEach(function (d) {           // snapshot: set mutates in loop
@@ -6229,7 +6358,7 @@
     }
 
     var emptied = 0;
-    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
 
     return { removals: removals, whisperCount: lines.length, emptiedCells: emptied };
   }
@@ -6666,8 +6795,7 @@
         detect: function () { return getThermos().length > 0; },
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
       { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
-        detect: function () { return getWhisperLines().length > 0; },
-        compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
+        detect: whisperDetected, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
     ];
   }
   function detectedValidators() {
@@ -6795,7 +6923,7 @@
   async function applyOneValidator(def, unitFilter) {
     var comp = def.compute(unitFilter);
     if (comp.unsupported) return { unsupported: true };
-    if (comp[def.noneKey]) return { present: false, removed: 0 };
+    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection };
     var count = comp[def.countKey] || 0;
     var removals = comp.removals || [];
     if (removals.length === 0) return { present: true, removed: 0, count: count };
@@ -6816,7 +6944,10 @@
     var t0 = performance.now();
     applyOneValidator(def, unitFilter).then(function (res) {
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
-      if (!res.present) { showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return; }
+      if (!res.present) {
+        if (res.needSelection) { showRemoveInvalidToast('The German Whisper line couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "German whisper lines" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
+        showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return;
+      }
       if (res.aborted) { validateAbortToast(res.reverted); return; }
       var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
       if (res.removed === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
@@ -6941,7 +7072,8 @@
       note.textContent = msg;
       Object.assign(note.style, {
         padding: '8px 12px', fontSize: '12px', fontStyle: 'italic',
-        whiteSpace: 'nowrap', userSelect: 'none', opacity: '0.65',
+        whiteSpace: 'normal', maxWidth: '260px', lineHeight: '1.35',
+        userSelect: 'none', opacity: '0.65',
       });
       note.style.setProperty('color', text, 'important');
       menu.appendChild(note);
@@ -7020,15 +7152,19 @@
       addNote('No supported constraints detected in this puzzle.');
     } else {
       detected.forEach(function (def) {
-        if (def.name === 'thermo') addThermoItem(def);
-        else addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
+        if (def.name === 'thermo') { addThermoItem(def); return; }
+        addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
+        // German whispers can be ambiguous (a ≥5 rule is present but which line is
+        // the whisper couldn't be pinned) → tell the player to select the line.
+        if (def.name === 'German whisper' && whisperIsAmbiguous())
+          addNote('⚠ Couldn\'t identify the whisper line — select its cells first, then click above. Only selected cells change.');
       });
     }
     addSep();
     addCheckbox('Run all until stable', 'validateRunAllMode',
       'Clicking any validator above runs ALL of them in a loop until no more candidates can be removed (removals from one constraint feed the others)');
     addCheckbox('Validate selection only', 'validateSelectionOnly',
-      'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped (resets on page reload)');
+      'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped. Exception: German whisper lines DO run on a partial selection (only the selected cells change; the rest of the line is still read). Resets on page reload.');
 
     document.body.appendChild(menu);
     positionValidateMenu(menu, btn);
