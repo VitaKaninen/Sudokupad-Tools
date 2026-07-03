@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.67.1
+// @version      3.68.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.67.1';
+  var SCRIPT_VERSION = '3.68.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6207,12 +6207,20 @@
         for (var s = 1; s <= steps; s++) pts.push([x1 + (x2 - x1) * s / steps, y1 + (y2 - y1) * s / steps]);
       }
 
+      // A thermo shaft touches its bulb at exactly ONE end. Match by GEOMETRY
+      // (an endpoint coincides with a bulb centre), NOT by colour: the bulb is
+      // routinely a darker shade than the shaft (e.g. a #999 bulb on a #ccc
+      // line — sudokupad.app/9zsl8s2gjl, sudokupad.app/syvmhn0tqy), so the old
+      // bulb-fill === shaft-stroke test silently missed ordinary thermos.
+      // Requiring EXACTLY one bulb-end keeps it narrow: a cosmetic line circled
+      // at BOTH ends (e.g. a between-line or a palindrome) is not mistaken for a
+      // thermometer.
       function matches(pt) {
-        return bulbs.some(function (b) { return b.fill === stroke && Math.hypot(b.cx - pt[0], b.cy - pt[1]) < tol; });
+        return bulbs.some(function (b) { return Math.hypot(b.cx - pt[0], b.cy - pt[1]) < tol; });
       }
       var startsAtBulb = matches(pts[0]), endsAtBulb = matches(pts[pts.length - 1]);
-      if (!startsAtBulb && !endsAtBulb) return;                     // no matching bulb -> not a thermo shaft
-      if (endsAtBulb && !startsAtBulb) pts.reverse();                // bulb end goes first
+      if (startsAtBulb === endsAtBulb) return;                      // need exactly one bulb end
+      if (endsAtBulb) pts.reverse();                                // bulb end goes first
 
       var chain = [], ok = true;
       pts.forEach(function (pt) {
@@ -6533,9 +6541,56 @@
     } };
   }
   function noneFoundMsg(nouns, filtered) {
-    return filtered
-      ? 'No ' + nouns + ' fully inside the selection — a clue is only validated when every one of its cells is selected.'
-      : 'No ' + nouns + ' found in this puzzle.';
+    if (!filtered) return 'No ' + nouns + ' found in this puzzle.';
+    var conds = [];
+    if (settings.validateSelectionOnly === true) conds.push('selected');
+    if (getFogTester()) conds.push('revealed (not under fog)');
+    var need = conds.length ? conds.join(' and ') : 'eligible';
+    return 'No ' + nouns + ' to validate — a clue is only checked when all of its cells are ' + need + '.';
+  }
+
+  // FOG GATE (applies to every validator). Returns a predicate
+  // isFogged("col,row") → true iff that cell is CURRENTLY under fog (not yet
+  // revealed), or null when the puzzle has no active fog. Validators must never
+  // act on a clue any of whose cells is fogged — doing so would remove
+  // candidates for a clue the solver can't see yet and spoil the fog.
+  //
+  // Source of truth is the RENDERED fog, hit-tested with SVGGeometryElement
+  // .isPointInFill against #fog-path's path. That path is the fogged region as a
+  // single fill whose fill-rule holes are exactly the revealed cells, so the
+  // hit-test reports live reveal state correctly (a naive per-subpath rect scan
+  // does NOT — the holes make it over-count). Coordinates are the svgrenderer
+  // user space (same as the DOM thermo/bulb scan), cell = getGridCellSize().
+  function getFogTester() {
+    var g = document.getElementById('fog-path');
+    var path = g ? g.querySelector('path') : null;
+    if (!path || !(path.getAttribute('d') || '').trim()) return null;
+    if (typeof path.isPointInFill !== 'function') return null;
+    var svg = path.ownerSVGElement || document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return null;
+    var cache = {};
+    return function (key) {
+      if (key in cache) return cache[key];
+      var parts = key.split(','), col = +parts[0], row = +parts[1];
+      var pt = svg.createSVGPoint(); pt.x = (col + 0.5) * cs; pt.y = (row + 0.5) * cs;
+      var fogged;
+      try { fogged = path.isPointInFill(pt); } catch (e) { fogged = false; }
+      cache[key] = fogged;
+      return fogged;
+    };
+  }
+
+  // AND the always-on fog gate into a (possibly null) selection filter: a unit is
+  // eligible only when it's inside the selection (if that mode is on) AND none of
+  // its cells are under fog. Returns selFilter unchanged when the puzzle has no
+  // active fog.
+  function combineFogFilter(selFilter) {
+    var isFogged = getFogTester();
+    if (!isFogged) return selFilter;
+    var fogFilter = function (keys) { return keys.every(function (k) { return !isFogged(k); }); };
+    if (!selFilter) return fogFilter;
+    return function (keys) { return selFilter(keys) && fogFilter(keys); };
   }
 
   // Cell keys ("col,row") currently holding centre marks (value cells excluded).
@@ -6666,6 +6721,7 @@
     else openValidateMenu();
   }
   // A validator item was clicked: resolve the selection filter (may toast + bail),
+  // AND in the always-on fog gate (skips any clue with a cell still under fog),
   // then either run just that validator or — with "Run all until stable" checked —
   // redirect the click to the full cross-constraint fixpoint over every detected
   // validator. The menu stays open either way.
@@ -6673,8 +6729,9 @@
     if (actionInProgress) return;
     var sf = selectionUnitFilter();
     if (!sf.ok) return;
-    if (settings.validateRunAllMode === true) runAllValidators(sf.filter);
-    else runSingleValidator(def, sf.filter);
+    var filter = combineFogFilter(sf.filter);   // fog gate is always on (no-op when no fog)
+    if (settings.validateRunAllMode === true) runAllValidators(filter);
+    else runSingleValidator(def, filter);
   }
   function openValidateMenu() {
     var btn = document.getElementById('sp-validate-btn');
