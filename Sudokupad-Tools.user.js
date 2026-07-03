@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.68.0
+// @version      3.69.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.68.0';
+  var SCRIPT_VERSION = '3.69.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -283,6 +283,7 @@
     validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
     validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
     validateThermoEnabled:        true,   // "Validate Constraints": run the thermometer validator (future per-validator toggle)
+    validateWhisperEnabled:       true,   // "Validate Constraints": run the German-whisper (green line, ≥5) validator (future per-validator toggle)
     validateRunAllMode:           false,  // "Validate Constraints" menu checkbox: any validator click runs ALL detected validators to a cross-constraint fixpoint
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
@@ -6068,6 +6069,171 @@
     return { removals: removals, lkCount: diags.length, emptiedCells: emptied };
   }
 
+  // ── German Whisper validator ──────────────────────────────────────────────
+  // A German Whisper: every pair of cells ADJACENT ALONG THE LINE must differ by
+  // at least 5. SudokuPad has no native "whisper" model key — authors draw them
+  // as GREEN cosmetic lines (cp.lines, or an #arrows <path> for imported puzzles),
+  // the ≥5 rule living only in the puzzle text. Detection is therefore by COLOUR:
+  // a green-dominant line (community convention, verified across the catalog —
+  // German = green #67f067/#bbee9f…, Dutch = orange #ffa600 (≥4), palindrome =
+  // grey, region-sum = blue, renban = purple). Orange/grey/blue/purple are cleanly
+  // separated by hue, so a differently-coloured or exotic whisper simply isn't
+  // detected (safe UNDER-removal) rather than mis-detected as some other line.
+  //
+  // Validation is DELIBERATELY LOCAL — one cell at a time, looking ONLY at its
+  // immediate neighbour(s) on the line (never longer-range line logic). A
+  // candidate d in cell C survives iff EVERY neighbour can hold a partner ≥5 away
+  // from d (partners of d = { e in the digit set : |d−e| ≥ 5 }); and when C has
+  // TWO neighbours that ordinary Sudoku forces to differ (same row / column / box
+  // / uniqueness-cage), those two partners must be DISTINCT (feasible iff the two
+  // partner sets' union has ≥ 2 digits). So on three cells inside one box the
+  // centre loses 4/5/6 (each needs the SAME lone partner on both sides) but keeps
+  // 7 (partners {1,2} → distinct). 5 dies everywhere unless 0 is in the digit set
+  // (the only digit ≥5 from 5). Iterated to a fixpoint: a removal can shrink a
+  // neighbour's partner set and unlock a further removal.
+
+  // Green-dominant → treat as a German-whisper line. Parses hex (incl. alpha) or
+  // rgb() via the shared parseColor. Excludes orange/yellow (red≈green), grey
+  // (all channels close), blue (blue dominant), purple (red dominant).
+  function isGermanWhisperColor(color) {
+    var c = parseColor(color);
+    if (!c || c.a === 0) return false;
+    return c.g > 90 && c.g >= c.r + 40 && c.g >= c.b + 40;
+  }
+
+  // Expand a line's wayPoints (each [col+0.5, row+0.5]) into one cell key per grid
+  // cell it passes through: an author may draw a straight/diagonal run as two
+  // distant wayPoints, but the ≥5 rule is between ADJACENT cells, so every interior
+  // cell must be materialised. Consecutive duplicates are collapsed.
+  function expandLineChain(wayPoints) {
+    function toCell(p) { return [Math.round(p[0] - 0.5), Math.round(p[1] - 0.5)]; }
+    var cells = [toCell(wayPoints[0])];
+    for (var i = 1; i < wayPoints.length; i++) {
+      var prev = toCell(wayPoints[i - 1]), cur = toCell(wayPoints[i]);
+      var dc = cur[0] - prev[0], dr = cur[1] - prev[1];
+      var steps = Math.max(Math.abs(dc), Math.abs(dr));
+      for (var s = 1; s <= steps; s++) cells.push([Math.round(prev[0] + dc * s / steps), Math.round(prev[1] + dr * s / steps)]);
+    }
+    var keys = [];
+    cells.forEach(function (cr) { var k = cr[0] + ',' + cr[1]; if (keys[keys.length - 1] !== k) keys.push(k); });
+    return keys;
+  }
+
+  // Green lines from the MODEL (cp.lines), falling back to green #arrows <path>s
+  // for imported/cosmetic-only puzzles (or before the model has parsed). Reads the
+  // STROKE ATTRIBUTE — the author's ORIGINAL colour (our object-shading only
+  // rewrites inline style, never the attribute, so green detection survives it).
+  // Returns [[<col,row>…]…], each an ordered chain of adjacent cell keys.
+  function getWhisperLines() {
+    var N = detectGridSize();
+    function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
+    var out = [];
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (cp && Array.isArray(cp.lines)) {
+      cp.lines.forEach(function (l) {
+        if (!l || !Array.isArray(l.wayPoints) || l.wayPoints.length < 2 || !isGermanWhisperColor(l.color)) return;
+        var keys = expandLineChain(l.wayPoints);
+        if (keys.length >= 2 && keys.every(inGrid)) out.push(keys);
+      });
+    }
+    if (out.length > 0) return out;
+
+    var arrows = document.getElementById('arrows');
+    var cs = getGridCellSize();
+    if (!arrows || !cs) return out;
+    arrows.querySelectorAll('path').forEach(function (p) {
+      if (p.getAttribute('marker-end')) return;                    // Arrow shaft, not a line clue
+      var fill = p.getAttribute('fill');
+      if (fill && fill !== 'none') return;
+      if (!isGermanWhisperColor(lineStrokeSrc(p))) return;
+      var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+      if (!nums || nums.length < 4) return;
+      var wp = [];
+      for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
+      var keys = expandLineChain(wp);
+      if (keys.length >= 2 && keys.every(inGrid)) out.push(keys);
+    });
+    return out;
+  }
+
+  // Compute centre-candidate removals forced by the German whispers, one cell at a
+  // time (local neighbour check above), iterated to a fixpoint. Pure w.r.t. the
+  // board — works on copies of the candidate sets and returns the removal list.
+  function computeWhisperRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var lines = getWhisperLines();
+    if (unitFilter) lines = lines.filter(function (keys) { return unitFilter(keys); });
+    if (lines.length === 0) return { noWhispers: true };
+
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var cageSets = getUniqueCageCellSets();
+    function boxId(k) { var p = k.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
+    function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
+    // Two of a cell's neighbours must take DISTINCT partners when ordinary Sudoku
+    // forbids them being equal: same row, column, box, or uniqueness cage.
+    function mustDiffer(a, b) {
+      var ap = a.split(','), bp = b.split(',');
+      return ap[0] === bp[0] || ap[1] === bp[1] || boxId(a) === boxId(b) || shareCage(a, b);
+    }
+
+    var values = st.values, fullSet = st.fullSet;
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (values[key] != null) return new Set([values[key]]);
+      if (work[key]) return work[key];
+      return fullSet;                                  // empty cell → unconstrained, never modified
+    }
+    // Digits the neighbour could still hold that are ≥5 away from d (a legal partner).
+    function partners(neighbourKey, d) {
+      var r = [];
+      cellSet(neighbourKey).forEach(function (e) { if (Math.abs(e - d) >= 5) r.push(e); });
+      return r;
+    }
+    function candidateValid(C, d, left, right) {
+      var nbrs = [];
+      if (left != null) nbrs.push(left);
+      if (right != null) nbrs.push(right);
+      var psets = nbrs.map(function (nb) { return partners(nb, d); });
+      if (psets.some(function (p) { return p.length === 0; })) return false;   // a neighbour has no legal partner
+      if (nbrs.length === 2 && mustDiffer(nbrs[0], nbrs[1])) {
+        var union = new Set(psets[0].concat(psets[1]));
+        if (union.size < 2) return false;             // both neighbours forced to the same lone digit
+      }
+      return true;
+    }
+
+    var removals = [], seen = {};
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lines.forEach(function (chain) {
+        for (var i = 0; i < chain.length; i++) {
+          var C = chain[i];
+          if (values[C] != null || !work[C]) continue;        // only cells with player marks
+          var left = i > 0 ? chain[i - 1] : null;
+          var right = i < chain.length - 1 ? chain[i + 1] : null;
+          Array.from(work[C]).forEach(function (d) {           // snapshot: set mutates in loop
+            if (!candidateValid(C, d, left, right)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        }
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, whisperCount: lines.length, emptiedCells: emptied };
+  }
+
   // ── Thermo validator ──────────────────────────────────────────────────────
   // A thermometer: digits strictly increase from the round bulb to the tip. A
   // SLOW thermometer relaxes this to non-decreasing (repeats allowed), EXCEPT
@@ -6499,6 +6665,9 @@
       { name: 'thermo', unitNoun: 'thermometer', menuLabel: 'Thermometers', enabled: function () { return settings.validateThermoEnabled !== false; },
         detect: function () { return getThermos().length > 0; },
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
+      { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
+        detect: function () { return getWhisperLines().length > 0; },
+        compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
     ];
   }
   function detectedValidators() {
