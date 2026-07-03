@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         SudokuPad – DarkReader Fix
+// @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      2.196.0
-// @description  Fixes DarkReader/dark-theme visual issues on sudokupad.app. Section defaults match the on-screen colours so enabling a section produces no visible change — the user sees their starting point and tweaks from there.
+// @version      3.60.0
+// @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
 // @match        https://beta.sudokupad.app/*
@@ -10,84 +10,153 @@
 // @match        https://crackingthecryptic.com/*
 // @grant        none
 // @run-at       document-start
-// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
-// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-darkreader-fix.user.js
+// @updateURL    https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-native-dark-mode.user.js
+// @downloadURL  https://raw.githubusercontent.com/VitaKaninen/Sudokupad-darkreader-fix/main/sudokupad-native-dark-mode.user.js
 // ==/UserScript==
 
 (function () {
   'use strict';
-
-  // ╔═══════════════════════════════════════════════════════════════════════╗
-  // ║  A/B TEST HARNESS — REMOVE BEFORE RELEASE                              ║
-  // ║  Lets BOTH userscripts stay enabled in Tampermonkey at once while only ║
-  // ║  ONE runs per tab. The active variant is chosen by  #variant=a|b  in   ║
-  // ║  the URL hash (per-tab, survives reloads). No hash → defaults to       ║
-  // ║  Native (b). The active script paints a fixed bottom-center radio bar  ║
-  // ║  so either of us can flip the live script (writes the hash + reloads). ║
-  // ║    a = SudokuPad – DarkReader Fix (this file, main 2.x)                ║
-  // ║    b = SudokuPad – Native Dark Mode (native 3.x)                       ║
-  // ╚═══════════════════════════════════════════════════════════════════════╝
-  var __abMatch = location.hash.match(/variant=([ab])/);
-  var __abActive = __abMatch ? __abMatch[1] : 'b';   // bare URL → Native wins
-  if (__abActive !== 'a') return;                    // this file is variant 'a'
-  (function mountAbSwitch() {
-    function mount() {
-      if (document.getElementById('spdr-ab-switch')) return;
-      var root = document.body || document.documentElement;
-      if (!root) return;
-      var bar = document.createElement('div');
-      bar.id = 'spdr-ab-switch';
-      bar.style.cssText = 'position:fixed;left:50%;bottom:0;transform:translateX(-50%);'
-        + 'z-index:2147483647;background:rgba(20,20,20,.88);color:#eee;'
-        + 'font:12px/1.5 sans-serif;padding:4px 12px;border:1px solid #666;'
-        + 'border-bottom:none;border-radius:7px 7px 0 0;display:flex;gap:14px;'
-        + 'align-items:center;user-select:none;';
-      bar.innerHTML =
-          '<b style="color:#9a9a9a;letter-spacing:.5px">A/B&nbsp;TEST</b>'
-        + '<label style="cursor:pointer"><input type="radio" name="spdrab" value="a"> A&nbsp;·&nbsp;DarkReader&nbsp;Fix&nbsp;2.x</label>'
-        + '<label style="cursor:pointer"><input type="radio" name="spdrab" value="b"> B&nbsp;·&nbsp;Native&nbsp;3.x</label>';
-      root.appendChild(bar);
-      var sel = bar.querySelector('input[value="' + __abActive + '"]');
-      if (sel) sel.checked = true;
-      bar.addEventListener('change', function (e) {
-        if (e.target.value === __abActive) return;
-        location.hash = 'variant=' + e.target.value;
-        location.reload();
-      });
-    }
-    mount();
-    document.addEventListener('DOMContentLoaded', mount);
-    setInterval(mount, 1000);   // re-paint if the SPA wipes the bar
-  })();
-  // ═══ end A/B TEST HARNESS ═══
 
   // crackingthecryptic.com hosts many non-puzzle pages; only activate when a
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // Force SudokuPad's "dark mode alpha" (DMA) OFF — consistent baseline
+  // Dark substrate: lock DarkReader out, run our OWN frozen copy of SudokuPad's
+  // native dark mode ("dark mode alpha" / DMA)
   //
-  // This (DarkReader) edition assumes DR is the dark substrate. SudokuPad's own
-  // dark mode is a separate, experimental layer that, left on, slightly shifts
-  // colours on top of DR — and its persisted setting can be flipped by the native
-  // -mode edition or by hand, so the page would otherwise look different depending
-  // on a toggle state the user never set deliberately. We pin it OFF (setting +
-  // class) at document-start so this edition always renders the same way. (The
-  // native-mode edition instead owns a frozen copy of DMA under `.spdr-dark`.)
+  // We neither fight DarkReader nor *ride* SudokuPad's DMA — both are forced OFF
+  // so we always start from one known state that can't drift underneath us:
+  //   • DarkReader is evicted from SudokuPad via <meta name="darkreader-lock">
+  //     (the extension bypasses this page only; it keeps working everywhere else).
+  //   • SudokuPad's own `darkmode` setting is forced OFF, so the site never adds
+  //     its `.setting-darkmode` class and the in-app toggle reads off.
+  // DMA is author-built and SEMANTIC (it knows a Kropki dot / cage / given), so
+  // instead of losing it we REPLICATE it: FROZEN_DARK_CSS below is a verbatim copy
+  // of DMA's rule set (its `.setting-darkmode {…}` CSS-variable block + ~22 SVG
+  // rules) re-keyed to our own `.spdr-dark` body class. That reproduces DMA pixel
+  // -for-pixel yet immunises us against SudokuPad changing the alpha feature, and
+  // gives us a fully-owned base for our own tweaks + gap fixes (gray/translucent
+  // -dark objects that vanish, non-exact white labels, bright control buttons),
+  // which the rest of this script layers on top. If SudokuPad's DMA ever changes
+  // and we want to track it, re-enumerate its `.setting-darkmode` rules from the
+  // console and refresh FROZEN_DARK_CSS. Captured from style.css + sudokupad
+  // -colors.css @ v0.611.0.
   // ═══════════════════════════════════════════════════════════════════════════
-  (function forceDMAOff() {
+
+  var FROZEN_DARK_CSS = `
+  .spdr-dark {
+    --dm-black: #181A1B;
+    --dm-white: #e8e6e3;
+    --dm-black-alpha: rgba(18,18,18,0.7);
+    --dm-userblue: #5f95ec;
+    --dm-rulesbg: #265016;
+    --dm-button-color: #8522c3;
+    --dm-button-border: #e8e6e3;
+    --dm-button-bg: #242424;
+    --dm-button-hover: #333;
+    --dm-button-dark: #55167B;
+    --dm-button-dark-hover: #9f3cdd;
+    --color-white: var(--dm-black);
+    --color-black: var(--dm-white);
+    --body-bg: var(--dm-black);
+    --button-color: #8522c3;
+    --button-bg: var(--dm-button-bg);
+    --controls-button-text: var(--dm-white);
+    --controls-button-bg: var(--dm-button-dark);
+    --controls-button-hover-bg: var(--dm-button-dark-hover);
+    --puzzle-given: var(--dm-white);
+    --puzzle-givenCornermark: var(--dm-white);
+    --puzzle-givenCandidate: var(--dm-white);
+    --puzzle-value: #5f95ec;
+    --puzzle-candidate: #5f95ec;
+    --puzzle-pencilmark: #5f95ec;
+    --puzzle-outlines: rgba(26,26,26,0.7);
+    --outlinefilter: url("#outlinefilter_dark");
+  }
+  .spdr-dark .cell-grid { stroke: var(--dm-white); }
+  .spdr-dark .cage-box { stroke: var(--dm-white); }
+  .spdr-dark .textbg_ffffff { fill: var(--dm-black); }
+  .spdr-dark [stroke="#000"], .spdr-dark [stroke="#000000"] { stroke: var(--dm-white); }
+  .spdr-dark [fill="#000"], .spdr-dark [fill="#000000"] { fill: var(--dm-white); }
+  .spdr-dark [stroke="rgba(255,255,255,0.7)"] { stroke: var(--dm-black-alpha); }
+  .spdr-dark [fill="rgba(255,255,255,0.7)"] { fill: var(--dm-black-alpha); }
+  .spdr-dark [stroke="#fff"], .spdr-dark [stroke="#ffffff"], .spdr-dark [stroke="#FFF"], .spdr-dark [stroke="#FFFFFF"] { stroke: var(--dm-black); }
+  .spdr-dark [fill="#fff"], .spdr-dark [fill="#ffffff"], .spdr-dark [fill="#FFF"], .spdr-dark [fill="#FFFFFF"] { fill: var(--dm-black); }
+  .spdr-dark [bordercolor="#fff"], .spdr-dark [bordercolor="#ffffff"], .spdr-dark [bordercolor="#FFF"], .spdr-dark [bordercolor="#FFFFFF"] { stroke: var(--dm-black); }
+  .spdr-dark [stroke="#000000"] { stroke: var(--dm-white); }
+  .spdr-dark [stroke="rgba(0, 0, 0, 1)"] { stroke: var(--dm-white); }
+  /* Inside an SVG <mask>, fill/stroke encode luminance (white=show, black=hide),
+     NOT a visible colour, so the #000<->#fff swaps above invert any such mask —
+     e.g. the Restart button's "!"-in-circular-arrow icon, whose mask rect (#fff)
+     and "!" path (#000) get flipped, hiding the arrow and showing only the "!".
+     Restore the authored mask values (higher specificity than the bare swaps). */
+  .spdr-dark mask [fill="#fff" i], .spdr-dark mask [fill="#ffffff" i] { fill: #fff; }
+  .spdr-dark mask [fill="#000" i], .spdr-dark mask [fill="#000000" i] { fill: #000; }
+  .spdr-dark mask [stroke="#fff" i], .spdr-dark mask [stroke="#ffffff" i] { stroke: #fff; }
+  .spdr-dark mask [stroke="#000" i], .spdr-dark mask [stroke="#000000" i] { stroke: #000; }
+  .spdr-dark .cell-given, .spdr-dark .cell-pencilmark.givenCornermark, .spdr-dark .cell-candidate .given { color: var(--dm-white); fill: var(--dm-white); }
+  .spdr-dark rect.textbg[fill="#FFF"], .spdr-dark rect.textbg[fill="#FFFFFF"], .spdr-dark rect.textbg[fill="#fff"], .spdr-dark rect.textbg[fill="#ffffff"], .spdr-dark rect.feature-xv[fill="#FFF"], .spdr-dark rect.feature-xv[fill="#FFFFFF"], .spdr-dark rect.feature-xv[fill="#fff"], .spdr-dark rect.feature-xv[fill="#ffffff"] { fill: var(--dm-black); }
+  .spdr-dark rect.feature-kropki[fill="#000" i], .spdr-dark rect.feature-kropki[fill="#000000" i] { stroke: var(--dm-white); fill: var(--dm-black); }
+  .spdr-dark text.feature-kropki[fill="#000" i], .spdr-dark text.feature-kropki[fill="#000000" i] { fill: var(--dm-black); }
+  .spdr-dark rect.feature-kropki[fill="#fff" i], .spdr-dark rect.feature-kropki[fill="#ffffff" i] { stroke: var(--dm-black); fill: var(--dm-white); }
+  .spdr-dark text.feature-kropki[fill="#fff" i], .spdr-dark text.feature-kropki[fill="#ffffff" i] { fill: var(--dm-white); }
+  .spdr-dark .dialog { color: var(--dm-white); background-color: var(--dm-black); }
+  .spdr-dark #controls { color: var(--dm-white); }
+  .spdr-dark .puzzle-rules { background-color: var(--dm-rulesbg); }
+  .spdr-dark .dialog .setting-item label { color: var(--dm-button-color); }`;
+
+  (function lockDRUseNative() {
+    // 1. DarkReader lock — DR bypasses any page whose <head> carries this meta.
+    function addLock() {
+      if (document.querySelector('meta[name="darkreader-lock"]')) return true;
+      var head = document.head || document.documentElement;
+      if (!head) return false;
+      var m = document.createElement('meta');
+      m.name = 'darkreader-lock';
+      head.appendChild(m);
+      return true;
+    }
+    if (!addLock()) {
+      // <head> may not exist yet at document-start — add it the moment it does.
+      var ho = new MutationObserver(function () { if (addLock()) ho.disconnect(); });
+      ho.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // 2. Force SudokuPad's own dark mode OFF. We run at document-start, before
+    //    SudokuPad's bundle reads the setting, so it never adds .setting-darkmode
+    //    on its own and the in-app toggle reflects "off" — one consistent base.
     try {
       var SS = 'svencodes_settings';
       var s = JSON.parse(localStorage.getItem(SS) || '{}');
       if (s.darkmode !== false) { s.darkmode = false; localStorage.setItem(SS, JSON.stringify(s)); }
     } catch (e) {}
-    function strip() {
+
+    // 3. Inject our frozen copy of DMA (keyed on our own .spdr-dark class).
+    function addFrozenCSS() {
+      if (document.getElementById('spdr-frozen-dark')) return true;
+      var head = document.head || document.documentElement;
+      if (!head) return false;
+      var st = document.createElement('style');
+      st.id = 'spdr-frozen-dark';
+      st.textContent = FROZEN_DARK_CSS;
+      head.appendChild(st);
+      return true;
+    }
+    if (!addFrozenCSS()) {
+      var so = new MutationObserver(function () { if (addFrozenCSS()) so.disconnect(); });
+      so.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // 4. Add our own dark class to <body> (and strip SudokuPad's, defensively, in
+    //    case its bundle managed to set it before our setting write landed).
+    function applyDarkClass() {
       if (!document.body) return false;
+      document.body.classList.add('spdr-dark');
       document.body.classList.remove('setting-darkmode');
       return true;
     }
-    if (!strip()) document.addEventListener('DOMContentLoaded', strip);
+    if (!applyDarkClass()) document.addEventListener('DOMContentLoaded', applyDarkClass);
   })();
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -102,10 +171,13 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '2.196.0';
+  var SCRIPT_VERSION = '3.60.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
+  // Distinguishes this native-mode edition from the 2.x DarkReader-fighting one
+  // when both are installed in TamperMonkey for A/B testing (enable one at a time).
+  window.spdrEdition = 'native';
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -116,7 +188,8 @@
     regionBorderWidth:             '3',
     regionBorderCenterEnabled:     true,    // center border: single-color CSS stroke on region outlines
     regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
-    regionBorderSuppressBoundary:  false,   // (center sub-option) drop the built-in cell grid line along region boundaries
+    regionBorderSuppressBoundary:  false,   // (top-level toggle) drop the built-in cell grid line along region boundaries
+    regionHideAuthorBorders:       false,   // (top-level, SESSION-ONLY) hide author-drawn region/grid border lines in #overlay (clash with our borders on overlapping-grid puzzles). Never persisted — forced off on every page load.
     regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
     regionBorderCellColor:         '#dddad6',// cell grid line colour — matches DR's converted native grid-line colour so enabling looks identical to disabled by default
     regionBorderCellOpacity:       1.0,     // cell grid line opacity
@@ -191,16 +264,27 @@
     kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
-    selectionColorEnabled:        false,
+    selectionBorderEnabled:       true,    // "Border" subsection: restyle the selection cage stroke (colour/opacity/width) + grow/offset
     selectionColor:               '#3399ff',
     selectionOpacity:             0.7,
     selectionWidth:               '8',
     selectionBorderMode:          'inside',  // 'inside' | 'outside'
     selectionBorderOffset:        '0',       // displayed value; baseline shift is mode-specific (see computeSelectionShift)
+    selectionBgEnabled:           true,    // "Background" subsection: set the selection cage fill (colour + opacity). Default opacity 0 = transparent (clears the native grey block); raise opacity toward white — passing the native grey (white @ ~0.4) on the way to opaque white
+    selectionBgColor:             '#ffffff', // white = SudokuPad's native selection-fill colour, so raising opacity reproduces the native grey (@0.4) then continues to solid white
+    selectionBgOpacity:           0,
 
     showToasts:                   true,   // show action result notifications (toasts)
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
     showEasyShadeButton:          true,   // show/hide the Easy Shade button in the controls bar
+    showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
+    showValidateButton:           true,   // show/hide the floating "Validate Constraints" button (Kropki validation, more constraints later)
+    validateKropkiEnabled:        true,   // "Validate Constraints": run the Kropki-dot validator (future per-validator toggle)
+    validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
+    validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
+    fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
+    fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
+    fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
     suppressStartDialog:          true,   // auto-dismiss SudokuPad's "Start/Resume Puzzle" rules popup on load
 
     regionColorPalette0:          '#e05252',  // red
@@ -212,12 +296,16 @@
     regionColorFillEnabled:       false,      // fill entire cell backgrounds with region colors
     regionColorFillOpacity:       0.3,        // opacity of cell-fill backgrounds (independent of border opacity)
 
-    shadedRegionColorEnabled:     false,      // recolor puzzle "extra region" grey shadings (#cages path.cage-extraregion) with the region palette
+    shadedRegionColorEnabled:     false,      // colour puzzle "extra regions" with the region palette — grey #cages path.cage-extraregion shadings, grey #underlay cells, AND model-only regions with no shading (Windoku windows); auto-enabled per puzzle when extra regions are detected
     shadedRegionColorOpacity:     0.5,        // opacity of the recolored shaded-region fills
 
     cellColorsOpacity:            0.6,        // 0..1; opacity of #cell-colors. Matches SudokuPad's native --cell-color-opacity (0.6), so enabling at default = no visible change
     cellColorsOpacityEnabled:     false,      // override #cell-colors opacity when true
   };
+
+  // Settings that must NOT survive a page load (deliberately aggressive, per-puzzle
+  // escape hatches). loadSettings forces each back to its default after merging.
+  var SESSION_ONLY_KEYS = ['regionHideAuthorBorders'];
 
   function loadSettings() {
     try {
@@ -227,6 +315,10 @@
       // script that allowed alphanumerics. Falls back to default if empty.
       var cleanedDigits = (merged.digitSet || '').split('').filter(function (c) { return /^[0-9]$/.test(c); }).join('');
       merged.digitSet = cleanedDigits || DEFAULTS.digitSet;
+      // Session-only keys: never restored from storage — forced to default on every
+      // page load so they apply per-puzzle/per-session and turn back off when the
+      // user leaves the page (they must re-enable manually on the next puzzle).
+      SESSION_ONLY_KEYS.forEach(function (k) { merged[k] = DEFAULTS[k]; });
       return merged;
     } catch (e) { return Object.assign({}, DEFAULTS); }
   }
@@ -246,6 +338,90 @@
   function isDarkReader() {
     return document.documentElement.getAttribute('data-darkreader-scheme') === 'dark';
   }
+  // The page's dark substrate is now our own frozen DMA copy under the .spdr-dark
+  // body class (we lock DR out and force SudokuPad's own dark mode off at the top).
+  // isDarkMode() is true under either, so the script still works if DR somehow
+  // remains (e.g. lock failed on an old DR build).
+  function isNativeDark() {
+    return !!(document.body && document.body.classList.contains('spdr-dark'));
+  }
+  function isDarkMode() {
+    return isNativeDark() || isDarkReader();
+  }
+
+  // ── Diagnostics: window.spdrGapScan() ──────────────────────────────────────
+  // Proactively surface native-dark-mode GAPS without visual inspection. A "gap"
+  // here is a board element that PAINTS something but renders at near-zero
+  // contrast against the page background (invisible on dark) AND that we did NOT
+  // fix (no !important inline of ours — object-shaded / label-bg'd elements carry
+  // our !important and are excluded). Run on any puzzle: spdrGapScan() → {gaps,
+  // flags}, also console.table'd. Catches the "gray/dark object you can't see"
+  // class. NB it does NOT catch wrong-but-VISIBLE shade mismatches (e.g. a circle
+  // that's light-gray where it should be near-black) — those have high contrast;
+  // use the DR-vs-native diff procedure in docs/NATIVE_MODE_MIGRATION.md for them.
+  function spdrGapScan(opts) {
+    opts = opts || {};
+    var TH = opts.threshold || 1.25;
+    var svg = document.getElementById('svgrenderer');
+    if (!svg) return { error: 'no #svgrenderer' };
+    function lum(r, g, b) {
+      function f(c) { c /= 255; return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4); }
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    }
+    function rgb(s) {
+      var m = /rgba?\(([^)]+)\)/.exec(s || ''); if (!m) return null;
+      var p = m[1].split(',').map(parseFloat);
+      return { r: p[0], g: p[1], b: p[2], a: p[3] == null ? 1 : p[3] };
+    }
+    var bg = rgb(getComputedStyle(document.body).backgroundColor) || { r: 26, g: 26, b: 26, a: 1 };
+    var bgL = lum(bg.r, bg.g, bg.b);
+    function over(c, xa) { // composite c (alpha c.a*xa) over the page bg, return contrast
+      var a = c.a * xa;
+      var r = c.r * a + bg.r * (1 - a), g = c.g * a + bg.g * (1 - a), b = c.b * a + bg.b * (1 - a);
+      var l = lum(r, g, b), k = (Math.max(l, bgL) + 0.05) / (Math.min(l, bgL) + 0.05);
+      return { a: a, c: k, eff: 'rgb(' + (r | 0) + ',' + (g | 0) + ',' + (b | 0) + ')' };
+    }
+    function paint(el) { // effective paint = the more-visible of fill / stroke
+      var cs = getComputedStyle(el), op = parseFloat(cs.opacity); if (!isFinite(op)) op = 1;
+      var best = null, w = null, c, o, r;
+      c = rgb(cs.fill); o = parseFloat(cs.fillOpacity); if (!isFinite(o)) o = 1;
+      if (c && cs.fill !== 'none') { r = over(c, o * op); if (r.a > 0.06) { best = r; w = 'fill'; } }
+      c = rgb(cs.stroke); o = parseFloat(cs.strokeOpacity); if (!isFinite(o)) o = 1;
+      var sw = parseFloat(cs.strokeWidth) || 0;
+      if (c && cs.stroke !== 'none' && sw > 0) { r = over(c, o * op); if (r.a > 0.06 && (!best || r.c > best.c)) { best = r; w = 'stroke'; } }
+      return best ? { best: best, which: w } : null;
+    }
+    function ours(el) { // did WE fix it? our fixes are inline !important
+      return el.style.getPropertyPriority('fill') === 'important' || el.style.getPropertyPriority('stroke') === 'important';
+    }
+    var sel = '#underlay rect,#underlay path,#overlay rect,#overlay path,#arrows path,#cages path,#cell-colors > *,#cell-grids path';
+    var els = [].slice.call(svg.querySelectorAll(sel));
+    var csz = (typeof getGridCellSize === 'function' && getGridCellSize(svg)) || 64;
+    var seen = {}, flags = [];
+    els.forEach(function (el) {
+      // Skip elements that cannot actually render: a rect with a non-positive
+      // width or height paints nothing, so its (invisible) stroke is not a real
+      // "gap" — e.g. SudokuPad's degenerate text-halo rects (class "textbg",
+      // w/h = -2) behind tiny value glyphs. This is a geometry guard, not a
+      // class exclusion: a real-sized textbg still gets scanned.
+      if (el.tagName === 'rect') {
+        var rw = parseFloat(el.getAttribute('width')), rh = parseFloat(el.getAttribute('height'));
+        if (!(rw > 0) || !(rh > 0)) return;
+      }
+      var p = paint(el); if (!p || p.best.c >= TH || ours(el)) return;
+      var center = null;
+      try { var b = el.getBBox(); center = 'R' + (Math.floor((b.y + b.height / 2) / csz) + 1) + 'C' + (Math.floor((b.x + b.width / 2) / csz) + 1); } catch (e) {}
+      var key = center + '|' + (el.getAttribute('fill') || '') + '|' + (el.getAttribute('stroke') || '') + '|' + p.which;
+      if (seen[key]) return; seen[key] = 1;
+      flags.push({ rc: center, layer: el.parentElement && el.parentElement.id, cls: el.getAttribute('class'),
+        fill: el.getAttribute('fill'), stroke: el.getAttribute('stroke'), via: p.which, eff: p.best.eff, contrast: +p.best.c.toFixed(2) });
+    });
+    var out = { url: location.pathname, edition: window.spdrEdition, nativeDark: isNativeDark(), scanned: els.length, gaps: flags.length, flags: flags };
+    if (!opts.quiet) { try { console.log('[spdrGapScan]', out.gaps, 'gap(s) /', out.scanned, 'scanned —', out.url); if (flags.length) console.table(flags); } catch (e) {} }
+    return out;
+  }
+  window.spdrGapScan = spdrGapScan;
+
   // Parse hex (3/4/6/8 digit) or rgb()/rgba() into {r,g,b,a}. Returns null on failure.
   function parseColor(str) {
     if (!str) return null;
@@ -312,31 +488,29 @@
     // below #underlay (z=3), so circles/pills appear above it. No CSS rule needed.
 
     // Given digits & overlay text are applied via inline fill (see fixAllGivens)
-    // to bypass DarkReader's CSS-rule colour shifting — same approach as the
-    // center/corner pencilmarks.
+    // so the native theme's CSS rules can't shift their colour — same approach as
+    // the center/corner pencilmarks.
 
+    // Label-bg pre-paint. The authoritative fix is the inline !important fill in
+    // fixLabelRect (which also skips saturated / kropki / preserves alpha); this
+    // CSS just darkens the boxes the instant they appear, before the JS scan runs.
+    // Keyed on .spdr-dark so it's theme-independent (was purple-theme-only).
     if (s.labelBgEnabled) {
       var bg = hexToRgba(s.labelBgColor, s.labelBgOpacity);
       css += `
-      html[data-darkreader-scheme="dark"] #svgrenderer rect.cage-label,
-      html[data-darkreader-scheme="dark"] #svgrenderer rect.textbg:not([fill="none"]),
-      html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
-      html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
-      html[data-darkreader-scheme="dark"] #svgrenderer rect[fill="white"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.textbg:not([fill="none"]),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect.cage-label,
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
-      html:not([data-darkreader-scheme="dark"]) body.setting-uitheme-purple #svgrenderer rect[fill="white"]:not(#underlay *) {
+      body.spdr-dark #svgrenderer rect.cage-label,
+      body.spdr-dark #svgrenderer rect.textbg:not([fill="none"]),
+      body.spdr-dark #svgrenderer rect[fill="#FFFFFF"]:not(#underlay *),
+      body.spdr-dark #svgrenderer rect[fill="#ffffff"]:not(#underlay *),
+      body.spdr-dark #svgrenderer rect[fill="white"]:not(#underlay *) {
         fill: ${bg} !important;
       }`;
     }
 
     // Note: center/corner pencilmark *colours* are applied via inline style on
-    // each element (see fixCenterTspan / fixCornerText below). This bypasses
-    // DarkReader's CSS-rule colour conversion that would otherwise lift our
-    // values into a different shade. Hide-invalid stays as CSS because
-    // display:none isn't affected by DR.
+    // each element (see fixCenterTspan / fixCornerText below) so the native theme's
+    // CSS rules can't re-tint them. Hide-invalid stays as CSS because display:none
+    // needs no per-element override.
     if (s.centerEnabled && s.centerHideInvalid) {
       css += `
       #cell-candidates tspan.conflict { display: none !important; }`;
@@ -346,18 +520,28 @@
       #cell-pencilmarks text.conflict { display: none !important; }`;
     }
 
-    if (s.selectionColorEnabled) {
-      // The visible "selection border" is the SudokuPad path.cage-selectioncage
-      // — the stroke around the perimeter of the selected group. The per-cell
-      // rect.cell-highlight fill behind it is dominated visually by this border,
-      // so users see the border colour as "the selection colour."
-      var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
-      var sw = parseFloat(s.selectionWidth);
-      if (!isFinite(sw) || sw < 0) sw = 8;
-      css += `
-      #cell-highlights path.cage-selectioncage {
+    // The visible "selection" is the SudokuPad path.cage-selectioncage — a stroke
+    // around the perimeter of the selected group over a translucent fill. Two
+    // independent subsections restyle it (each stands alone, no section master):
+    // Border (stroke colour/opacity/width) and Background (cage fill colour/opacity;
+    // default opacity 0 = transparent, which clears SudokuPad's hardcoded grey
+    // rgba(255,255,255,0.4) fill).
+    {
+      var selRule = '';
+      if (s.selectionBorderEnabled) {
+        var sc = hexToRgba(s.selectionColor, s.selectionOpacity);
+        var sw = parseFloat(s.selectionWidth);
+        if (!isFinite(sw) || sw < 0) sw = 8;
+        selRule += `
         stroke: ${sc} !important;
-        stroke-width: ${sw}px !important;
+        stroke-width: ${sw}px !important;`;
+      }
+      if (s.selectionBgEnabled) {
+        selRule += `
+        fill: ${hexToRgba(s.selectionBgColor, s.selectionBgOpacity)} !important;`;
+      }
+      if (selRule) css += `
+      #cell-highlights path.cage-selectioncage {${selRule}
       }`;
     }
 
@@ -371,45 +555,51 @@
       #cell-colors { opacity: ${s.cellColorsOpacity} !important; }`;
     }
 
-    // Always-on: colour-swatch palette restoration (DR overrides --cell-color-N).
-    // The selector repeats the attribute ([…][data-darkreader-scheme]) to raise
-    // specificity to (0,2,1), above DarkReader's own (0,1,1) --cell-color rules.
-    // (This is a load-timing race — DR can momentarily win while it processes; a
-    // reload clears it. We don't try to keep our <style> last: DR inserts a
-    // darkreader--sync sheet after EVERY <style> including ours, so that fight is
-    // unwinnable and only causes thrash.)
+    // (Removed v3.11.0: a DR-only --cell-color-* palette override keyed on
+    // html[data-darkreader-scheme="dark"]. It never matched under native mode, so
+    // the colour-picker swatches + #cell-colors already take their palette from
+    // SudokuPad's own base CSS. If they ever read wrong under native, add a
+    // .spdr-dark override here — see NATIVE_MODE_MIGRATION.md.)
+
+    // Native dark mode leaves SudokuPad's app/tool/aux control buttons on their
+    // light #eee background (it themes only #controls TEXT), so they glare against
+    // the dark page. Darken them to a subtle elevated surface with light-purple
+    // icons. Scoped :not(.selected):not(.selectedperm) so the active-tool / toggled
+    // highlight (purple bg + white icon) is preserved, and to the app/tool/aux
+    // families only — the digit-entry buttons use their own --controls-button-*
+    // purple and already read fine, so they're untouched. NOTE: this only reaches
+    // <button> elements; the Fill / Clear / Clear All <div>s in .controls-tool
+    // carry an inline !important light bg that no stylesheet can beat, so they're
+    // darkened imperatively in darkenInlineToolButtons() instead.
     css += `
-    html[data-darkreader-scheme="dark"][data-darkreader-scheme] {
-      --cell-color-0: transparent !important;
-      --cell-color-1: rgb(214, 214, 214) !important;
-      --cell-color-2: rgb(124, 124, 124) !important;
-      --cell-color-3: rgb(0, 0, 0) !important;
-      --cell-color-4: rgb(179, 229, 106) !important;
-      --cell-color-5: rgb(232, 124, 241) !important;
-      --cell-color-6: rgb(228, 150, 50) !important;
-      --cell-color-7: rgb(245, 58, 55) !important;
-      --cell-color-8: rgb(252, 235, 63) !important;
-      --cell-color-9: rgb(61, 153, 245) !important;
-      --cell-color-a: transparent !important;
-      --cell-color-b: rgb(204, 51, 17) !important;
-      --cell-color-c: rgb(17, 119, 51) !important;
-      --cell-color-d: rgb(0, 68, 196) !important;
-      --cell-color-e: rgb(238, 153, 170) !important;
-      --cell-color-f: rgb(255, 255, 25) !important;
-      --cell-color-g: rgb(240, 70, 240) !important;
-      --cell-color-h: rgb(160, 90, 30) !important;
-      --cell-color-i: rgb(51, 187, 238) !important;
-      --cell-color-j: rgb(145, 30, 180) !important;
-      --cell-color-k: transparent !important;
-      --cell-color-l: rgb(245, 58, 55) !important;
-      --cell-color-m: rgb(76, 175, 80) !important;
-      --cell-color-n: rgb(61, 153, 245) !important;
-      --cell-color-o: rgb(249, 136, 134) !important;
-      --cell-color-p: rgb(149, 208, 151) !important;
-      --cell-color-q: rgb(158, 204, 250) !important;
-      --cell-color-r: rgb(170, 12, 9) !important;
-      --cell-color-s: rgb(47, 106, 49) !important;
-      --cell-color-t: rgb(9, 89, 170) !important;
+    body.spdr-dark #controls .controls-app button:not(.selected):not(.selectedperm),
+    body.spdr-dark #controls .controls-tool button:not(.selected):not(.selectedperm),
+    body.spdr-dark #controls .controls-aux button:not(.selected):not(.selectedperm) {
+      background: #222426 !important;
+      color: #b568e4 !important;
+    }
+    body.spdr-dark #controls .controls-app button:not(.selected):not(.selectedperm):hover,
+    body.spdr-dark #controls .controls-tool button:not(.selected):not(.selectedperm):hover,
+    body.spdr-dark #controls .controls-aux button:not(.selected):not(.selectedperm):hover {
+      background: #3a3a42 !important;
+    }`;
+
+    // Purple buttons: the digit-entry pad and any selected/toggled highlight are
+    // painted by SudokuPad's purple theme via --main-color (#6a1b9a). DR darkens
+    // that to #55167B; match it so the digit pad + active-tool highlight read like
+    // the DR build. (Our --dm-button-dark edit can't reach these — the
+    // .setting-uitheme-purple rule overrides --controls-button-bg to var(--main-color)
+    // at a cascade level our .spdr-dark var loses to, so override the bg directly.)
+    // Borders: SudokuPad gives every control button a bright 1px #ccc border (bare
+    // `button{}` rule); DR darkens it to #3e4446. Darken all control buttons to match.
+    css += `
+    body.spdr-dark #controls .controls-main button.digit,
+    body.spdr-dark #controls button.selected,
+    body.spdr-dark #controls button.selectedperm {
+      background: #55167B !important;
+    }
+    body.spdr-dark #controls button {
+      border-color: #3e4446 !important;
     }`;
 
     return css;
@@ -427,11 +617,105 @@
   rebuildStyleTag();
 
   var easyShadeSwatchRefresh = null; // set by buildEasyRegionShadeButton; keeps its swatches in sync with the palette
+
+  // Fill / Clear / Clear All sit in .controls-tool next to the real <button>s,
+  // but SudokuPad renders them as absolutely-positioned <div>s whose light #eee
+  // background is set INLINE with !important. The v3.3.0 stylesheet rule that
+  // darkens the app/tool/aux buttons can't reach them: it only matches <button>,
+  // and even a !important stylesheet rule loses to an inline !important one. So
+  // we override these imperatively. Only background + colour are touched (the
+  // 1px #ccc border is already what the real buttons keep), and the native bg is
+  // saved so turning native dark mode back off restores them.
+  function darkenInlineToolButtons() {
+    var els = document.querySelectorAll('#controls .controls-tool [data-collapsed-w]');
+    if (!els.length) return false;
+    var dark = document.body.classList.contains('spdr-dark');
+    for (var i = 0; i < els.length; i++) {
+      var el = els[i];
+      if (dark) {
+        if (!el.hasAttribute('data-spdr-orig-bg')) {
+          el.setAttribute('data-spdr-orig-bg', el.style.getPropertyValue('background-color'));
+        }
+        el.style.setProperty('background-color', '#222426', 'important');
+        el.style.setProperty('color', '#b568e4', 'important');
+      } else if (el.hasAttribute('data-spdr-orig-bg')) {
+        var ob = el.getAttribute('data-spdr-orig-bg');
+        if (ob) el.style.setProperty('background-color', ob, 'important');
+        else el.style.removeProperty('background-color');
+        el.style.removeProperty('color');
+        el.removeAttribute('data-spdr-orig-bg');
+      }
+    }
+    return true;
+  }
+
+  // True when a path's `d` is made only of horizontal/vertical segments (and no
+  // curves) — i.e. a rectilinear outline like a grid frame or box/region boundary,
+  // as opposed to a diagonal/curved cosmetic line. Used to scope the
+  // "Hide author-drawn region borders" toggle to grid-structure lines only, so it
+  // leaves diagonal constraint lines etc. alone.
+  function pathIsRectilinear(d) {
+    if (!d || /[CcSsQqTtAa]/.test(d)) return false;   // any curve command disqualifies
+    var toks = d.match(/[MLHVZmlhvz]|-?\d*\.?\d+/g) || [];
+    var i = 0, cx = 0, cy = 0, sx = 0, sy = 0, cmd = '';
+    while (i < toks.length) {
+      var t = toks[i];
+      if (/^[MLHVZmlhvz]$/.test(t)) { cmd = t; i++; if (cmd === 'Z' || cmd === 'z') { cx = sx; cy = sy; } continue; }
+      if (cmd === 'M' || cmd === 'm') {
+        var mx = parseFloat(toks[i++]), my = parseFloat(toks[i++]);
+        if (cmd === 'm') { mx += cx; my += cy; }
+        cx = mx; cy = my; sx = mx; sy = my; cmd = (cmd === 'M') ? 'L' : 'l';   // extra pairs are implicit L
+      } else if (cmd === 'L' || cmd === 'l') {
+        var lx = parseFloat(toks[i++]), ly = parseFloat(toks[i++]);
+        if (cmd === 'l') { lx += cx; ly += cy; }
+        if (Math.abs(lx - cx) > 0.01 && Math.abs(ly - cy) > 0.01) return false;  // diagonal segment
+        cx = lx; cy = ly;
+      } else if (cmd === 'H' || cmd === 'h') { var hx = parseFloat(toks[i++]); cx = (cmd === 'h') ? cx + hx : hx; }
+      else if (cmd === 'V' || cmd === 'v') { var vy = parseFloat(toks[i++]); cy = (cmd === 'v') ? cy + vy : vy; }
+      else { i++; }
+    }
+    return true;
+  }
+
+  // "Hide author-drawn region borders" (session-only toggle). Some puzzles —
+  // overlapping/gattai grids, framed grids — draw their own grid frame + box/region
+  // boundary lines as classless, fill:none, stroked paths in #overlay. Because
+  // #overlay renders ABOVE our injected region-border group, those lines sit on top
+  // of our coloured borders (and our black->white swap brightens the black ones).
+  // When the toggle is on we hide each such rectilinear author border line so our
+  // borders show cleanly; diagonal/curved cosmetic lines and classed/filled shapes
+  // are left untouched. Restores them when off.
+  function applyHideAuthorBorders(svg) {
+    var ov = svg && svg.querySelector('#overlay');
+    if (!ov) return;
+    if (settings.regionHideAuthorBorders) {
+      ov.querySelectorAll('path, line').forEach(function (el) {
+        if (el.getAttribute('class')) return;                       // only classless cosmetic structure
+        var f = el.getAttribute('fill'), s = el.getAttribute('stroke');
+        if (!(f === 'none' || f === null) || !s || s === 'none') return;  // outline-only (no fill)
+        var rect;
+        if (el.tagName.toLowerCase() === 'line') {
+          rect = Math.abs((+el.getAttribute('x1')) - (+el.getAttribute('x2'))) < 0.01 ||
+                 Math.abs((+el.getAttribute('y1')) - (+el.getAttribute('y2'))) < 0.01;
+        } else { rect = pathIsRectilinear(el.getAttribute('d') || ''); }
+        if (!rect) return;
+        el.setAttribute('data-spdr-auth-border-hidden', '');
+        el.style.setProperty('display', 'none', 'important');
+      });
+    } else {
+      ov.querySelectorAll('[data-spdr-auth-border-hidden]').forEach(function (el) {
+        el.style.removeProperty('display');
+        el.removeAttribute('data-spdr-auth-border-hidden');
+      });
+    }
+  }
+
   function applySettings() {
     rebuildStyleTag();
+    darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -666,7 +950,7 @@
   //                      writes (skip) from SudokuPad's re-issues (re-derive).
   function applySelectionBorderOffset(path) {
     if (!path) return;
-    var amount = settings.selectionColorEnabled ? computeSelectionShift() : 0;
+    var amount = settings.selectionBorderEnabled ? computeSelectionShift() : 0;
 
     if (amount === 0) {
       // Restore original if we previously modified it
@@ -740,24 +1024,32 @@
     });
   }
 
-  // ── Inline colour application for pencilmarks (DR-immune) ─────────────────
-  // DR converts colours inside <style> rules but leaves inline-style values
-  // alone when set with !important. Applying fill directly to each element
-  // means our chosen colour renders exactly as picked.
+  // ── Inline colour application for pencilmarks ─────────────────────────────
+  // Apply fill directly to each element with !important so our chosen colour
+  // beats the frozen native dark-theme stylesheet (FROZEN_DARK_CSS) and the
+  // element's own raw colour attribute, rendering exactly as picked.
 
   function applyInlineFill(el, desired) {
     var current = el.style.getPropertyValue('fill');
     if (current !== desired) {
       el.style.setProperty('fill', desired, 'important');
     }
-    // Always strip DR's attribute markers in case it re-added them
-    el.removeAttribute('data-darkreader-inline-color');
-    el.removeAttribute('data-darkreader-inline-fill');
-    el.style.removeProperty('--darkreader-inline-color');
-    el.style.removeProperty('--darkreader-inline-fill');
   }
 
   function fixCenterTspan(t) {
+    // Given candidates (author-provided pencilmarks, tspan.given) are part of the
+    // puzzle like given digits, so they're always white to distinguish them from
+    // the solver's own centre marks — independent of the centre-mark colour
+    // controls below. Forced via inline !important rather than the CSS variable
+    // --puzzle-givenCandidate, because that variable route did NOT apply in
+    // LibreWolf (worked in Chrome/Brave/Firefox); an inline !important fill wins in
+    // every engine. Conflicts fall through to SudokuPad's own pencilmark-error red,
+    // so a given candidate still turns red when a placed digit clashes with it.
+    if (t.classList.contains('given')) {
+      if (t.classList.contains('conflict')) t.style.removeProperty('fill');
+      else applyInlineFill(t, '#e8e6e3');   // --dm-white
+      return;
+    }
     if (!settings.centerEnabled) { t.style.removeProperty('fill'); return; }
     var isC = t.classList.contains('conflict');
     var color = isC ? settings.centerInvalidColor   : settings.centerValidColor;
@@ -770,15 +1062,14 @@
     cc.querySelectorAll('text.cell-candidate, #cell-candidates tspan').forEach(fixCenterTspan);
   }
 
-  // Cell shading. Per-puzzle coloured regions that DR otherwise converts
-  // toward near-white. Covers:
+  // Cell shading. Per-puzzle coloured regions (bright author pastels read poorly
+  // on the dark substrate). Covers:
   //   - #underlay rect:  per-cell shading rects
   //   - #cages path[fill]: cage-shape shadings (killer/region overlays, e.g.
   //     class="cage-fpColumnIndexer")
-  // We parse each element's original `fill`, optionally flip its lightness
-  // (HSL) by the `underlayInvert` strength to make light pastels darker AND
-  // dark colours lighter for dark-mode visibility, then apply the opacity
-  // multiplier. Hue and saturation are preserved — colour identity intact.
+  // Each element's original `fill` is routed through computeObjectShade (gray vs
+  // coloured sliders): hue is preserved, lightness is remapped to the slider's
+  // absolute HSL value (saturation forced to pure hue), then opacity is applied.
 
   // Shared lightness transform. Returns [r,g,b] from an original colour, mapped
   // by the Brightness slider L (0..1): pure hue (saturation forced to 1) at
@@ -804,9 +1095,10 @@
   // through the Gray brightness/opacity sliders and coloured ones through the
   // Color brightness/opacity sliders (each pair is locked together by a single
   // combined slider when "Control opacity and brightness separately" is off). Returns
-  // { rgb:[r,g,b], a:alpha } to apply, or null meaning "leave it to DarkReader"
-  // (the relevant control(s) are disabled). Does NOT cover shape outlines — those
-  // keep their own independent Border-brightness slider via applyShapeStroke.
+  // { rgb:[r,g,b], a:alpha } to apply, or null when the relevant control(s) are
+  // disabled (caller clears our override so the native dark theme repaints it).
+  // Does NOT cover shape outlines — those keep their own independent
+  // Border-brightness slider via applyShapeStroke.
   function computeObjectShade(c) {
     var bKey, bEn, oKey, oEn;
     if (isGrayColor(c)) {
@@ -825,70 +1117,18 @@
     return { rgb: rgb, a: a };
   }
 
-  // ── Restoring DarkReader's look when our Object-shading is turned off ──────
-  // Once we set an `!important` inline colour, DarkReader gives up on the element
-  // and CLEARS its own `--darkreader-inline-*` var (verified). So when shading is
-  // disabled we can't lean on DR to re-darken — it would fall back to the raw,
-  // bright attribute colour. We must repaint DR's dark value ourselves.
-  //
-  // CRITICAL: store a RESOLVED LITERAL (e.g. "rgb(51,55,57)"), never DR's var
-  // EXPRESSION. The v2.145 bug stored the expression `var(--darkreader-background-
-  // cfcfcf,#333739)` and set it as `style.fill`; DR's observer then saw the `#333739`
-  // hex and re-converted it into a *text*-colour var (light!), nesting deeper and
-  // drifting brighter on every toggle. A literal gives DR nothing to re-nest.
-  // Resolve a colour expression to a literal rgb via a throwaway element (DR's vars
-  // are defined on :root, so var() references resolve synchronously through the
-  // cascade — independent of DR clearing the element's own inline var).
-  function resolveCssColor(expr) {
-    var p = document.createElement('span');
-    p.style.color = expr; p.style.display = 'none';
-    document.documentElement.appendChild(p);
-    var c = getComputedStyle(p).color;
-    p.remove();
-    return c;
-  }
-  // Capture DR's converted colour as a literal — once. The element's original
-  // colour never changes, so the first clean capture (DR's untouched var, seen via
-  // the data-marker observer on load) is authoritative; don't overwrite it later
-  // with a value DR may have re-derived from our own fill.
-  function captureDrInline(el, prop) { // prop: 'fill' | 'stroke'
-    var key = prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill';
-    if (el.dataset[key]) return;
-    var lit = '';
-    var v = el.style.getPropertyValue('--darkreader-inline-' + prop);
-    if (v) {
-      lit = resolveCssColor(v);                 // DR's own var (most accurate)
-    } else {
-      // Deterministic fallback — no dependency on DR having set the element's
-      // inline var yet (avoids a scan-vs-DR ordering race). DR publishes its
-      // converted colours as :root vars `--darkreader-<kind>-<hex>` keyed by the
-      // element's STABLE original colour attribute (fills convert as background,
-      // strokes as text). Falls back to the raw colour if DR hasn't defined it.
-      var orig = el.getAttribute(prop);
-      var c = orig && parseColor(orig);
-      if (c) {
-        var hex = ((1 << 24) + (c.r << 16) + (c.g << 8) + c.b).toString(16).slice(1);
-        var kind = prop === 'stroke' ? 'text' : 'background';
-        lit = resolveCssColor('var(--darkreader-' + kind + '-' + hex + ', ' + orig + ')');
-      }
-    }
-    if (lit && lit !== 'none') el.dataset[key] = lit;
-  }
-  // Remove our override and restore DR's converted look: paint the captured literal
-  // if we have one (DR-independent), else fall back to letting DR / the raw
-  // attribute take over. Never touches DR's data attribute, so the observer in
-  // startLabelRectPatch won't re-fire.
-  function restoreToDr(el, prop) {
-    captureDrInline(el, prop);               // grab DR's value if it's present now
+  // ── Clearing our inline override (Object-shading off for an element) ───────
+  // When a shading control is disabled we simply drop our inline fill/stroke and
+  // let the frozen native dark theme (FROZEN_DARK_CSS) repaint the element. There
+  // is nothing to "restore to" — DarkReader is locked out, so the native CSS plus
+  // the element's own attributes are the only layers beneath ours.
+  function clearInline(el, prop) {  // prop: 'fill' | 'stroke'
+    el.style.removeProperty(prop);
     el.style.removeProperty(prop + '-opacity');
-    var saved = el.dataset[prop === 'stroke' ? 'spdrDrStroke' : 'spdrDrFill'];
-    if (saved) el.style.setProperty(prop, saved, 'important');
-    else el.style.removeProperty(prop);
   }
 
   // Fill only — called when Cell shading section is enabled.
   function applyShadingFill(el) {
-    captureDrInline(el, 'fill');
     var c = parseColor(el.getAttribute('fill') || '');
     if (!c || c.a === 0) {
       // No fill or layout-helper rect (fill="#FFFFFF00") — leave it transparent.
@@ -898,15 +1138,13 @@
     }
     var sh = computeObjectShade(c);
     if (!sh) {
-      // Both controls for this colour group are off — hand the element back to
-      // DarkReader's converted look (captured), not the raw bright attribute.
-      restoreToDr(el, 'fill');
+      // Both controls for this colour group are off — drop our override and let
+      // the native dark theme repaint it.
+      clearInline(el, 'fill');
       return;
     }
     el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
     el.style.setProperty('fill-opacity', String(sh.a), 'important');
-    el.removeAttribute('data-darkreader-inline-fill');
-    el.style.removeProperty('--darkreader-inline-fill');
   }
 
   // Stroke (shape outline) — gated by the Object Shading section's enable + its
@@ -915,11 +1153,10 @@
   // the element's hue via shadingTransform; opacity is now configurable too
   // (was hardcoded 1.0 before v2.143).
   function applyShapeStroke(el) {
-    captureDrInline(el, 'stroke');
     var doSL = settings.underlayStrokeLightnessEnabled;
     var doSO = settings.underlayStrokeOpacityEnabled;
     if (!settings.underlayEnabled || (!doSL && !doSO)) {
-      restoreToDr(el, 'stroke');
+      clearInline(el, 'stroke');
       return;
     }
     var strokeAttr = el.getAttribute('stroke');
@@ -935,15 +1172,63 @@
     if (sa < 0) sa = 0; else if (sa > 1) sa = 1;
     el.style.setProperty('stroke', 'rgb(' + srgb[0] + ',' + srgb[1] + ',' + srgb[2] + ')', 'important');
     el.style.setProperty('stroke-opacity', String(sa), 'important');
-    el.style.removeProperty('--darkreader-inline-stroke');
   }
 
+  // Shaded-mode recolour for an #underlay rect that falls inside a DOM-detected
+  // grey shaded region (see getDomShadedRegionMap). Returns the palette rgba to
+  // paint, or null when shaded mode is off, the puzzle has no such regions, or this
+  // rect isn't in one. The rect's CENTRE picks the cell, so full cells and the inset
+  // border strips both resolve to their region's colour.
+  function extraRegionRectColor(rect) {
+    if (!settings.shadedRegionColorEnabled) return null;
+    var map = getDomShadedRegionMap();
+    if (!map) return null;
+    var cs = getGridCellSize();
+    if (!cs) return null;
+    var x = parseFloat(rect.getAttribute('x')), y = parseFloat(rect.getAttribute('y'));
+    var w = parseFloat(rect.getAttribute('width')), h = parseFloat(rect.getAttribute('height'));
+    if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h)) return null;
+    var idx = map[Math.floor((y + h / 2) / cs) + ',' + Math.floor((x + w / 2) / cs)];
+    if (idx === undefined) return null;
+    var pal = [settings.regionColorPalette0 || '#e05252', settings.regionColorPalette1 || '#5294e0',
+               settings.regionColorPalette2 || '#52a84e', settings.regionColorPalette3 || '#e8a030'];
+    var op = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+    return hexToRgba(pal[idx % 4], op);
+  }
+
+  // Crisp (no anti-alias) edges for shaded-cell rects so the many tiled pieces a
+  // region is built from (full cells + bridging strips) meet seamlessly on the dark
+  // canvas — the AA fuzz at each edge otherwise reads as faint seams that the
+  // original's white background hid. ONLY for axis-aligned, square-cornered rects:
+  // crispEdges would jag rotated (diamond) or rounded (lucky-charm) shapes, so those
+  // keep anti-aliasing. Removed (→ default AA) when we stop shading the rect.
+  function applyCrispEdges(el) {
+    var axisAligned = el.tagName === 'rect'
+      && !el.getAttribute('transform')
+      && !(el.transform && el.transform.baseVal && el.transform.baseVal.length)
+      && !el.getAttribute('rx') && !el.getAttribute('ry');
+    if (axisAligned) el.style.setProperty('shape-rendering', 'crispEdges', 'important');
+    else el.style.removeProperty('shape-rendering');
+  }
   function fixUnderlayRect(rect) {
+    // Shaded extra-region recolour takes priority: a grey underlay cell that is
+    // part of a DOM-detected shaded region becomes its palette colour (overrides
+    // the normal grey Object-shading). Falls through to grey when shaded mode off.
+    var erc = extraRegionRectColor(rect);
+    if (erc) {
+      rect.style.setProperty('fill', erc, 'important');
+      rect.style.removeProperty('fill-opacity');   // alpha is baked into the rgba
+      applyCrispEdges(rect);
+      applyShapeStroke(rect);
+      return;
+    }
     // Fill (Cell shading section)
     if (settings.underlayEnabled) {
       applyShadingFill(rect);
+      applyCrispEdges(rect);
     } else {
-      restoreToDr(rect, 'fill');
+      clearInline(rect, 'fill');
+      rect.style.removeProperty('shape-rendering');
     }
     // Stroke (Region borders section)
     applyShapeStroke(rect);
@@ -960,6 +1245,7 @@
     var c = parseColor(r.getAttribute('fill') || '');
     if (!c || c.a === 0) return false;                          // transparent / no fill
     if (isKropkiDotRect(r)) return false;                       // owned by the Kropki fix (any class, black or white)
+    if (isKropkiClueShape(r)) return false;                     // owned by the Kropki clue-shape fix (off-border dots / diamonds)
     if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false;   // white / near-white
     if (r.classList.contains('textbg') && isGrayColor(c)) return false; // grey label bg
     return true;
@@ -978,8 +1264,8 @@
         fixUnderlayRect(r);
         r.dataset.spdrOverlayShaded = '1';
       } else if (r.dataset.spdrOverlayShaded) {
-        restoreToDr(r, 'fill');
-        restoreToDr(r, 'stroke');
+        clearInline(r, 'fill');
+        clearInline(r, 'stroke');
         delete r.dataset.spdrOverlayShaded;
       }
     });
@@ -999,15 +1285,13 @@
   // a region feature is active we instead draw a clone of each one INSIDE mainGroup
   // (drawRegionSplitBorders), below the border strips — coloured if shaded mode is
   // on, otherwise the same grey Object-shaded look. So here we hide the original
-  // #cages path so it doesn't paint over the borders. Re-asserted on DR rewrites.
+  // #cages path so it doesn't paint over the borders. Re-asserted on board re-render.
   function extraRegionsMovedBelowBorders() {
     return regionFeatureActive() && puzzleHasShadedRegions();
   }
   function applyExtraRegionFill(path) {
     path.style.setProperty('fill', 'transparent', 'important');
     path.style.removeProperty('fill-opacity');
-    path.removeAttribute('data-darkreader-inline-fill');
-    path.style.removeProperty('--darkreader-inline-fill');
   }
   function fixCagePath(path) {
     if (path.classList.contains('cage-extraregion') && extraRegionsMovedBelowBorders()) {
@@ -1018,7 +1302,7 @@
     if (settings.underlayEnabled) {
       applyShadingFill(path);
     } else {
-      restoreToDr(path, 'fill');
+      clearInline(path, 'fill');
     }
     applyShapeStroke(path);
   }
@@ -1026,9 +1310,15 @@
     svg.querySelectorAll(CAGE_FILL_SEL).forEach(fixCagePath);
   }
 
-  // Detect whether this puzzle has shaded "extra regions" we can recolor.
+  // Detect whether this puzzle has shaded "extra regions" we can recolor — either
+  // the clonable DOM paths, or grey shaded-cell regions drawn as #underlay rects
+  // (hidden-killer / extraregion cages rendered as grey cells; see getDomShadedRegionMap).
   function puzzleHasShadedRegions() {
-    return !!document.querySelector('#cages path.cage-extraregion');
+    if (document.querySelector('#cages path.cage-extraregion')) return true;
+    if (getDomShadedRegionMap()) return true;   // grey #underlay rects (DOM-only, cached)
+    // Model-defined regions with no DOM shading at all (Windoku-style). Synchronous,
+    // guarded model read; returns null before the app exists, real data after.
+    return !!getModelShadedRegionMap();
   }
 
   // Assign each cage-extraregion path a palette index (0-3) such that any two
@@ -1059,91 +1349,99 @@
       }
       return cells;
     });
-    // Build the touch-adjacency graph between regions.
-    var cellReg = {};
-    sets.forEach(function (s, i) { s.forEach(function (rc) { cellReg[rc[0] + ',' + rc[1]] = i; }); });
-    var n = sets.length, adj = [];
-    for (var i = 0; i < n; i++) adj.push(new Set());
-    sets.forEach(function (s, i) {
-      s.forEach(function (rc) {
-        var r = rc[0], c = rc[1];
-        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
-          var j = cellReg[nb[0] + ',' + nb[1]];
-          if (j !== undefined && j !== i) { adj[i].add(j); adj[j].add(i); }
-        });
-      });
-    });
-    // Greedy colour, most-constrained (highest degree) first → 4 colours suffice
-    // for the planar touch graph; if ever exceeded, reuse the least-clashing one.
-    var order = []; for (var i = 0; i < n; i++) order.push(i);
-    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
-    var colors = new Array(n).fill(-1);
-    order.forEach(function (i) {
-      var used = new Set();
-      adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
-      var pick = -1;
-      for (var k = 0; k < 4; k++) { if (!used.has(k)) { pick = k; break; } }
-      if (pick < 0) {
-        var cnt = [0,0,0,0];
-        adj[i].forEach(function (j) { if (colors[j] >= 0) cnt[colors[j]]++; });
-        pick = cnt.indexOf(Math.min.apply(null, cnt));
-      }
-      colors[i] = pick;
-    });
+    // Colour to MAXIMISE distinct palette colours (shaded-region policy): ≤4 regions
+    // each get their own colour (so two non-touching grey regions differ, not both
+    // red — e.g. 5tplfif6te's two staircases), >4 spread across all four with no two
+    // touching alike. Same helper as the underlay shaded-region path.
+    var colors = colourShadedRegions(sets);
     paths.forEach(function (p, i) { p.dataset.spdrExtraColorIdx = String(colors[i] < 0 ? 0 : colors[i]); });
   }
 
   // Line constraints. Every line-type clue — thermo shafts, palindromes, renban,
   // whispers, region-sum lines, arrow-sudoku arrow lines — renders as a stroked
-  // <path> in #arrows (fill=none). DR leaves these near-white in dark mode while
-  // any matching bulb/underlay shape is shaded dark — a mismatch. We shade the
-  // line STROKE through the same object-shading transform used for fills
-  // (computeObjectShade): gray lines (e.g. #CFCFCF thermos/palindromes) follow
-  // the linked Gray slider, coloured lines the Brightness/Opacity sliders. Scope
-  // is broad on purpose — ALL stroked #arrows paths, not just bulb-matched shafts
-  // (was the v2.122 thermo-only rule; bulbless line puzzles like 9p6eahqmux fell
-  // through to DR before v2.140). Stroke width is never touched.
+  // <path> in #arrows (fill=none). We shade the line STROKE through the same
+  // object-shading transform used for fills (computeObjectShade): gray lines (e.g.
+  // #CFCFCF thermos/palindromes) follow the linked Gray slider, coloured lines the
+  // Brightness/Opacity sliders. Scope is broad on purpose — ALL stroked #arrows
+  // paths, not just bulb-matched shafts (was the v2.122 thermo-only rule; bulbless
+  // line puzzles like 9p6eahqmux were missed before v2.140). Stroke width is never
+  // touched.
+  //
+  // TWO shapes the path's-own-stroke rule used to miss, both now covered (v3.51):
+  //  • GROUP-stroked arrows — some authors stroke the whole arrow <g> and leave the
+  //    shaft path + arrowhead <marker> to inherit it (Bill Murphy "Pathfinder"
+  //    nr59t9p34q, ~160 catalog puzzles). lineStrokeSrc resolves the inherited colour
+  //    and we set the inline override on the visible paths (incl. the marker's content
+  //    path, which recolours the rendered arrowhead — verified), never the <g>, so
+  //    apply + highlight stay on the same element set.
+  //  • FILLED arrow shapes — block arrows (clover "Cupid"), diamonds (clover
+  //    "Borderlands" lte0wsz2f0), filled directional arrows (Bill Murphy "Dead or
+  //    Alive" 1q8ntzcmyn) are an #arrows <path fill="#CFCFCF">. The fill is the bulk
+  //    of the shape, so shading only the stroke left the gray body bright; shade the
+  //    fill through the same gray/colour router.
+  // ATTRIBUTES only (never our inline style) → re-applying is idempotent.
+  function lineStrokeSrc(el) {
+    for (var n = el; n && n.id !== 'arrows'; n = n.parentElement) {
+      if (n.getAttribute) { var s = n.getAttribute('stroke'); if (s) return s; }
+    }
+    return null;
+  }
   function applyLineStroke(el) {
-    captureDrInline(el, 'stroke');
-    var c = parseColor(el.getAttribute('stroke') || '');
-    if (!c || c.a === 0) return;
-    if (!settings.underlayEnabled) {
-      restoreToDr(el, 'stroke');
-      return;
-    }
+    if (!settings.underlayEnabled) { clearInline(el, 'stroke'); return; }
+    var c = parseColor(lineStrokeSrc(el) || '');
+    if (!c || c.a === 0) { clearInline(el, 'stroke'); return; }
     var sh = computeObjectShade(c);
-    if (!sh) {
-      restoreToDr(el, 'stroke');
-      return;
-    }
+    if (!sh) { clearInline(el, 'stroke'); return; }
     el.style.setProperty('stroke', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
     el.style.setProperty('stroke-opacity', String(sh.a), 'important');
-    el.style.removeProperty('--darkreader-inline-stroke');
+  }
+  function applyLineFill(el) {
+    if (!settings.underlayEnabled) { clearInline(el, 'fill'); return; }
+    var c = parseColor(el.getAttribute('fill') || '');
+    if (!c || c.a === 0) { clearInline(el, 'fill'); return; }
+    var sh = computeObjectShade(c);
+    if (!sh) { clearInline(el, 'fill'); return; }
+    el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
+    el.style.setProperty('fill-opacity', String(sh.a), 'important');
   }
   function isLineStroke(el) {
     if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
-    var s = el.getAttribute('stroke');
-    return !!(s && s !== 'none');
+    var s = lineStrokeSrc(el);
+    if (!s || s === 'none') return false;
+    var c = parseColor(s);
+    return !!(c && c.a !== 0);
+  }
+  function isLineFill(el) {
+    if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
+    var f = el.getAttribute('fill');
+    if (!f || f === 'none') return false;
+    var c = parseColor(f);
+    if (!c || c.a === 0) return false;
+    // White / near-white fills are a SEMANTIC distinct from grey and must NOT be
+    // shaded to the same grey as #CFCFCF fills — e.g. Bill Murphy's "Dead or Alive"
+    // arrows (gbvrbw6nh8, 1q8ntzcmyn): WHITE arrows vs GREY arrows must stay tellable
+    // apart. Leaving white to the native dark theme ([fill=#FFFFFF]→dm-black) renders
+    // it as a hollow/dark arrow, distinct from the solid grey ones. Mirrors
+    // shouldShadeOverlayRect's near-white skip (the grey #CFCFCF=207 fills still shade).
+    if (c.r >= 240 && c.g >= 240 && c.b >= 240) return false;
+    return true;
   }
   function fixAllLines(svg) {
-    svg.querySelectorAll('#arrows path[stroke]').forEach(function (el) {
+    svg.querySelectorAll('#arrows path').forEach(function (el) {
       if (isLineStroke(el)) applyLineStroke(el);
+      if (isLineFill(el))   applyLineFill(el);
     });
   }
 
-  // Given digits — apply colour via inline fill so DR doesn't re-convert it.
-  // Overlay texts (constraint labels, rank markers, etc.) are NOT touched here;
-  // they have no cell-given class. Grayscale overlay markers are handled
-  // separately by fixOverlayMarkerText (gray object-shading sliders); coloured
-  // overlay text is left to DarkReader.
+  // Given digits — apply colour via inline !important fill so the native dark
+  // theme can't re-tint it. Overlay texts (constraint labels, rank markers, etc.)
+  // are NOT touched here; they have no cell-given class. Grayscale overlay markers
+  // are handled separately by fixOverlayMarkerText (gray object-shading sliders);
+  // coloured overlay text is left to the native theme.
   function fixGivenText(t) {
     if (settings.givenEnabled) {
       var color = hexToRgba(settings.givenColor, settings.givenOpacity);
       t.style.setProperty('fill', color, 'important');
-      t.removeAttribute('data-darkreader-inline-color');
-      t.removeAttribute('data-darkreader-inline-fill');
-      t.style.removeProperty('--darkreader-inline-color');
-      t.style.removeProperty('--darkreader-inline-fill');
     } else {
       t.style.removeProperty('fill');
     }
@@ -1152,15 +1450,11 @@
     svg.querySelectorAll('#cell-givens text, text.cell-given').forEach(fixGivenText);
   }
   // User-entered (placed) digits — the values the solver types into cells
-  // (#cell-values text). Same inline-fill approach as givens so DR can't re-convert.
+  // (#cell-values text). Same inline-!important-fill approach as givens.
   function fixUserText(t) {
     if (settings.userDigitEnabled) {
       var color = hexToRgba(settings.userDigitColor, settings.userDigitOpacity);
       t.style.setProperty('fill', color, 'important');
-      t.removeAttribute('data-darkreader-inline-color');
-      t.removeAttribute('data-darkreader-inline-fill');
-      t.style.removeProperty('--darkreader-inline-color');
-      t.style.removeProperty('--darkreader-inline-fill');
     } else {
       t.style.removeProperty('fill');
     }
@@ -1170,8 +1464,8 @@
   }
   // Overlay marker text — author-drawn grayscale <text> in #overlay (e.g. the
   // "#N" rank markers in clover's Rank Sudoku, or the X/O letters in Counting
-  // Neighbours). The author sets a dim gray inline fill (#AAA / #CCC) and DR
-  // passes it through nearly unchanged, so it isn't covered by any of our digit
+  // Neighbours). The author sets a dim gray inline fill (#AAA / #CCC) that the
+  // native theme leaves nearly unchanged, so it isn't covered by any of our digit
   // controls. We route the GRAY ones through the same Gray object-shading sliders
   // as gray shapes (computeObjectShade's gray branch), so they track that single
   // brightness/opacity control. We deliberately do NOT recolour these to a fixed
@@ -1179,7 +1473,7 @@
   // near-white givenColor made them far brighter than the author intended); the
   // shading transform scales the author's gray instead, preserving the dim look.
   // Skips: Kropki labels (author '#000'/'#fff' text or our injected labels — owned
-  // by the Kropki fix) and any COLOURED overlay text (left to DarkReader).
+  // by the Kropki fix) and any COLOURED overlay text (left to the native theme).
   function fixOverlayMarkerText(t) {
     if (t.dataset.spdrKropkiText !== undefined) return;   // existing author Kropki label
     if (t.dataset.spdrKropkiLabel !== undefined) return;  // our injected Kropki label
@@ -1194,13 +1488,9 @@
     if (sh) {
       t.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
       t.style.setProperty('fill-opacity', String(sh.a), 'important');
-      t.removeAttribute('data-darkreader-inline-fill');
-      t.removeAttribute('data-darkreader-inline-color');
-      t.style.removeProperty('--darkreader-inline-fill');
-      t.style.removeProperty('--darkreader-inline-color');
     } else {
-      // Section off / both gray sliders off → hand back to the author's colour
-      // (non-important, exactly as it shipped) so DarkReader reasserts its look.
+      // Section off / both gray sliders off → restore the author's original fill
+      // (non-important, exactly as it shipped) so the native theme shows it as authored.
       if (orig) t.style.setProperty('fill', orig);
       else t.style.removeProperty('fill');
       t.style.removeProperty('fill-opacity');
@@ -1211,9 +1501,10 @@
   }
 
   // ── Kropki dot color fix ──────────────────────────────────────────────────────
-  // DarkReader inverts Kropki dots: white-fill (consecutive) → black, black-fill
-  // (2:1 ratio) → white. Restore correct colors via inline style so DR can't
-  // re-convert them. Optionally overlay a ":" / "~" label on each bare dot.
+  // Force Kropki dots to their correct colours via inline !important style so the
+  // native dark theme can't re-tint them: white-fill (consecutive) stays white,
+  // black-fill (2:1 ratio) stays black, each with an optional contrasting outline.
+  // Optionally overlay a ":" / "~" label on each bare dot.
   //
   // Robust detection rule (3 independent signals, ALL required):
   //   1. SHAPE  — a true circle: feature-kropki class (authoritative), OR a square
@@ -1234,18 +1525,58 @@
   // as bare <rect> circles), filtered down by the fill + position gates.
   //
   // Labeled Kropki-type circles (Difference/Ratio Sudoku etc.) pass isKropkiCircle
-  // but not isKropkiRect. Their circle fill and adjacent text color are DR-proofed,
-  // but we don't inject our own labels on top of the existing text.
+  // but not isKropkiRect. Their circle fill and adjacent text colour are pinned via
+  // inline !important, but we don't inject our own labels on top of the existing text.
   // data-spdr-kropki-text marks such texts so the MutationObserver can re-fix them.
 
-  // Returns the non-spdr text immediately following a Kropki circle rect, if it has
-  // non-empty content (= the existing label for labeled Kropki-type circles).
+  // Returns the non-spdr value text whose anchor sits ON a circle's centre, by
+  // scanning the overlay/underlay text in the same SVG. SudokuPad often renders
+  // an edge clue's value in a SEPARATE batch (Ratio fractions, XV/Roman sums) so
+  // it is NOT a DOM sibling of the dot — the only stable link is position. The
+  // anchor of a centred value lands on the dot centre (text-anchor:middle), a few
+  // px down for the baseline. Tolerance stays well under one cell, so a
+  // neighbouring clue (≥ 1 cell away) can never be matched. Scoped to
+  // overlay/underlay so grid digits / pencilmarks are never picked up.
+  function getCenteredKropkiText(rect) {
+    var svg = rect.ownerSVGElement; if (!svg) return null;
+    var w = parseFloat(rect.getAttribute('width') || 0);
+    var h = parseFloat(rect.getAttribute('height') || 0);
+    var cx = parseFloat(rect.getAttribute('x') || 0) + w / 2;
+    var cy = parseFloat(rect.getAttribute('y') || 0) + h / 2;
+    var texts = svg.querySelectorAll('#overlay text, #underlay text');
+    for (var i = 0; i < texts.length; i++) {
+      var t = texts[i];
+      if (t.getAttribute('data-spdr-kropki-label') != null) continue;  // our own label
+      if (t.textContent.trim() === '') continue;
+      var tx = parseFloat(t.getAttribute('x')), ty = parseFloat(t.getAttribute('y'));
+      if (!isFinite(tx) || !isFinite(ty)) continue;
+      if (Math.abs(tx - cx) <= 10 && Math.abs(ty - cy) <= 16) return t;
+    }
+    return null;
+  }
+
+  // Returns the non-spdr value text belonging to a Kropki circle rect (its
+  // existing label, for labeled Kropki-type circles), or null if the dot is bare.
   function getKropkiAdjacentText(rect) {
     var next = rect.nextElementSibling;
-    while (next && next.getAttribute && next.getAttribute('data-spdr-kropki-label')) {
-      next = next.nextElementSibling;
+    // Walk past elements that can sit BETWEEN a labeled dot and its value text:
+    //   - our own injected labels (data-spdr-kropki-label)
+    //   - the author's text-background halo (rect.textbg), which Difference/Ratio
+    //     puzzles place between the circle and its "2"/"3" value (circle → textbg
+    //     → text). Missing it made us treat the labeled dot as BARE and inject a
+    //     spurious rotated '~' on top of the real value (clover "Same Difference").
+    while (next) {
+      if (next.getAttribute && next.getAttribute('data-spdr-kropki-label') != null) { next = next.nextElementSibling; continue; }
+      if (next.tagName === 'rect' && next.classList && next.classList.contains('textbg')) { next = next.nextElementSibling; continue; }
+      break;
     }
-    return (next && next.tagName === 'text' && next.textContent.trim() !== '') ? next : null;
+    if (next && next.tagName === 'text' && next.textContent.trim() !== '') return next;
+    // Fallback: the value text isn't a sibling at all — SudokuPad batched it
+    // elsewhere in the group (Ratio fractions, XV/Roman sums). Match by position.
+    // Without this we mistake the labeled dot for bare → inject a spurious '~'
+    // AND never pin the value's colour → off-white numerals vanish on the white
+    // disc. (clover "XIIIVIII" ed0mko9d0b, "Back to the Ratio" 3y38nrs34s, etc.)
+    return getCenteredKropkiText(rect);
   }
 
   // Any Kropki-shaped circle — used for color fixing. SHAPE test only; the
@@ -1302,7 +1633,7 @@
   // section is their sole controller — otherwise a black Kropki dot reads as a "gray
   // object" (highlight + shading) and a white dot gets flattened to the label-bg
   // colour. Unconditional (ignores kropkiFixEnabled): a Kropki dot is never an
-  // object-shading / label-bg target; when the Kropki fix is off it falls to DR.
+  // object-shading / label-bg target; when the Kropki fix is off it falls to the native theme.
   // Takes ONLY the rect — cs is computed internally so this is safe to pass straight
   // to Array.filter (which would otherwise feed the array index in as a 2nd arg and
   // wreck isOnCellBorder by using a 1px cell size).
@@ -1313,6 +1644,23 @@
     return isOnCellBorder(rect, getGridCellSize());
   }
 
+  // Apply (ring on) or clear (ring off) a Kropki-family dot's outline as the disc
+  // rect's OWN stroke — so the ring always paints UNDER the dot's value/label text
+  // (the rect precedes the text in DOM order; SVG paints in document order). When
+  // off we set stroke:none !important, NOT a bare removeProperty: the static
+  // `.spdr-dark rect.feature-kropki[fill=...]` CSS rule derives a contrasting stroke
+  // from the attribute fill, so merely clearing our inline value would let that
+  // CSS ring re-appear. Shared by the labeled-dot branch and fixKropkiClueShape.
+  function applyKropkiDotRing(rect, on, color) {
+    if (on) {
+      rect.style.setProperty('stroke', color, 'important');
+      rect.style.setProperty('stroke-width', '1.5', 'important');
+    } else {
+      rect.style.setProperty('stroke', 'none', 'important');
+      rect.style.removeProperty('stroke-width');
+    }
+  }
+
   function fixKropkiDot(rect) {
     var fill = rect.getAttribute('fill');
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
@@ -1320,27 +1668,54 @@
     if (!isWhite && !isBlack) return;
     // Real edge clues (Kropki / X-V / operator dots) sit ON a cell border — a
     // gridline in one axis, mid-cell in the other. Circles elsewhere are NOT
-    // Kropki and are left to DarkReader: a quadruple sits on a grid CORNER
+    // Kropki and are left to the native theme: a quadruple sits on a grid CORNER
     // (gridline in both axes), arrow bulbs / cosmetic circles at a cell CENTRE,
     // line endpoints wherever a path ends. Black dots are gated the same way (a
     // solid-black circle off a border is cosmetic, not Kropki).
     if (!isOnCellBorder(rect, getGridCellSize())) return;
     var adjText = getKropkiAdjacentText(rect);
+    // ── LABELED value clues (Ratio fraction, Difference number, XV/Roman sum,
+    // operator symbol) ── carry a printed value but are still Kropki-FAMILY dots:
+    // a black disc = ratio, a white disc = difference (e.g. "Fourshadowing"
+    // 42klo6lbj4 — black "4" ratio dots and white "4" difference dots). So KEEP the
+    // disc's semantic colour and only pin the value text to contrast (white on a
+    // black disc, black on a white disc). Native dark only rendered these "broken"
+    // because it left the value off-white on a white disc; once WE own the text
+    // colour, a white disc is perfectly readable — no need to flatten everything to
+    // black (which also let the static feature-kropki[fill] CSS rule paint a stray
+    // white ring on the real black dots). The outline RING follows the same
+    // per-colour toggles as bare dots and is the disc's own stroke, so it paints
+    // UNDER the value text. The colour+text fix stays decoupled from the master
+    // kropkiFixEnabled (an unconditional correctness fix); only the ring is gated.
+    if (adjText) {
+      var labelRingOn, labelRingColor, labelTextColor;
+      if (isBlack) { labelRingOn = !!settings.kropkiOutlineEnabled;             labelRingColor = '#ffffff'; labelTextColor = '#ffffff'; rect.style.setProperty('fill', '#000000', 'important'); }
+      else         { labelRingOn = settings.kropkiWhiteOutlineEnabled !== false; labelRingColor = '#000000'; labelTextColor = '#000000'; rect.style.setProperty('fill', '#ffffff', 'important'); }
+      applyKropkiDotRing(rect, labelRingOn, labelRingColor);
+      if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
+      rect.style.setProperty('fill-opacity', '1', 'important');
+      adjText.setAttribute('data-spdr-kropki-text', labelTextColor);
+      adjText.style.setProperty('fill', labelTextColor, 'important');
+      return;
+    }
+    // ── BARE dots ── genuine Kropki: keep the SEMANTIC fill (white = consecutive,
+    // black = 2:1) and honour the Kropki outline controls. Flipping these would
+    // corrupt the clue, so only the labeled clues above invert.
     if (settings.kropkiFixEnabled) {
-      if (isWhite) {
-        rect.style.setProperty('fill', '#ffffff', 'important');
-        if (settings.kropkiWhiteOutlineEnabled !== false) {
-          rect.style.setProperty('stroke', '#000000', 'important');
-          rect.style.removeProperty('stroke-width');
+      if (isBlack) {
+        rect.style.setProperty('fill', '#000000', 'important');
+        if (settings.kropkiOutlineEnabled) {
+          rect.style.setProperty('stroke', '#ffffff', 'important');
+          rect.style.setProperty('stroke-width', '1.5', 'important');
         } else {
           rect.style.removeProperty('stroke');
           rect.style.removeProperty('stroke-width');
         }
       } else {
-        rect.style.setProperty('fill', '#000000', 'important');
-        if (settings.kropkiOutlineEnabled) {
-          rect.style.setProperty('stroke', '#ffffff', 'important');
-          rect.style.setProperty('stroke-width', '1.5', 'important');
+        rect.style.setProperty('fill', '#ffffff', 'important');
+        if (settings.kropkiWhiteOutlineEnabled !== false) {
+          rect.style.setProperty('stroke', '#000000', 'important');
+          rect.style.removeProperty('stroke-width');
         } else {
           rect.style.removeProperty('stroke');
           rect.style.removeProperty('stroke-width');
@@ -1351,17 +1726,6 @@
       // so fixed dots are solid; stash the original to restore on disable.
       if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
       rect.style.setProperty('fill-opacity', '1', 'important');
-      rect.removeAttribute('data-darkreader-inline-fill');
-      rect.style.removeProperty('--darkreader-inline-fill');
-      // For labeled Kropki circles, also DR-proof the existing text color.
-      // White circle → black text; black circle → white text.
-      if (adjText) {
-        var textColor = isWhite ? '#000000' : '#ffffff';
-        adjText.setAttribute('data-spdr-kropki-text', textColor);
-        adjText.style.setProperty('fill', textColor, 'important');
-        adjText.removeAttribute('data-darkreader-inline-color');
-        adjText.style.removeProperty('--darkreader-inline-color');
-      }
     } else {
       rect.style.removeProperty('fill');
       rect.style.removeProperty('stroke');
@@ -1371,10 +1735,6 @@
         if (rect.dataset.spdrKropkiFo) rect.style.setProperty('fill-opacity', rect.dataset.spdrKropkiFo);
         else rect.style.removeProperty('fill-opacity');
         delete rect.dataset.spdrKropkiFo;
-      }
-      if (adjText) {
-        adjText.removeAttribute('data-spdr-kropki-text');
-        adjText.style.removeProperty('fill');
       }
     }
   }
@@ -1387,31 +1747,87 @@
     });
   }
 
+  // ── Off-border Kropki-TYPE clue shapes (v3.34.0) ────────────────────────────
+  // Pure black/white circles & diamonds that the position gate keeps OUT of
+  // fixKropkiDot: quad / clock-face dots (circles at a cell CORNER or CENTRE) and
+  // Kropki-cage ratio markers (DIAMONDS = rotate-45 squares). Left to the generic
+  // fixes they invert — object-shading paints the black ones grey (#999), label-bg
+  // paints the white ones dark — so we claim them here and render them in the
+  // Kropki convention instead. object-shading (shouldShadeOverlayRect, objFillSources)
+  // and label-bg (fixLabelRect, HT.labelBg) all SKIP isKropkiClueShape, so this is
+  // their sole controller (the same foolproof pattern as isKropkiDotRect).
+  function isKropkiDiamond(rect) {
+    if (rect.tagName !== 'rect') return false;
+    if (!/rotate\(\s*45\b/.test(rect.getAttribute('transform') || '')) return false;
+    var w = parseFloat(rect.getAttribute('width') || 0), h = parseFloat(rect.getAttribute('height') || 0);
+    return w > 0 && Math.abs(w - h) < 1;
+  }
+  function isKropkiClueShape(rect) {
+    if (!rect || rect.tagName !== 'rect') return false;
+    var f = (rect.getAttribute('fill') || '').toUpperCase();
+    if (f !== '#FFFFFF' && f !== '#000000') return false;          // pure black / white only
+    var cs = getGridCellSize() || 64;
+    var w = parseFloat(rect.getAttribute('width') || 0);
+    // Small only (≤ half a cell): includes kropki-sized clue dots/diamonds (~15–28px
+    // on a 64px cell) but EXCLUDES bigger circles — notably digit QUADRUPLES (~38px
+    // white corner-circles holding 1–4 digits), which must keep their native look.
+    if (!(w > 0 && w <= cs * 0.5)) return false;
+    var diamond = isKropkiDiamond(rect);
+    var circle  = isKropkiCircle(rect);
+    if (!diamond && !circle) return false;
+    // A circle ON a border is a real edge dot — fixKropkiDot owns those; only claim
+    // OFF-border circles (corners / centres) here. Diamonds are claimed anywhere.
+    if (circle && !diamond && isOnCellBorder(rect, cs)) return false;
+    // A shape backing a MULTI-character value (e.g. clover "Quadrille" 63u3k65z7e:
+    // a small white circle behind a 3–4 digit clue that OVERFLOWS it) is a text
+    // background, not a dot/dial. Forcing the disc a solid colour + recolouring the
+    // whole string makes the overflow vanish, so leave it to label-bg (darkens the
+    // disc) + the native off-white text. Single-char glyphs (a clock dial's ↻/↺, a
+    // lone digit) fit the disc and ARE claimed.
+    var g = getCenteredKropkiText(rect);
+    if (g && g.textContent.trim().length > 1) return false;
+    return true;
+  }
+  // Render one clue shape PRESERVING the author's black/white, with an outline for
+  // dark-mode visibility and — if the shape carries a centred glyph (e.g. a clock
+  // dial's ↻/↺ arrow) — that glyph recoloured to contrast with its own fill:
+  //   • white → white fill + dark outline + DARK glyph
+  //   • black → black fill + white outline (so the disc shows on dark) + WHITE glyph
+  // The outline RING follows the same per-colour toggles as the on-border dots
+  // (kropkiOutlineEnabled / kropkiWhiteOutlineEnabled), drawn via applyKropkiDotRing
+  // as the disc's own stroke so it paints under any glyph. This keeps a white dot
+  // white and a black dot black, exactly as the puzzle draws them in light mode —
+  // we never flip the colour, only add the minimum needed to stay visible on dark.
+  function fixKropkiClueShape(rect) {
+    var f = (rect.getAttribute('fill') || '').toUpperCase();
+    var isBlack = f === '#000000';
+    var glyph = getCenteredKropkiText(rect);
+    if (isBlack) {
+      rect.style.setProperty('fill', '#000000', 'important');
+      applyKropkiDotRing(rect, !!settings.kropkiOutlineEnabled, '#ffffff');
+      if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#ffffff'); glyph.style.setProperty('fill', '#ffffff', 'important'); }
+    } else {
+      rect.style.setProperty('fill', '#ffffff', 'important');
+      applyKropkiDotRing(rect, settings.kropkiWhiteOutlineEnabled !== false, '#000000');
+      if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#000000'); glyph.style.setProperty('fill', '#000000', 'important'); }
+    }
+    rect.style.setProperty('fill-opacity', '1', 'important');
+  }
+  function fixAllKropkiClueShapes(svg) {
+    svg.querySelectorAll('#overlay rect, #underlay rect, rect.textbg').forEach(function (rect) {
+      if (isKropkiClueShape(rect)) fixKropkiClueShape(rect);
+    });
+  }
+
   function fixKropkiLabel(t) {
-    // Keep our injected Kropki labels at their intended colour regardless of
-    // DarkReader. The fill is stored in the data-spdr-kropki-label attribute:
+    // Keep our injected Kropki labels at their intended colour. The fill is stored
+    // in the data-spdr-kropki-label attribute:
     //   '#ffffff'  → white text on a black (2:1 ratio) dot
     //   '#000000'  → black text on a white (consecutive) dot
     //   '1'        → legacy format (pre-v2.64.0) — treat as white
     var color = t.getAttribute('data-spdr-kropki-label') || '#ffffff';
     if (color === '1') color = '#ffffff';
     t.style.setProperty('fill', color, 'important');
-    t.removeAttribute('data-darkreader-inline-color');
-    t.removeAttribute('data-darkreader-inline-fill');
-    t.style.removeProperty('--darkreader-inline-color');
-    t.style.removeProperty('--darkreader-inline-fill');
-  }
-  function fixKropkiText(t) {
-    // Re-apply the stored color for an existing label text inside a labeled
-    // Kropki-type circle (data-spdr-kropki-text holds '#000000' or '#ffffff').
-    // Called by the MutationObserver when DarkReader re-inverts this text.
-    var color = t.getAttribute('data-spdr-kropki-text');
-    if (!color) return;
-    t.style.setProperty('fill', color, 'important');
-    t.removeAttribute('data-darkreader-inline-color');
-    t.removeAttribute('data-darkreader-inline-fill');
-    t.style.removeProperty('--darkreader-inline-color');
-    t.style.removeProperty('--darkreader-inline-fill');
   }
 
   // Returns the grid cell size (px) by parsing path.cell-grid, or 0 if not available.
@@ -1544,7 +1960,14 @@
   // ── Part 4: cage label background rects ───────────────────────────────────
   // Note: white-fill rects are only treated as labels when they're NOT inside
   // #underlay. Underlay rects are shape backgrounds, not text labels.
-  var LABEL_RECT_SEL = 'rect.cage-label, rect.textbg, rect[fill="#FFFFFF"]:not(#underlay *), rect[fill="#ffffff"]:not(#underlay *), rect[fill="white"]:not(#underlay *)';
+  // The white arm is a case-insensitive PREFIX (`^="#ffffff"`) so it also catches
+  // TRANSLUCENT white (`#ffffff80`, `#ffffffXX`), not just opaque `#FFFFFF`. Those
+  // are between/lockout-line endpoint circles; DarkReader used to darken them, so
+  // under native dark mode nothing did and they rendered light-gray (R8C5/R9C7 on
+  // the test puzzle). fixLabelRect's internal guards still skip transparent (a===0),
+  // saturated, and Kropki dots — colored fills like #FF0000/#FFA575 don't share the
+  // #ffffff prefix, so only white-at-any-alpha is newly included.
+  var LABEL_RECT_SEL = 'rect.cage-label, rect.textbg, rect[fill^="#ffffff" i]:not(#underlay *), rect[fill="white" i]:not(#underlay *)';
 
   function fixLabelRect(rect) {
     // A label background is white/near-white (cage sums, little-killer clues, XV /
@@ -1557,9 +1980,8 @@
     // use a textbg rect purely to position a label (e.g. a little-killer "12" sitting
     // over an arrow outside the grid). There is no background to darken; painting it
     // our label-bg colour turns an invisible anchor into an opaque box that covers the
-    // arrow beneath it. DR leaves these alone too (no data-darkreader-inline-fill), so
-    // skip them entirely. (Distinct from the white/grey label boxes below, which DO
-    // need darkening.)
+    // arrow beneath it — so skip them entirely. (Distinct from the white/grey label
+    // boxes below, which DO need darkening.)
     var fillAttr = (rect.getAttribute('fill') || '').trim().toLowerCase();
     var fc = parseColor(fillAttr);
     if (fillAttr === 'none' || (fc && fc.a === 0)) return;
@@ -1568,15 +1990,20 @@
     // white-fill arm of LABEL_RECT_SEL) is owned by the Kropki fix — never paint it
     // the label-bg colour, or it goes dark-on-dark. (Issue: clover's "Diamond Ring".)
     if (isKropkiDotRect(rect)) return;
+    if (isKropkiClueShape(rect)) return;   // off-border dot / diamond — owned by the Kropki clue-shape fix
     if (settings.labelBgEnabled) {
-      var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity);
+      // Preserve the rect's OWN authored alpha so deliberately-translucent shapes
+      // stay see-through. Opaque label boxes (#FFFFFF, alpha 1) are unaffected;
+      // translucent endpoint discs like the between/lockout-line bulbs (#ffffff80,
+      // alpha 0.5) keep that 0.5 so the line reads through them — matching how
+      // DarkReader darkens a fill while preserving its alpha. We multiply rather
+      // than replace so labelBgOpacity still scales these proportionally.
+      var srcA = (fc && fc.a != null) ? fc.a : 1;
+      var bg = hexToRgba(settings.labelBgColor, settings.labelBgOpacity * srcA);
       rect.style.setProperty('fill', bg, 'important');
-      rect.removeAttribute('data-darkreader-inline-fill');
-      rect.style.removeProperty('--darkreader-inline-fill');
     } else {
+      // Drop our inline fill so the native dark theme repaints the label box.
       rect.style.removeProperty('fill');
-      // Let DR re-process. It re-adds data-darkreader-inline-fill when it
-      // observes the style mutation.
     }
   }
   function fixAllLabelRects(svg) { svg.querySelectorAll(LABEL_RECT_SEL).forEach(fixLabelRect); }
@@ -1592,42 +2019,19 @@
     fixAllUserDigits(svg);
     fixAllOverlayMarkerText(svg);
     fixAllKropkiDots(svg);
+    fixAllKropkiClueShapes(svg);
     rebuildKropkiLabels(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
+    scheduleAutoShade();   // auto-enable Shaded mode if this puzzle has extra regions
+    // Re-apply our fixes when SudokuPad re-renders the board (puzzle load, fog
+    // reveal, etc. — all add fresh SVG nodes). We only need to watch childList:
+    // with DarkReader locked out, nothing mutates our inline colours in place.
     new MutationObserver(function (mutations) {
       var needsFullScan = false;
       for (var i = 0; i < mutations.length; i++) {
         var m = mutations[i];
-        if (m.type === 'attributes') {
-          var el = m.target;
-          if (m.attributeName === 'data-darkreader-inline-fill') {
-            if (el.tagName === 'rect') {
-              if (el.matches(LABEL_RECT_SEL)) fixLabelRect(el);
-              if (el.closest('#underlay') && !isKropkiDotRect(el)) fixUnderlayRect(el);
-              if (isKropkiCircle(el)) fixKropkiDot(el);
-            } else if (el.tagName === 'path') {
-              if (el.closest('#cages') && el.matches(CAGE_FILL_SEL)) fixCagePath(el);
-            } else if (el.tagName === 'text') {
-              if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
-              else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
-              else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
-              else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
-              else if (el.closest('#overlay')) { fixOverlayMarkerText(el); }
-            }
-          } else if (m.attributeName === 'data-darkreader-inline-color') {
-            if (el.tagName === 'text') {
-              if (el.getAttribute('data-spdr-kropki-text'))  { fixKropkiText(el); }
-              else if (el.getAttribute('data-spdr-kropki-label')) { fixKropkiLabel(el); }
-              else if (el.closest('#cell-givens') || el.classList.contains('cell-given')) { fixGivenText(el); }
-              else if (el.closest('#cell-values') || el.classList.contains('cell-value')) { fixUserText(el); }
-              else if (el.closest('#overlay')) { fixOverlayMarkerText(el); }
-            }
-          } else if (m.attributeName === 'data-darkreader-inline-stroke') {
-            // Lines: DR re-converts the stroke after our scan.
-            if (isLineStroke(el)) applyLineStroke(el);
-          }
-        } else if (m.type === 'childList' && m.addedNodes.length > 0) {
+        if (m.type === 'childList' && m.addedNodes.length > 0) {
           // Ignore childList mutations caused by our own label insertions to avoid
           // an infinite loop (rebuildKropkiLabels inserts nodes → observer fires →
           // rebuildKropkiLabels again → ...).
@@ -1639,19 +2043,20 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); rebuildKropkiLabels(svg); }
-    }).observe(svg, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-darkreader-inline-fill', 'data-darkreader-inline-color', 'data-darkreader-inline-stroke'] });
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); scheduleAutoShade(); }
+    }).observe(svg, { childList: true, subtree: true });
   }
 
   function waitForDRAndSVG() {
-    if (isDarkReader() && document.getElementById('svgrenderer')) { startLabelRectPatch(); return; }
+    if (isDarkMode() && document.getElementById('svgrenderer')) { startLabelRectPatch(); return; }
     var obs = new MutationObserver(function () {
-      if (isDarkReader() && document.getElementById('svgrenderer')) { obs.disconnect(); startLabelRectPatch(); }
+      if (isDarkMode() && document.getElementById('svgrenderer')) { obs.disconnect(); startLabelRectPatch(); }
     });
+    // Watch DR's scheme attr (legacy) AND the body class (our dark substrate lands
+    // there once our top block applies the .spdr-dark class).
     obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-darkreader-scheme'] });
-    obs.observe(document.body || document.documentElement, { childList: true, subtree: true });
+    obs.observe(document.body || document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   }
-  waitForDRAndSVG();
 
   // ── Part 4b: region borders ───────────────────────────────────────────────
   // Standard puzzles use path.cage-box for region outlines. Some irregular-
@@ -1659,16 +2064,14 @@
   // instead. Both live in #cell-grids. We target all paths there except
   // path.cell-grid (the thin cell-divider grid lines).
   //
-  // When our stroke/width is NOT being applied, restore DR's expected inline
-  // stroke variable so DR's converted colour shows correctly. This fixes the
-  // "second disable makes the border disappear" issue.
+  // When our stroke/width is NOT being applied we drop any inline stroke so the
+  // native cage-box outline (FROZEN_DARK_CSS) shows.
 
   function isCageBoxPath(el) {
     return el.tagName === 'path' && !!el.closest('#cell-grids') && !el.classList.contains('cell-grid');
   }
 
   function fixCageBox(el) {
-    var inDR = isDarkReader();
     var centerActive = settings.regionBorderCenterEnabled;
     var multiActive  = settings.regionBorderMultiEnabled;
 
@@ -1676,19 +2079,13 @@
     // stroke laid over a grid line to HIDE it (invisible white-on-white in light
     // mode — used for irregular outer shapes / merged cells, e.g. Gattai puzzles).
     // They are NOT the dark 3x3 box outlines this function was written for, so the
-    // normal logic is wrong both ways (suppressing reveals the line the author hid;
-    // restoring DR's text colour paints a BRIGHT line). Under DR, repaint them the
-    // dark background so they keep erasing the now-light grid line beneath — the
-    // same thing SudokuPad's own dark mode does ([stroke="#FFFFFF"]->var(--dm-black)).
+    // normal logic is wrong both ways (suppressing reveals the line the author hid).
+    // Drop any inline stroke so FROZEN_DARK_CSS repaints them the dark background
+    // ([stroke="#FFFFFF"]→var(--dm-black)), keeping them erasing the grid line.
     var sc = parseColor(el.getAttribute('stroke'));
     if (sc && sc.a !== 0 && sc.r >= 240 && sc.g >= 240 && sc.b >= 240) {
-      if (inDR) {
-        el.style.setProperty('stroke', 'var(--darkreader-background-ffffff, #181a1b)', 'important');
-      } else {
-        el.style.removeProperty('stroke');
-      }
+      el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-width');          // keep the author's native width
-      el.style.removeProperty('--darkreader-inline-stroke');
       return;
     }
 
@@ -1698,15 +2095,11 @@
       // stroke so it doesn't double-render above #underlay elements.
       el.style.setProperty('stroke', 'none', 'important');
       el.style.setProperty('stroke-width', '0', 'important');
-      el.style.removeProperty('--darkreader-inline-stroke');
     } else {
-      // Neither border type is active — restore to default.
+      // Neither border type is active — drop our inline stroke so the native
+      // cage-box outline (FROZEN_DARK_CSS) shows.
       el.style.removeProperty('stroke');
       el.style.removeProperty('stroke-width');
-      if (inDR) {
-        // Restore DR's managed stroke variable so DR's converted colour renders.
-        el.style.setProperty('--darkreader-inline-stroke', 'var(--darkreader-text-000000, #e8e6e3)');
-      }
     }
   }
   function fixAllCageBoxes(svg) { svg.querySelectorAll('#cell-grids path:not(.cell-grid)').forEach(fixCageBox); }
@@ -1745,31 +2138,532 @@
   // non-overlapping filled rect borders on each side of every region boundary —
   // one in each neighboring region's color — with no gaps and no overlaps.
 
-  function computeRegion4Colors(regions) {
-    var n = regions.length;
-    var adj = [];
-    for (var i = 0; i < n; i++) adj.push(new Set());
-    var cellRegion = {};
-    regions.forEach(function (cells, ri) {
-      cells.forEach(function (rc) { cellRegion[rc[0] + ',' + rc[1]] = ri; });
+  // ── Logical-region (disjoint-subset) support ──────────────────────────────
+  // Some puzzles define a sudoku region whose cells are NOT contiguous (e.g.
+  // clover's "Scattered", https://sudokupad.app/2xjf6aw4m2 — one region is 9
+  // single cells spread across the grid). They are ONE region for digit logic,
+  // so all the pieces should share ONE colour. Geometry alone can't know this
+  // (the pieces don't touch), so we read the puzzle model: SudokuPad exposes the
+  // resolved regions as `app.puzzle.currentPuzzle.cages` entries with
+  // `type === 'region'` and a comma-separated RC-notation `cells` string
+  // (1-indexed, e.g. "r2c2,r5c8,..."). We cache a { 'r,c': logicalId } map keyed
+  // by the URL path, refresh it asynchronously (getApp() is async; the render
+  // path is sync), and repaint once when it lands. When unavailable (normal
+  // sudoku has no explicit region cages, or model not ready) → null, and region
+  // colouring falls back to pure geometry exactly as before.
+  var _modelRegionCache   = { key: null, map: null };
+  var _modelRegionPending = false;
+
+  function buildModelRegionMap(app) {
+    try {
+      var cp = app && app.puzzle && app.puzzle.currentPuzzle;
+      if (!cp || !Array.isArray(cp.cages)) return null;
+      var regs = cp.cages.filter(function (c) {
+        return c && c.type === 'region' && typeof c.cells === 'string' && c.cells;
+      });
+      if (regs.length < 2) return null;   // no explicit regions → use geometry
+      var map = {};
+      regs.forEach(function (cage, idx) {
+        cage.cells.split(',').forEach(function (rc) {
+          var m = /r(\d+)c(\d+)/i.exec(rc.trim());
+          if (m) map[(parseInt(m[1], 10) - 1) + ',' + (parseInt(m[2], 10) - 1)] = idx;
+        });
+      });
+      return map;
+    } catch (e) { return null; }
+  }
+
+  // Synchronous accessor for the current puzzle's logical-region map. Returns the
+  // cached map (possibly null = "known to have none") when fresh, else kicks off
+  // an async refresh and returns null for now; the refresh repaints when done.
+  function modelRegionCacheKey() { return location.pathname + location.search; }
+  function getModelRegionMap() {
+    var key = modelRegionCacheKey();
+    if (_modelRegionCache.key === key) return _modelRegionCache.map;
+    if (!_modelRegionPending && typeof Framework !== 'undefined' && Framework.getApp) {
+      _modelRegionPending = true;
+      Promise.resolve(Framework.getApp()).then(function (app) {
+        _modelRegionCache   = { key: modelRegionCacheKey(), map: buildModelRegionMap(app) };
+        _modelRegionPending = false;
+        var svg = document.getElementById('svgrenderer');
+        if (svg) drawRegionSplitBorders(svg);   // repaint with the now-known map
+      }).catch(function () { _modelRegionPending = false; });
+    }
+    return null;
+  }
+
+  // ── Shaded "extra regions" drawn as grey #underlay cells (recolour) ───────────
+  // Shaded mode normally clones #cages path.cage-extraregion. But an extra region
+  // can ALSO be authored as a hidden, sum-less, unique cage (the Extra-Region tool
+  // or the hidden-killer trick), which SudokuPad renders as plain grey #underlay
+  // rects with NO cage-extraregion path to clone (e.g. "We Live Here"
+  // https://sudokupad.app/zax289niwv — 4 hidden unique cages drawn as grey cells).
+  //
+  // Two sources, on purpose (this is the v3.15→v3.16→v3.17 lesson):
+  //   • DETECTION ("does this puzzle have such regions?") is PURELY DOM — the grey
+  //     underlay rects themselves. puzzleHasShadedRegions() runs early/often during
+  //     SudokuPad's init, so it must stay Framework-free.
+  //   • GROUPING (which cell → which region, so two regions that TOUCH get DIFFERENT
+  //     colours) reads the puzzle MODEL, but SYNCHRONOUSLY via the pure getter
+  //     Framework.app (`get(){ return __app; }` — zero side effects), NEVER via
+  //     Framework.getApp()/promises. v3.15's init break was the async
+  //     `.then(applySettings)` re-entering the pipeline mid-load, NOT the model read
+  //     itself; a guarded sync read returns null before the app exists (→ flood-fill
+  //     fallback) and the real regions after. v3.16 over-corrected to DOM-only,
+  //     which can't separate two distinct regions that touch (flood-fill merges
+  //     them into one colour) — the bug this restores the fix for.
+  //
+  // The grey rect detection (below): an #underlay rect whose ORIGINAL attribute fill
+  // is grayscale (our object-shading overwrites the inline style, not the attribute),
+  // non-white, ~a whole cell, defines a shaded cell. Recolour then hits every grey
+  // rect (full cells AND inset border strips) whose centre lands in a mapped cell.
+  // Cached by URL + underlay-rect count so the per-rect hot path is O(1).
+  //
+  // What QUALIFIES a region for recolour (v3.21 — was "any hidden unique cage that
+  // overlaps a grey cell", which wrongly grabbed e.g. a hidden-unique MAIN DIAGONAL
+  // and recoloured stray objects sitting in its cells — pbwqsppuho). A region is
+  // recoloured ONLY when it is a deliberately-shaded full no-repeat region:
+  //   1. SIZE — exactly `settings.digitSet.length` cells (the count of digits used
+  //      in the puzzle, user-confirmed/scanned). Drops sub-size cages (3-cell
+  //      killers, partial regions) — a cage is not a colourable region. NOT a
+  //      contiguity check: a deliberately-shaded NON-contiguous full region (e.g. a
+  //      staircase "these 9 cells hold 1-9", clover-style) is valid and IS coloured.
+  //   2. FULLY + CONSISTENTLY SHADED — EVERY cell carries a shading rect of one
+  //      consistent colour. A region only partly shaded (the diagonal: 2/9 stray
+  //      grey cells) is not a deliberate shaded region → skipped. (This — not
+  //      contiguity — is what excludes the diagonal: it's barely shaded.)
+  //   3. GREY only — if that consistent colour is a REAL colour (red/blue/…), leave
+  //      the author's shading untouched: the author may use colour to distinguish
+  //      regions, and recolouring would erase that meaning. Grey regions (hard to
+  //      see in dark mode) are the ones we recolour to the palette.
+  // Model regions still drive GROUPING (so two qualifying regions that touch get
+  // different colours); the grey flood-fill fallback (model not ready yet) applies
+  // the same size rule per connected component.
+  var _domShadedCache  = { key: null, count: -1, map: null, final: false };
+  var _domShadedNudged = null;   // URL we've already scheduled a model-upgrade retry for
+
+  // Hidden / sum-less unique cages = invisible "must contain 1-9" regions. Read
+  // SYNCHRONOUSLY from the already-parsed model (Framework.app is a side-effect-free
+  // getter). Returns an array of [r,c] cell lists (0-indexed), or null before the app
+  // is ready / on hosts without Framework.app / when the puzzle has none.
+  function readModelExtraRegions() {
+    try {
+      var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+        ? Framework.app.puzzle.currentPuzzle : null;
+      if (!cp || !Array.isArray(cp.cages)) return null;
+      // An "extra region" = any cage with conflict-checking (unique:true) that is NOT
+      // one of the native sudoku constraints (the 9 boxes are type 'region', rows/cols
+      // are type 'rowcol') and that spans exactly one full no-repeat region — i.e. its
+      // cell count equals the number of digits in play ("Digit Set for this puzzle").
+      // This deliberately simple size test catches extra regions no matter HOW they
+      // are authored or drawn: style:'extraregion', hidden sum-less cages drawn as grey
+      // cells (We Live Here, zax289niwv), AND sum-less unique cages drawn only as dashed
+      // killer outlines with no shading at all (a Windoku's four windows, 5krkgmjq7q).
+      var want = (settings.digitSet && settings.digitSet.length)
+        ? settings.digitSet.length : detectGridSize();
+      if (!want || want < 2) return null;
+      var regions = [];
+      cp.cages.forEach(function (c) {
+        if (!c || c.unique !== true || c.type === 'region' || c.type === 'rowcol') return;
+        var cells = [];
+        String(c.cells || '').split(',').forEach(function (rc) {
+          var m = /r(\d+)c(\d+)/i.exec(rc.trim());
+          if (m) cells.push([parseInt(m[1], 10) - 1, parseInt(m[2], 10) - 1]);
+        });
+        if (cells.length === want) regions.push(cells);
+      });
+      return regions.length ? regions : null;
+    } catch (e) { return null; }
+  }
+
+  function computeDomShadedRegionMap(svg, rects) {
+   try {
+    var cs = getGridCellSize();
+    var N  = detectGridSize();
+    if (!cs || cs < 4 || !N || N < 2) return null;
+
+    // Per-cell author shading colour, read from the ATTRIBUTE fill (our object-
+    // shading only sets the inline STYLE, so the attribute keeps the original).
+    // Only ~full-cell rects define a cell's shade; inset border strips are ignored.
+    // shade['r,c'] = { r,g,b, gray }.
+    var shade = {}, any = false;
+    for (var i = 0; i < rects.length; i++) {
+      var r = rects[i];
+      var c = parseColor(r.getAttribute('fill') || '');
+      if (!c || c.a === 0) continue;
+      if (c.r >= 240 && c.g >= 240 && c.b >= 240) continue;   // skip white/near-white
+      var w = parseFloat(r.getAttribute('width')), h = parseFloat(r.getAttribute('height'));
+      var x = parseFloat(r.getAttribute('x')),     y = parseFloat(r.getAttribute('y'));
+      if (!isFinite(w) || !isFinite(h) || !isFinite(x) || !isFinite(y)) continue;
+      if (w < cs * 0.75 || h < cs * 0.75) continue;           // only ~full-cell rects define a cell's shade
+      var cc = Math.floor((x + w / 2) / cs), rr = Math.floor((y + h / 2) / cs);
+      if (rr < 0 || rr >= N || cc < 0 || cc >= N) continue;
+      var k = rr + ',' + cc;
+      if (!shade[k]) { shade[k] = { r: c.r, g: c.g, b: c.b, gray: isGrayColor(c) }; any = true; }
+    }
+    if (!any) return null;
+
+    // Target region size = number of digits used in the puzzle (rule 1).
+    var want = (settings.digitSet && settings.digitSet.length) ? settings.digitSet.length : N;
+
+    // Rules 2+3: every cell shaded with one consistent GREY colour (≤24/channel
+    // spread). Returns false if any cell is unshaded, or the shade is a real colour.
+    function isFullyGreyShaded(cells) {
+      var base = null;
+      for (var j = 0; j < cells.length; j++) {
+        var sc = shade[cells[j][0] + ',' + cells[j][1]];
+        if (!sc || !sc.gray) return false;
+        if (!base) base = sc;
+        else if (Math.abs(sc.r - base.r) > 24 || Math.abs(sc.g - base.g) > 24 || Math.abs(sc.b - base.b) > 24) return false;
+      }
+      return true;
+    }
+
+    // Prefer model regions so two distinct logical regions that TOUCH get different
+    // colours (flood-fill can't tell them apart). Each model region must pass all
+    // four rules. Fall back to a grey flood-fill (same size rule per component) when
+    // the model isn't readable yet (getDomShadedRegionMap schedules an upgrade retry).
+    var regions = [], fromModel = false;
+    var modelRegions = readModelExtraRegions();
+    if (modelRegions) {
+      fromModel = true;
+      modelRegions.forEach(function (cells) {
+        if (cells.length === want && isFullyGreyShaded(cells)) regions.push(cells);
+      });
+    } else {
+      var grey = {}, seen = {};
+      Object.keys(shade).forEach(function (k) { if (shade[k].gray) grey[k] = true; });
+      Object.keys(grey).forEach(function (k) {
+        if (seen[k]) return;
+        var start = k.split(',').map(Number);
+        var cells = [], queue = [start]; seen[k] = true;
+        while (queue.length) {
+          var cur = queue.shift(); cells.push(cur);
+          [[cur[0]-1,cur[1]],[cur[0]+1,cur[1]],[cur[0],cur[1]-1],[cur[0],cur[1]+1]].forEach(function (nb) {
+            var nk = nb[0] + ',' + nb[1];
+            if (grey[nk] && !seen[nk]) { seen[nk] = true; queue.push(nb); }
+          });
+        }
+        if (cells.length === want) regions.push(cells);
+      });
+    }
+
+    if (!regions.length) return { map: null, fromModel: fromModel };   // nothing qualifies (still cacheable once model is readable)
+
+    var colors = colourShadedRegions(regions);   // max distinct colours (shaded-region policy)
+    var map = {};
+    regions.forEach(function (cells, i) {
+      var idx = (colors[i] != null) ? colors[i] : 0;
+      cells.forEach(function (rc) { map[rc[0] + ',' + rc[1]] = idx; });
     });
+    return { map: map, fromModel: fromModel };
+   } catch (e) { return null; }   // never let region detection abort the paint path
+  }
+
+  // Cached accessor (cell → palette idx, or null). DOM detection is Framework-free;
+  // model grouping is a guarded SYNCHRONOUS read (no getApp/promises). Safe from the
+  // hot paint path and from puzzleHasShadedRegions.
+  function getDomShadedRegionMap() {
+    var svg = document.getElementById('svgrenderer');
+    if (!svg) return null;
+    var rects = svg.querySelectorAll('#underlay rect');
+    var key = modelRegionCacheKey(), count = rects.length;
+    if (_domShadedCache.key === key && _domShadedCache.count === count && _domShadedCache.final)
+      return _domShadedCache.map;
+    var res = computeDomShadedRegionMap(svg, rects);   // null | { map, fromModel }
+    var modelReadable = (typeof Framework !== 'undefined' && Framework.app
+      && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
+    // Final (cacheable) once we know the answer won't improve: no shaded regions,
+    // a model-grouped result, or the model is readable but didn't match (flood-fill
+    // is then the best we'll do). Only a flood-fill taken because the model wasn't
+    // ready yet stays non-final → recomputed, plus a one-shot re-apply to upgrade.
+    var final = (res === null) || res.fromModel === true || modelReadable;
+    _domShadedCache = { key: key, count: count, map: res ? res.map : null, final: final };
+    if (!final && _domShadedNudged !== key) {
+      _domShadedNudged = key;
+      setTimeout(function () {
+        _domShadedCache = { key: null, count: -1, map: null, final: false };
+        var s = document.getElementById('svgrenderer');
+        if (s) fixAllUnderlays(s);
+      }, 250);
+    }
+    return _domShadedCache.map;
+  }
+
+  // Model-defined extra regions that have NO visual shading to recolour — neither a
+  // grey #underlay rect nor a cage-extraregion path (e.g. a Windoku whose windows are
+  // sum-less unique cages drawn only as dashed killer outlines, 5krkgmjq7q). Pure
+  // model read (readModelExtraRegions, via the safe synchronous Framework.app getter),
+  // 4-coloured so two regions that touch differ. Returns cell → palette idx, or null.
+  // Cached per puzzle once the model is readable (null before that → a later paint,
+  // e.g. getModelRegionMap's async repaint, retries). This drives drawRegionSplitBorders'
+  // model-shading pass; the grey-rect path (getDomShadedRegionMap) is unaffected.
+  var _modelShadedCache = { key: null, map: null };
+  function getModelShadedRegionMap() {
+    var key = modelRegionCacheKey();
+    if (_modelShadedCache.key === key) return _modelShadedCache.map;
+    var regions = readModelExtraRegions();
+    var map = null;
+    if (regions && regions.length) {
+      var colors = colourShadedRegions(regions);
+      map = {};
+      regions.forEach(function (cells, i) {
+        var idx = (colors[i] != null && colors[i] >= 0) ? colors[i] : 0;
+        cells.forEach(function (rc) { map[rc[0] + ',' + rc[1]] = idx; });
+      });
+    }
+    var modelReadable = (typeof Framework !== 'undefined' && Framework.app
+      && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
+    if (modelReadable) _modelShadedCache = { key: key, map: map };
+    return map;
+  }
+
+  // ── Auto-enable Shaded mode on puzzles that have extra regions ───────────────
+  // When a puzzle has extra regions, turn ON the Easy Shade button's first option
+  // (Shaded) automatically so the regions are coloured without a manual click. The
+  // change is in MEMORY only — never persisted: storage keeps the user's own saved
+  // preference, and the effective state is recomputed fresh per puzzle as
+  // "has extra regions ? on : saved preference", so a puzzle WITHOUT extra regions
+  // falls back to that saved value and the auto-on never leaks onto ordinary puzzles.
+  // Decided once per puzzle (keyed by URL); afterwards the user can toggle it off and
+  // it stays off (the per-key guard stops any re-fire on the same puzzle).
+  var _autoShadePollKey = null;
+  function applyAutoShade() {
+    var modelReadable = (typeof Framework !== 'undefined' && Framework.app
+      && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
+    if (!modelReadable) return false;             // wait until detection is trustworthy
+    var savedShaded = !!loadSettings().shadedRegionColorEnabled;
+    var want = puzzleHasShadedRegions() ? true : savedShaded;
+    if (settings.shadedRegionColorEnabled !== want) {
+      settings.shadedRegionColorEnabled = want;   // in-memory only — do NOT saveSettings
+      applySettings();
+      if (controlSyncers['shadedRegionColorEnabled']) controlSyncers['shadedRegionColorEnabled']();
+    }
+    return true;
+  }
+  function scheduleAutoShade() {
+    var key = modelRegionCacheKey();
+    if (_autoShadePollKey === key) return;        // already decided / polling this puzzle
+    _autoShadePollKey = key;
+    var tries = 0;
+    (function poll() {
+      if (modelRegionCacheKey() !== key) return;  // navigated away — its own schedule takes over
+      if (applyAutoShade()) return;               // model ready, decision made
+      if (++tries < 40) setTimeout(poll, 150);    // else wait up to ~6s for the model to load
+    })();
+  }
+
+  // Map each geometric region (connected cell group) to a logical group id. With
+  // a model map, geometric pieces sharing the same logical region id collapse to
+  // one group (so disjoint pieces colour alike); without it, identity (each piece
+  // its own group, = original behaviour).
+  function buildRegionGroups(regions, modelMap) {
+    var n = regions.length;
+    var groupOf = new Array(n);
+    if (!modelMap) { for (var i = 0; i < n; i++) groupOf[i] = i; return { groupOf: groupOf, numGroups: n }; }
+    var keyToIdx = {}, G = 0;
+    for (var i = 0; i < n; i++) {
+      // Dominant model id among this geometric region's cells.
+      var counts = {}, best = null, bestCount = -1;
+      for (var j = 0; j < regions[i].length; j++) {
+        var rc = regions[i][j], mid = modelMap[rc[0] + ',' + rc[1]];
+        if (mid === undefined) continue;
+        counts[mid] = (counts[mid] || 0) + 1;
+        if (counts[mid] > bestCount) { bestCount = counts[mid]; best = mid; }
+      }
+      var key = (best !== null) ? ('m' + best) : ('g' + i);   // no model info → own group
+      if (keyToIdx[key] === undefined) keyToIdx[key] = G++;
+      groupOf[i] = keyToIdx[key];
+    }
+    return { groupOf: groupOf, numGroups: G };
+  }
+
+  // 4-colour the regions. Colours are assigned per logical GROUP (so disjoint
+  // pieces of one region match) and returned per geometric region. groupOf maps
+  // geometric-region index → group index; omit for identity (each region alone).
+  function computeRegion4Colors(regions, groupOf, numGroups) {
+    var n = regions.length;
+    if (!groupOf) { groupOf = []; for (var gi = 0; gi < n; gi++) groupOf.push(gi); numGroups = n; }
+
+    // Adjacency between GROUPS (two groups touch if any of their cells are
+    // orthogonally adjacent across the group boundary).
+    var cellGroup = {};
     regions.forEach(function (cells, ri) {
+      var g = groupOf[ri];
+      cells.forEach(function (rc) { cellGroup[rc[0] + ',' + rc[1]] = g; });
+    });
+    var adj = [];
+    for (var i = 0; i < numGroups; i++) adj.push(new Set());
+    regions.forEach(function (cells, ri) {
+      var g = groupOf[ri];
       cells.forEach(function (rc) {
         var r = rc[0], c = rc[1];
         [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
-          var rj = cellRegion[nb[0] + ',' + nb[1]];
-          if (rj !== undefined && rj !== ri) adj[ri].add(rj);
+          var g2 = cellGroup[nb[0] + ',' + nb[1]];
+          if (g2 !== undefined && g2 !== g) adj[g].add(g2);
         });
       });
     });
-    // Greedy coloring — always ≤ 4 colors for planar graphs.
-    var colors = new Array(n).fill(-1);
-    for (var i = 0; i < n; i++) {
-      var used = new Set();
-      adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
-      for (var k = 0; k < 5; k++) { if (!used.has(k)) { colors[i] = k; break; } }
+
+    // Which groups are DISJOINT (a logical region whose cells form >1 orthogonally
+    // connected component — the scattered/disjoint-subset case). We want these
+    // pinned to the LAST palette colour (index 3) so the common regions keep the
+    // earlier colours: red (0) most common, then blue (1), then green (2), with the
+    // scattered region taking orange (3). Counting components from the cells (not
+    // the geo split) is the robust test for "appears as separate areas".
+    var groupCells = [];
+    for (var i = 0; i < numGroups; i++) groupCells.push([]);
+    regions.forEach(function (cells, ri) {
+      var g = groupOf[ri];
+      cells.forEach(function (rc) { groupCells[g].push(rc); });
+    });
+    var pinned = new Array(numGroups).fill(-1), anyDisjoint = false;
+    for (var g = 0; g < numGroups; g++) {
+      if (countComponents(groupCells[g]) > 1) { pinned[g] = 3; anyDisjoint = true; }
+    }
+
+    // For ordinary (connected) regions the graph is planar and the four-colour
+    // theorem guarantees a proper 4-colouring. Forcing a DISCONNECTED region to a
+    // single group — and further pinning it to colour 3 — can in theory exceed 4,
+    // so we degrade in priority order:
+    //   1. grouped + disjoint pinned to colour 3 (the desired look),
+    //   2. grouped, unpinned (disjoint still one colour, just maybe not orange),
+    //   3. ungrouped geometry colouring (always 4-colourable; clash-free).
+    // Plain greedy alone never suffices anyway: it can spill to a 5th colour
+    // (index 4) → past the 4-entry palette → undefined fill → black borders.
+    var groupColors = anyDisjoint ? colourGraph(numGroups, adj, pinned) : null;
+    if (!groupColors) groupColors = colourGraph(numGroups, adj, null);
+    if (!groupColors && groupOf.some(function (g, i) { return g !== i; })) {
+      return computeRegion4Colors(regions);   // grouped impossible → geometry only
+    }
+    if (!groupColors) {
+      // Identity grouping that still failed (shouldn't happen for planar input):
+      // clamp so nothing renders black.
+      groupColors = new Array(numGroups).fill(0);
+    }
+    return regions.map(function (_, ri) { return groupColors[groupOf[ri]]; });
+  }
+
+  // Number of orthogonally connected components in a list of [r,c] cells.
+  function countComponents(cells) {
+    if (cells.length <= 1) return cells.length;
+    var inSet = {};
+    cells.forEach(function (rc) { inSet[rc[0] + ',' + rc[1]] = true; });
+    var seen = {}, comps = 0;
+    cells.forEach(function (rc) {
+      var key0 = rc[0] + ',' + rc[1];
+      if (seen[key0]) return;
+      comps++;
+      var stack = [rc];
+      while (stack.length) {
+        var cur = stack.pop(), k = cur[0] + ',' + cur[1];
+        if (seen[k]) continue;
+        seen[k] = true;
+        var r = cur[0], c = cur[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var nk = nb[0] + ',' + nb[1];
+          if (inSet[nk] && !seen[nk]) stack.push(nb);
+        });
+      }
+    });
+    return comps;
+  }
+
+  // Greedy proper colouring that SPREADS across all four palette colours, used ONLY
+  // for SHADED regions (Easy Shade "Shaded" mode — `computeDomShadedRegionMap` and
+  // `assignExtraRegionColors`). NOT for region borders / region fill: those keep the
+  // minimise-then-pin-disjoint-orange policy in `computeRegion4Colors` above. Policy:
+  // ≤4 regions each get their OWN colour; >4 spread across all four, repeating only
+  // across non-touching regions. Process highest-degree first; each takes the allowed
+  // colour (not used by an already-coloured neighbour) that is currently least-used
+  // overall (ties → lowest index). Returns a proper colour array, or null if some
+  // node has all four colours blocked (≥5 mutually adjacent — non-planar; caller
+  // falls back to colourGraph backtracking).
+  function colourSpread(n, adj) {
+    var order = []; for (var i = 0; i < n; i++) order.push(i);
+    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
+    var colors = new Array(n).fill(-1), usage = [0, 0, 0, 0];
+    for (var oi = 0; oi < order.length; oi++) {
+      var v = order[oi], blocked = {};
+      adj[v].forEach(function (j) { if (colors[j] >= 0) blocked[colors[j]] = true; });
+      var pick = -1, pickUse = Infinity;
+      for (var k = 0; k < 4; k++) { if (blocked[k]) continue; if (usage[k] < pickUse) { pickUse = usage[k]; pick = k; } }
+      if (pick < 0) return null;
+      colors[v] = pick; usage[pick]++;
     }
     return colors;
+  }
+
+  // Colour a list of SHADED regions (each an array of [r,c] cells) maximising
+  // distinct palette colours, proper across touching regions. Builds region
+  // touch-adjacency, then colourSpread (→ colourGraph backtracking fallback →
+  // all-0 clamp). Returns a colour idx per region. Shared by both shaded-region
+  // paths (computeDomShadedRegionMap, assignExtraRegionColors); region borders /
+  // fill deliberately do NOT use this (they keep computeRegion4Colors).
+  function colourShadedRegions(regions) {
+    var n = regions.length;
+    var cellReg = {};
+    regions.forEach(function (cells, i) { cells.forEach(function (rc) { cellReg[rc[0] + ',' + rc[1]] = i; }); });
+    var adj = []; for (var i = 0; i < n; i++) adj.push(new Set());
+    regions.forEach(function (cells, i) {
+      cells.forEach(function (rc) {
+        var r = rc[0], c = rc[1];
+        [[r-1,c],[r+1,c],[r,c-1],[r,c+1]].forEach(function (nb) {
+          var j = cellReg[nb[0] + ',' + nb[1]];
+          if (j !== undefined && j !== i) { adj[i].add(j); adj[j].add(i); }
+        });
+      });
+    });
+    return colourSpread(n, adj) || colourGraph(n, adj, null) || new Array(n).fill(0);
+  }
+
+  // Proper ≤4-colouring of a graph given adjacency sets. `pinned[i]` (optional)
+  // forces node i to a fixed colour (0–3); pass -1 / omit for free nodes. Greedy
+  // fast path, then descending-degree backtracking over the free nodes. Returns a
+  // colour array (0–3) or null if no proper 4-colouring honouring the pins exists.
+  function colourGraph(n, adj, pinned) {
+    // Reject mutually-clashing pins up front (backtracking can't move them).
+    if (pinned) {
+      for (var i = 0; i < n; i++) {
+        if (pinned[i] < 0) continue;
+        var bad = false;
+        adj[i].forEach(function (j) { if (pinned[j] === pinned[i]) bad = true; });
+        if (bad) return null;
+      }
+    }
+
+    var colors = new Array(n).fill(-1), ok = true;
+    if (pinned) for (var i = 0; i < n; i++) if (pinned[i] >= 0) colors[i] = pinned[i];
+    // Greedy over the free nodes (prefers low colours → red most common).
+    for (var i = 0; i < n; i++) {
+      if (colors[i] >= 0) continue;
+      var used = new Set();
+      adj[i].forEach(function (j) { if (colors[j] >= 0) used.add(colors[j]); });
+      for (var k = 0; k < 4; k++) { if (!used.has(k)) { colors[i] = k; break; } }
+      if (colors[i] < 0) { ok = false; break; }
+    }
+    if (ok) return colors;
+
+    // Backtracking over free nodes only; pins stay fixed.
+    var order = [];
+    for (var i = 0; i < n; i++) if (!pinned || pinned[i] < 0) order.push(i);
+    order.sort(function (a, b) { return adj[b].size - adj[a].size; });
+    var bt = new Array(n).fill(-1);
+    if (pinned) for (var i = 0; i < n; i++) if (pinned[i] >= 0) bt[i] = pinned[i];
+    function assign(pos) {
+      if (pos === order.length) return true;
+      var v = order[pos];
+      for (var col = 0; col < 4; col++) {
+        var clash = false;
+        adj[v].forEach(function (j) { if (bt[j] === col) clash = true; });
+        if (clash) continue;
+        bt[v] = col;
+        if (assign(pos + 1)) return true;
+        bt[v] = -1;
+      }
+      return false;
+    }
+    return assign(0) ? bt : null;
   }
 
   // Returns { regions, cellSize, rows, cols } derived from the live SVG, or null.
@@ -1976,7 +2870,12 @@
       hexToRgba(settings.regionColorPalette2 || '#52a84e', fillOp),
       hexToRgba(settings.regionColorPalette3 || '#e8a030', fillOp),
     ];
-    var regionColors = computeRegion4Colors(regions);
+    // Group geometric regions by logical region id (merges disjoint pieces of one
+    // sudoku region so they share a colour); falls back to per-piece when the
+    // model isn't available.
+    var modelRegionMap = getModelRegionMap();
+    var regionGroups   = buildRegionGroups(regions, modelRegionMap);
+    var regionColors   = computeRegion4Colors(regions, regionGroups.groupOf, regionGroups.numGroups);
     var SW = parseFloat(settings.regionColorStripeWidth) || 3;
     // cellRegion already built above.
 
@@ -2221,15 +3120,12 @@
         cgClone.setAttribute('d', parts.join(''));
       }
 
-      // Cell borders: recolor the thin grid lines to the chosen colour/opacity.
-      // Set an !important inline stroke and strip DR's marker so DarkReader leaves
-      // it alone (the clone is recreated fresh each draw, so no need to restore).
+      // Cell borders: recolor the thin grid lines to the chosen colour/opacity
+      // via an !important inline stroke (the clone is recreated fresh each draw).
       if (needCellColor) {
         cgClone.style.setProperty('stroke', hexToRgba(settings.regionBorderCellColor, settings.regionBorderCellOpacity), 'important');
         var cellW = parseFloat(settings.regionBorderCellWidth);
         if (!isNaN(cellW)) cgClone.style.setProperty('stroke-width', cellW + 'px', 'important');
-        cgClone.removeAttribute('data-darkreader-inline-stroke');
-        cgClone.style.removeProperty('--darkreader-inline-stroke');
       }
 
       mainGroup.insertBefore(cgClone, mainGroup.firstChild);
@@ -2277,6 +3173,51 @@
         shadedGroup.appendChild(clone);
       });
       mainGroup.insertBefore(shadedGroup, mainGroup.firstChild);
+    }
+
+    // Shaded extra-regions defined ONLY in the model — no cage-extraregion path to
+    // clone and no grey #underlay rect to recolour (e.g. a Windoku whose four windows
+    // are sum-less unique cages drawn as dashed killer outlines, 5krkgmjq7q). Draw a
+    // full-cell rect for each region cell, inserted below the borders. Skipped when the
+    // puzzle renders its extra regions as cage-extraregion paths (cloned above), and
+    // per-cell when that cell already carries a full-cell #underlay rect (recoloured in
+    // place by fixUnderlayRect) so grey-shaded regions are never double-painted.
+    if (settings.shadedRegionColorEnabled
+        && !document.querySelector('#cages path.cage-extraregion')) {
+      var modelShaded = getModelShadedRegionMap();
+      if (modelShaded) {
+        var shOpM = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
+        var shPalM = [
+          hexToRgba(settings.regionColorPalette0 || '#e05252', shOpM),
+          hexToRgba(settings.regionColorPalette1 || '#5294e0', shOpM),
+          hexToRgba(settings.regionColorPalette2 || '#52a84e', shOpM),
+          hexToRgba(settings.regionColorPalette3 || '#e8a030', shOpM),
+        ];
+        var covered = {};
+        svg.querySelectorAll('#underlay rect').forEach(function (r) {
+          var col = parseColor(r.getAttribute('fill') || '');
+          if (!col || col.a === 0) return;
+          var rw = parseFloat(r.getAttribute('width')),  rh = parseFloat(r.getAttribute('height'));
+          var rx = parseFloat(r.getAttribute('x')),      ry = parseFloat(r.getAttribute('y'));
+          if (!isFinite(rw) || !isFinite(rh) || !isFinite(rx) || !isFinite(ry)) return;
+          if (rw < cs * 0.75 || rh < cs * 0.75) return;
+          covered[Math.floor((ry + rh / 2) / cs) + ',' + Math.floor((rx + rw / 2) / cs)] = true;
+        });
+        var modelShadeGroup = document.createElementNS(NS, 'g');
+        modelShadeGroup.setAttribute('pointer-events', 'none');
+        Object.keys(modelShaded).forEach(function (k) {
+          if (covered[k]) return;
+          var rc = k.split(',');
+          var rr = parseInt(rc[0], 10), ccx = parseInt(rc[1], 10);
+          var rect = document.createElementNS(NS, 'rect');
+          rect.setAttribute('x', ccx * cs); rect.setAttribute('y', rr * cs);
+          rect.setAttribute('width', cs);   rect.setAttribute('height', cs);
+          rect.style.setProperty('fill', shPalM[(modelShaded[k] || 0) % 4], 'important');
+          rect.setAttribute('shape-rendering', 'crispEdges');
+          modelShadeGroup.appendChild(rect);
+        });
+        if (modelShadeGroup.firstChild) mainGroup.insertBefore(modelShadeGroup, mainGroup.firstChild);
+      }
     }
 
     // Insert mainGroup immediately after #cell-colors so our borders render above
@@ -2376,12 +3317,12 @@
       for (var i = 0; i < mutations.length; i++) {
         var m = mutations[i];
         if (m.type === 'childList') { needsUpdate = true; break; }
-        if (m.type === 'attributes' && (m.attributeName === 'class' || m.attributeName === 'data-darkreader-inline-color' || m.attributeName === 'data-darkreader-inline-fill')) {
+        if (m.type === 'attributes' && m.attributeName === 'class') {
           needsUpdate = true; break;
         }
       }
       if (needsUpdate) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
-    }).observe(cc, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'data-darkreader-inline-color', 'data-darkreader-inline-fill'] });
+    }).observe(cc, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
   }
   function waitForCellCandidates() {
     if (document.getElementById('cell-candidates')) { startCandidateSortPatch(); return; }
@@ -2453,13 +3394,12 @@
         var m = mutations[i];
         if (m.type === 'childList') { needsUpdate = true; break; }
         if (m.type === 'attributes' &&
-            (m.attributeName === 'class' || m.attributeName === 'x' || m.attributeName === 'y' ||
-             m.attributeName === 'data-darkreader-inline-color' || m.attributeName === 'data-darkreader-inline-fill')) {
+            (m.attributeName === 'class' || m.attributeName === 'x' || m.attributeName === 'y')) {
           needsUpdate = true; break;
         }
       }
       if (needsUpdate) { reorderAllCornerCells(cp); fixAllCornerTexts(cp); }
-    }).observe(cp, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'x', 'y', 'data-darkreader-inline-color', 'data-darkreader-inline-fill'] });
+    }).observe(cp, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'x', 'y'] });
   }
   function waitForCellPencilmarks() {
     if (document.getElementById('cell-pencilmarks')) { startCornerReflowPatch(); return; }
@@ -2549,18 +3489,9 @@
 
     function refreshSwatch() {
       var op = opacityKey ? settings[opacityKey] : 1;
-      // !important beats DarkReader's external [data-darkreader-inline-bgcolor] rule
       swatchInner.style.setProperty('background-color', hexToRgba(settings[colorKey], op), 'important');
-      // Strip DR's own attributes so it doesn't try to override on its next pass
-      swatchInner.removeAttribute('data-darkreader-inline-bgcolor');
-      swatchInner.style.removeProperty('--darkreader-inline-bgcolor');
     }
     refreshSwatch();
-
-    // Re-strip if DR keeps re-adding its variables
-    new MutationObserver(refreshSwatch).observe(swatchInner, {
-      attributes: true, attributeFilter: ['data-darkreader-inline-bgcolor', 'style'],
-    });
 
     swatch.addEventListener('click', function (e) { e.stopPropagation(); colorInput.click(); });
     colorInput.addEventListener('input', function () {
@@ -2575,6 +3506,53 @@
   }
 
   // Generic labelled range slider with optional enable-checkbox.
+  // Wrap a range <input> in a relative flex container and draw reference tick
+  // marks along its track. `ticks` = array of { value, title?, accent? }; each is
+  // positioned at value's fraction of [min,max] (inset by ~half the thumb so
+  // mid-range marks line up with the thumb centre). accent marks are taller + blue
+  // (a notable reference, e.g. "this opacity matches the native look"); plain ones
+  // are short + grey (e.g. the setting's default). Returns the wrapper (slider
+  // reference is unchanged, so existing syncers keep working). pointer-events:none
+  // so marks never block dragging.
+  function wrapSliderWithTicks(slider, min, max, ticks) {
+    var wrap = document.createElement('div');
+    Object.assign(wrap.style, {
+      position: 'relative', flex: slider.style.flex || '1', minWidth: '0',
+      display: 'flex', alignItems: 'center', margin: slider.style.margin || '',
+    });
+    slider.style.margin = '0';
+    slider.style.flex = '1';
+    slider.style.width = '100%';
+    wrap.appendChild(slider);
+    var span = (parseFloat(max) - parseFloat(min)) || 1;
+    (ticks || []).forEach(function (t) {
+      var frac = (parseFloat(t.value) - parseFloat(min)) / span;
+      if (!isFinite(frac)) return;
+      if (frac < 0) frac = 0; else if (frac > 1) frac = 1;
+      var THUMB = 7; // px ≈ half the native range thumb — keeps mid-range marks aligned
+      var mark = document.createElement('div');
+      if (t.title) mark.title = t.title;
+      Object.assign(mark.style, {
+        position: 'absolute', top: '50%',
+        left: 'calc(' + THUMB + 'px + ' + frac + ' * (100% - ' + (2 * THUMB) + 'px))',
+        width: '2px', height: t.accent ? '14px' : '9px',
+        transform: 'translate(-50%, -50%)',
+        background: t.accent ? '#89b4fa' : '#6c7086',
+        borderRadius: '1px', pointerEvents: 'none', zIndex: '2',
+      });
+      wrap.appendChild(mark);
+    });
+    return wrap;
+  }
+
+  // Build the tick list for a slider: a subtle mark at the setting's DEFAULT value
+  // (so every slider shows where "home" is), plus any explicit reference ticks.
+  function sliderTicks(key, extra) {
+    var ticks = [];
+    if (key != null && DEFAULTS[key] != null) ticks.push({ value: DEFAULTS[key], title: 'Default' });
+    return ticks.concat(extra || []);
+  }
+
   function makeRangeRow(opts) {
     // opts: { key, label, min, max, step, format, enabledKey,
     //         extraKeys, extraEnabledKeys }
@@ -2665,11 +3643,12 @@
     header.appendChild(lbl);
     if (opts.hilite) header.appendChild(makeHiliteIcon(opts.hilite, opts.hiliteTitle));
     header.appendChild(pct);
-    row.appendChild(header); row.appendChild(slider);
+    row.appendChild(header);
+    row.appendChild(wrapSliderWithTicks(slider, opts.min, opts.max, sliderTicks(opts.key, opts.ticks)));
     return row;
   }
 
-  function makeOpacityRow(opacityKey, swatchRef) {
+  function makeOpacityRow(opacityKey, swatchRef, ticks) {
     var row = document.createElement('div');
     Object.assign(row.style, { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' });
 
@@ -2700,7 +3679,9 @@
       if (swatchRef && swatchRef.__refreshSwatch) swatchRef.__refreshSwatch();
     };
 
-    row.appendChild(lbl); row.appendChild(slider); row.appendChild(pct);
+    row.appendChild(lbl);
+    row.appendChild(wrapSliderWithTicks(slider, 0, 1, sliderTicks(opacityKey, ticks)));
+    row.appendChild(pct);
     return row;
   }
 
@@ -2842,7 +3823,7 @@
   }
 
   // Sub-row: label + swatch on top row, opacity slider beneath. No per-row reset.
-  function makeColorRow(label, colorKey, opacityKey, hilite, hiliteTitle) {
+  function makeColorRow(label, colorKey, opacityKey, hilite, hiliteTitle, ticks) {
     var wrap = document.createElement('div');
     Object.assign(wrap.style, { marginTop: '6px' });
 
@@ -2860,7 +3841,7 @@
     if (hilite) topRow.appendChild(makeHiliteIcon(hilite, hiliteTitle));
     topRow.appendChild(swatchRef);
     wrap.appendChild(topRow);
-    if (opacityKey) wrap.appendChild(makeOpacityRow(opacityKey, swatchRef));
+    if (opacityKey) wrap.appendChild(makeOpacityRow(opacityKey, swatchRef, ticks));
     return wrap;
   }
 
@@ -2925,7 +3906,6 @@
     // on-screen width via non-scaling-stroke.
     function styleNode(node, m, paint) {
       node.removeAttribute('id'); node.removeAttribute('class');
-      node.removeAttribute('data-darkreader-inline-stroke'); node.removeAttribute('data-darkreader-inline-fill');
       if (node.querySelectorAll) Array.prototype.forEach.call(node.querySelectorAll('*'), function (d) { d.removeAttribute('id'); d.removeAttribute('class'); });
       node.setAttribute('transform', 'matrix(' + m.a + ',' + m.b + ',' + m.c + ',' + m.d + ',' + m.e + ',' + m.f + ')');
       node.setAttribute('vector-effect', 'non-scaling-stroke');
@@ -3328,13 +4308,18 @@
   // (#underlay rect + qualifying #overlay rect) and fixAllCagePaths (CAGE_FILL_SEL).
   function objFillSources() {
     var out = [];
-    hqa('#underlay rect').forEach(function (e) { if (!isKropkiDotRect(e)) out.push(e); });
+    hqa('#underlay rect').forEach(function (e) { if (!isKropkiDotRect(e) && !isKropkiClueShape(e)) out.push(e); });
     hqa('#overlay rect').forEach(function (e) { if (shouldShadeOverlayRect(e)) out.push(e); });
     hqa(CAGE_FILL_SEL).forEach(function (e) { out.push(e); });
     return out;
   }
-  // The exact set of line strokes Object-shading governs — mirrors fixAllLines.
-  function objLineSources() { return hqa('#arrows path[stroke]').filter(isLineStroke); }
+  // The exact sets of line strokes / line fills Object-shading governs — mirror
+  // fixAllLines (incl. group-inherited strokes via isLineStroke/lineStrokeSrc and
+  // filled arrow shapes via isLineFill). A path that is both stroked AND filled (the
+  // #CFCFCF block arrows / diamonds) appears in both; harmless — the objColored/objGray
+  // highlight de-dupes to cell outlines.
+  function objLineStrokeSources() { return hqa('#arrows path').filter(isLineStroke); }
+  function objLineFillSources()   { return hqa('#arrows path').filter(isLineFill); }
   // The grayscale #overlay marker texts Object-shading governs — mirrors
   // fixOverlayMarkerText's gates (skip Kropki labels; original colour must be gray).
   // Always gray (coloured overlay text is left to DR), so they only ever feed the
@@ -3355,15 +4340,16 @@
     });
   }
   function fillColorIsGray(el) { var c = parseColor(el.getAttribute('fill') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
-  function strokeColorIsGray(el) { var c = parseColor(el.getAttribute('stroke') || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
   function hasPaintedStroke(el) { var s = el.getAttribute('stroke'); if (!s || s === 'none') return false; var c = parseColor(s); return !!(c && c.a !== 0); }
   // Colored vs gray routing matches computeObjectShade: fills by fill colour, lines
   // by stroke colour. Borders = shape OUTLINES only (applyShapeStroke targets), NOT
   // lines — lines route through the colored/gray sliders, not the Border slider.
+  function lineStrokeColorIsGray(el) { var c = parseColor(lineStrokeSrc(el) || ''); return c && c.a !== 0 ? isGrayColor(c) : null; }
   function objShade(wantGray) {
     var out = [];
     objFillSources().forEach(function (e) { var g = fillColorIsGray(e); if (g === wantGray) out.push(e); });
-    objLineSources().forEach(function (e) { var g = strokeColorIsGray(e); if (g === wantGray) out.push(e); });
+    objLineStrokeSources().forEach(function (e) { var g = lineStrokeColorIsGray(e); if (g === wantGray) out.push(e); });
+    objLineFillSources().forEach(function (e) { var g = fillColorIsGray(e); if (g === wantGray) out.push(e); });
     if (wantGray) objTextSources().forEach(function (e) { out.push(e); });  // gray overlay marker text
     return out;
   }
@@ -3379,7 +4365,7 @@
     // cosmetic shapes Object shading owns), minus fill="none"/transparent boxes
     // (invisible label anchors we leave alone), and minus Kropki dots (now owned
     // solely by the Kropki fix — fixLabelRect skips them too, so no overlap).
-    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; if (isKropkiDotRect(r)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
+    labelBg:       function () { return hqa(LABEL_RECT_SEL).filter(function (r) { var fa = (r.getAttribute('fill') || '').trim().toLowerCase(); var c = parseColor(fa); if (fa === 'none' || (c && c.a === 0)) return false; if (isKropkiDotRect(r) || isKropkiClueShape(r)) return false; return !(c && c.a !== 0 && !isGrayColor(c)); }); },
     // Mirrors fixAllKropkiDots exactly via isKropkiDotRect (circular + black/white +
     // on a cell border): native feature-kropki, cosmetic textbg, AND class-less
     // #overlay/#underlay circles. Quadruples (grid corner) / bulbs / centre circles
@@ -3724,26 +4710,6 @@
       el.dispatchEvent(new MouseEvent(t, init));
     });
   }
-  function getDigitButton(d) {
-    return document.querySelector('[data-control="value"][data-value="' + String(d) + '"]');
-  }
-  // Ensure number mode is active (data-value="1"-"9"/"0" buttons visible).
-  // Letter mode (data-value="A"-"I"/"O") is active when the toggleletter button
-  // is selected; detect by checking whether the "1" button exists.
-  async function ensureNumberMode() {
-    if (document.querySelector('[data-value="1"]')) return true;
-    var btn = document.querySelector('[data-control="toggleletter"]');
-    if (!btn) return false;
-    dispatchClickEl(btn);
-    for (var i = 0; i < 6; i++) {
-      await sleep(20);
-      if (document.querySelector('[data-value="1"]')) return true;
-    }
-    return false;
-  }
-  function isLetterModeActive() {
-    return !document.querySelector('[data-value="1"]');
-  }
   function getModeButton(mode) {
     // mode: 'normal' | 'corner' | 'centre' | 'colour' | 'pen'
     return document.querySelector('[data-control="' + mode + '"]');
@@ -3834,12 +4800,27 @@
     if (panel && panel.style.display !== 'none') {
       return (56 + panel.offsetHeight + 8) + 'px';
     }
+    // Otherwise clear the topmost visible floating button in the bottom-right
+    // cluster (gear → Auto-fill → Validate) so toasts don't cover it. The Validate
+    // button sits highest when shown; fall back to the Auto-fill button, then the gear.
+    var vBtn = document.getElementById('sp-validate-btn');
+    if (vBtn && vBtn.offsetHeight > 0 && vBtn.style.display !== 'none') {
+      var vb = parseFloat(getComputedStyle(vBtn).bottom) || 120;
+      return (vb + vBtn.offsetHeight + 8) + 'px';
+    }
+    var fsBtn = document.getElementById('sp-fill-single-btn');
+    if (fsBtn && fsBtn.offsetHeight > 0) return (56 + fsBtn.offsetHeight + 8) + 'px';
     return '56px';
   }
 
+  // When true, the Settings "Debug: show popup" cycler is previewing a toast:
+  // force it to show (ignore the showToasts gate), never auto-fade, and float it
+  // above our own settings panel. See fsDebugShowNext.
+  var fsPreviewActive = false;
+
   function showRemoveInvalidToast(message, kind) {
     // Errors always show (player must know something went wrong) regardless of showToasts.
-    if (settings.showToasts === false && kind !== 'error') return;
+    if (!fsPreviewActive && settings.showToasts === false && kind !== 'error') return;
     var existing = document.getElementById('sp-remove-invalid-toast');
     if (existing) existing.remove();
     var toast = document.createElement('div');
@@ -3900,9 +4881,10 @@
     toast.appendChild(dismiss);
 
     document.body.appendChild(toast);
+    if (fsPreviewActive) toast.style.zIndex = '1000000';   // preview: float above our settings panel (z 999999)
 
     // Auto-fade after 2s (unless toastPersist is on, or this is an error — errors always persist).
-    if (!settings.toastPersist && kind !== 'error') {
+    if (!fsPreviewActive && !settings.toastPersist && kind !== 'error') {
       var fadeTimer = null;
       function scheduleFade() {
         clearTimeout(fadeTimer);
@@ -4055,114 +5037,114 @@
     var app = await Framework.getApp();
     var cellByKey = {};
     app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
-
-    var originalMode = getCurrentMode();
     var originalSelection = Array.from(app.puzzle.selectedCells || []);
-    var wasLetterMode = isLetterModeActive();
-    if (wasLetterMode) await ensureNumberMode();
+    var preOpSnap = snapshotPencilmarks();   // baseline for atomic rollback
+
     var totalTargets = targets.length;
     var failures = [];
     var removedCount = 0;
 
+    // Group by (type, digit). Each group = ONE api-select + ONE app.act toggle.
+    // app.act({type:'candidates'|'pencilmarks', arg:digit}) toggles the mark on
+    // the selected cells directly — no tool-mode switch and no digit-button
+    // click, so nothing flickers.
+    var byModeDigit = { corner: new Map(), centre: new Map() };
+    targets.forEach(function(t) {
+      var map = byModeDigit[t.type];
+      if (!map.has(t.digit)) map.set(t.digit, []);
+      map.get(t.digit).push(t);
+    });
+
+    var actionFor = { corner: 'pencilmarks', centre: 'candidates' };
+
+    // Open the undo-group ONLY now — *after* collecting targets above. SudokuPad
+    // strips the .conflict CSS classes while an edit-group is open (restoring
+    // them on groupend), so collecting conflicts with a group already open would
+    // always find zero. Removals all live in this one group → a single undo.
+    app.act({ type: 'groupstart' });
     try {
+    for (var mi = 0; mi < 2; mi++) {
+      var mode = mi === 0 ? 'corner' : 'centre';
+      var digitMap = byModeDigit[mode];
+      if (digitMap.size === 0) continue;
 
-      // Group by (type, digit). Each group gets ONE api-select + ONE button click.
-      var byModeDigit = { corner: new Map(), centre: new Map() };
-      targets.forEach(function(t) {
-        var map = byModeDigit[t.type];
-        if (!map.has(t.digit)) map.set(t.digit, []);
-        map.get(t.digit).push(t);
-      });
+      var iter = digitMap.entries();
+      var step;
+      while (!(step = iter.next()).done) {
+        var digit = step.value[0];
+        var targetsForDigit = step.value[1];
 
-      for (var mi = 0; mi < 2; mi++) {
-        var mode = mi === 0 ? 'corner' : 'centre';
-        var digitMap = byModeDigit[mode];
-        if (digitMap.size === 0) continue;
+        // Re-filter to targets still present in DOM.
+        var preSnap = snapshotPencilmarks();
+        var stillPresent = targetsForDigit.filter(function(t) {
+          return preSnap[mode].has(t.cellKey + ',' + t.digit);
+        });
+        if (stillPresent.length === 0) continue;
 
-        var modeOk = await ensureMode(mode);
-        if (!modeOk) { failures.push('mode-switch-failed:' + mode); continue; }
+        // Build cell objects for these targets.
+        var cellObjs = stillPresent.map(function(t) { return cellByKey[t.cellKey]; }).filter(Boolean);
+        if (cellObjs.length === 0) continue;
 
-        var iter = digitMap.entries();
-        var step;
-        while (!(step = iter.next()).done) {
-          var digit = step.value[0];
-          var targetsForDigit = step.value[1];
+        // Select exactly these cells via the API (no drag, no extras).
+        app.deselect();
+        app.select(cellObjs);
 
-          var digitBtn = getDigitButton(digit);
-          if (!digitBtn) { skippedExcluded += targetsForDigit.length; continue; }
+        // All selected cells have digit in this mode → one toggle removes it from all.
+        var before = snapshotPencilmarks();
+        app.act({ type: actionFor[mode], arg: digit });
+        await sleep(20);
+        var after = snapshotPencilmarks();
+        var diff = diffSnapshots(before, after);
 
-          // Re-filter to targets still present in DOM.
-          var preSnap = snapshotPencilmarks();
-          var stillPresent = targetsForDigit.filter(function(t) {
-            return preSnap[mode].has(t.cellKey + ',' + t.digit);
-          });
-          if (stillPresent.length === 0) continue;
-
-          // Build cell objects for these targets.
-          var cellObjs = stillPresent.map(function(t) { return cellByKey[t.cellKey]; }).filter(Boolean);
-          if (cellObjs.length === 0) continue;
-
-          // Select exactly these cells via the API (no drag, no extras).
-          app.deselect();
-          app.select(cellObjs);
-          await sleep(10);
-
-          // All selected cells have digit in this mode → clicking removes it from all.
-          var before = snapshotPencilmarks();
-          dispatchClickEl(digitBtn);
-          await sleep(50);
-          var after = snapshotPencilmarks();
-          var diff = diffSnapshots(before, after);
-
-          // Safety: additions or value/color changes are always wrong here → undo + abort.
-          var criticalUnexpected = diff.added.corner.length + diff.added.centre.length +
-                                   diff.added.values.length + diff.added.colors.length +
-                                   diff.removed.values.length + diff.removed.colors.length;
-          if (criticalUnexpected > 0) {
-            console.error('[spDR-fix] REMOVE unexpected change for', mode, digit, diff);
-            var undoBtn = getModeButton('undo');
-            var rollbackOk = false;
-            if (undoBtn) {
-              dispatchClickEl(undoBtn);
-              for (var att = 0; att < 8; att++) {
-                await sleep(25);
-                if (diffEmpty(diffSnapshots(before, snapshotPencilmarks()))) { rollbackOk = true; break; }
-              }
+        // Safety: additions or value/color changes are always wrong here →
+        // close the group and roll the whole sweep back atomically (one undo).
+        var criticalUnexpected = diff.added.corner.length + diff.added.centre.length +
+                                 diff.added.values.length + diff.added.colors.length +
+                                 diff.removed.values.length + diff.removed.colors.length;
+        if (criticalUnexpected > 0) {
+          console.error('[spDR-fix] REMOVE unexpected change for', mode, digit, diff);
+          app.act({ type: 'groupend' });
+          var undoBtn = getModeButton('undo');
+          var rollbackOk = false;
+          if (undoBtn) {
+            dispatchClickEl(undoBtn);
+            for (var att = 0; att < 8; att++) {
+              await sleep(25);
+              if (diffEmpty(diffSnapshots(preOpSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
             }
-            return {
-              totalTargets: totalTargets, removed: removedCount,
-              skippedExcluded: skippedExcluded, aborted: true,
-              abortReason: 'unexpected-diff',
-              abortTarget: { type: mode, digit: digit,
-                             cellX: String(cellObjs[0].col * 64 + 32),
-                             cellY: String(cellObjs[0].row * 64 + 32) },
-              rollbackOk: rollbackOk,
-              elapsedMs: performance.now() - startTime, failures: failures,
-            };
           }
+          return {
+            totalTargets: totalTargets, removed: 0,
+            skippedExcluded: skippedExcluded, aborted: true,
+            abortReason: 'unexpected-diff',
+            abortTarget: { type: mode, digit: digit,
+                           cellX: String(cellObjs[0].col * 64 + 32),
+                           cellY: String(cellObjs[0].row * 64 + 32) },
+            rollbackOk: rollbackOk,
+            elapsedMs: performance.now() - startTime, failures: failures,
+          };
+        }
 
-          // Count correct removals.
-          var expectedKeys = new Set(stillPresent.map(function(t) { return t.cellKey + ',' + t.digit; }));
-          var correctRemoved = diff.removed[mode].filter(function(k) { return expectedKeys.has(k); }).length;
-          removedCount += correctRemoved;
-          if (correctRemoved < stillPresent.length) {
-            failures.push('partial-removal:' + mode + ':' + digit +
-                          ':expected=' + stillPresent.length + ':got=' + correctRemoved);
-          }
+        // Count correct removals.
+        var expectedKeys = new Set(stillPresent.map(function(t) { return t.cellKey + ',' + t.digit; }));
+        var correctRemoved = diff.removed[mode].filter(function(k) { return expectedKeys.has(k); }).length;
+        removedCount += correctRemoved;
+        if (correctRemoved < stillPresent.length) {
+          failures.push('partial-removal:' + mode + ':' + digit +
+                        ':expected=' + stillPresent.length + ':got=' + correctRemoved);
         }
       }
+    }
 
-      return {
-        totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded,
-        aborted: false, elapsedMs: performance.now() - startTime, failures: failures,
-      };
-
+    app.act({ type: 'groupend' });
+    return {
+      totalTargets: totalTargets, removed: removedCount, skippedExcluded: skippedExcluded,
+      aborted: false, elapsedMs: performance.now() - startTime, failures: failures,
+    };
     } finally {
-      // Restore original selection and mode on every exit path.
+      // Restore the caller's selection on every exit path.
       app.deselect();
       if (originalSelection.length > 0) app.select(originalSelection);
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      if (originalMode && originalMode !== getCurrentMode()) await ensureMode(originalMode);
     }
   }
 
@@ -4191,25 +5173,41 @@
       }
       return;
     }
-    // Aborted
+    // Aborted. The public entry point has already reverted the whole operation
+    // back to the pre-button state (revertToSnapshot) and recorded the outcome in
+    // result.fullyReverted — so the message is the SAME regardless of the internal
+    // abort reason: either everything was restored, or (should never happen) it
+    // couldn't be and the player must finish the undo by hand. No partial counts:
+    // on a full revert there are, by definition, no surviving changes to report.
     var t = result.abortTarget;
-    var targetDesc = t ? (t.type + ' ' + t.digit + ' from cell (' + t.cellX + ',' + t.cellY + ')') : '(unknown)';
-    var common = '\nRemoved ' + result.removed + ' of ' + result.totalTargets + ' ' + contextLabel + ' in ' + elapsed + '. ';
-    if (result.abortReason === 'mode-drift') {
-      showRemoveInvalidToast('Aborted: tool mode drifted unexpectedly before removing ' + targetDesc + '.' + common + 'Nothing was damaged.', 'warning');
-    } else if (result.abortReason === 'no-effect') {
-      showRemoveInvalidToast('Aborted: click had no effect when removing ' + targetDesc + '.' + common + 'Nothing was damaged.', 'warning');
-    } else if (result.abortReason === 'unexpected-diff') {
-      if (result.rollbackOk) {
-        showRemoveInvalidToast('Aborted: click produced an unexpected change for ' + targetDesc + '. Rolled it back.' + common + 'Nothing was damaged.', 'warning');
-      } else {
-        showRemoveInvalidToast('CRITICAL: an unexpected change occurred for ' + targetDesc + ' AND the rollback failed. Press Ctrl+Z manually until satisfied. (Removed ' + result.removed + ' in ' + elapsed + ' before failure.)', 'error');
-      }
-    } else if (result.abortReason === 'selection-stuck') {
-      showRemoveInvalidToast('Aborted: could not isolate ' + targetDesc + ' as a single-cell selection (the multi-selection from the drag did not clear). ' + common + 'Nothing was damaged.', 'warning');
+    var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
+    if (result.fullyReverted) {
+      showRemoveInvalidToast('Stopped — an unexpected change occurred at ' + where + '. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
     } else {
-      showRemoveInvalidToast('Aborted on ' + targetDesc + '.' + common, 'warning');
+      showRemoveInvalidToast('CRITICAL — an unexpected change occurred at ' + where + ' and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
     }
+  }
+
+  // Revert every change made since `preSnap` by clicking the native undo button
+  // — one edit-group per click — until the puzzle's marks match preSnap again,
+  // restoring the EXACT pre-button state. The Fill/Clear entry points call this on
+  // ANY abort so a failed run never leaves a partial fill/removal behind (a single
+  // worker pass already rolls back its own group; this also catches multi-pass and
+  // fill-then-sweep, where earlier groups would otherwise remain). It re-checks
+  // diffEmpty BEFORE each click, so it stops the instant the state matches and can
+  // never over-undo into the user's own prior moves; `maxUndos` caps it so an
+  // unreachable state (shouldn't happen) fails loudly instead of looping forever.
+  // Returns true iff the pre-button state was fully restored.
+  async function revertToSnapshot(preSnap, maxUndos) {
+    var undoBtn = getModeButton('undo');
+    for (var i = 0; i <= maxUndos; i++) {
+      if (diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()))) return true;
+      if (i === maxUndos) break;
+      if (undoBtn) dispatchClickEl(undoBtn);
+      else { var app = await Framework.getApp(); app.act({ type: 'undo' }); }
+      await sleep(25);
+    }
+    return diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()));
   }
 
   // Public entry points ─ each takes the action lock, runs work, releases.
@@ -4252,6 +5250,10 @@
     var allFailures = [];
     var passCount = 0;
 
+    // Each pass = one _removeInvalidPencilmarksInternal call, which owns its own
+    // undo-group (opened only after it collects conflicts, because groupstart
+    // hides the .conflict classes). The common case is a single pass = one undo.
+    // Extra passes (digit set wider than the cell renders) add one undo each.
     for (var pass = 0; pass < MAX_PASSES; pass++) {
       var r = await _removeInvalidPencilmarksInternal(opts);
       passCount++;
@@ -4261,8 +5263,8 @@
       totalElapsedMs += r.elapsedMs || 0;
       if (r.failures && r.failures.length) Array.prototype.push.apply(allFailures, r.failures);
 
-      // Abort — propagate immediately with combined totals so the user sees
-      // the partial removal counts.
+      // Abort — propagate immediately with combined totals so the user sees the
+      // partial counts (the internal pass already rolled its own group back).
       if (r.aborted) {
         return {
           totalTargets: totalTargets, removed: totalRemoved,
@@ -4292,53 +5294,46 @@
   }
 
   function removeInvalidPencilmarks() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+    if (actionInProgress) return;   // locked out (no popup): these finish in a fraction of a second — the lock just blocks a rapid double-click
     actionInProgress = true;
-    _removeInvalidPencilmarksMultiPass({}).then(function (r) {
+    var preSnap = snapshotPencilmarks();   // pre-button baseline for a full revert on abort
+    _removeInvalidPencilmarksMultiPass({}).then(async function (r) {
+      if (r.aborted) r.fullyReverted = await revertToSnapshot(preSnap, 12);
       showWorkerResult(r, 'invalid pencilmarks');
     }).finally(function () { actionInProgress = false; });
   }
 
   function clearMarksInSelected() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+    if (actionInProgress) return;   // locked out (no popup): these finish in a fraction of a second — the lock just blocks a rapid double-click
     var selected = getSelectedCells();
     if (selected.size === 0) {
       showRemoveInvalidToast('No marks cleared (no cells selected).', 'success');
       return;
     }
     actionInProgress = true;
-    _removeInvalidPencilmarksMultiPass({ cellFilter: selected }).then(function (r) {
+    var preSnap = snapshotPencilmarks();   // pre-button baseline for a full revert on abort
+    _removeInvalidPencilmarksMultiPass({ cellFilter: selected }).then(async function (r) {
+      if (r.aborted) r.fullyReverted = await revertToSnapshot(preSnap, 12);
       showWorkerResult(r, 'invalid marks in selected cells', 'No invalid marks in the selected cell' + (selected.size === 1 ? '' : 's') + '.');
     }).finally(function () { actionInProgress = false; });
   }
 
   // Fill missing centre candidates (from settings.digitSet) into each selected
-  // cell. Uses Framework.getApp() → app.select() to select exactly the cells
-  // missing each digit, then clicks the digit button once — N digits = N clicks,
-  // not N×M per-cell iterations. Caller runs a final _removeInvalidPencilmarksInternal
-  // sweep to strip any conflicts introduced.
+  // cell. Mechanism: SudokuPad's own paste path — app.act({type:'candidates',
+  // arg:d}) toggles a centre mark on the api-selected cells with NO tool-mode
+  // switch and no digit-button click, so there's no UI flicker. The whole fill
+  // is wrapped in one groupstart/groupend pair (like FeatureCellPaste) so it
+  // collapses to a single undo step. Additive: for each digit only the cells
+  // *missing* it are selected, so existing marks are preserved; given/value
+  // cells are skipped. Caller runs a removal sweep afterwards.
   async function _fillSelectedInternal(cells) {
     var startTime = performance.now();
 
-    // Get the SudokuPad app API and build a col,row → cell object lookup.
     var app = await Framework.getApp();
     var cellByKey = {};
     app.puzzle.cells.forEach(function(c) { cellByKey[c.col + ',' + c.row] = c; });
-
-    var originalMode = getCurrentMode();
     var originalSelection = Array.from(app.puzzle.selectedCells || []);
-    var wasLetterMode = isLetterModeActive();
-    if (wasLetterMode) { var nmOk = await ensureNumberMode(); if (!nmOk) wasLetterMode = false; }
-    var modeOk = await ensureMode('centre');
-    if (!modeOk) {
-      // Restore state before returning — this path is outside the try/finally block.
-      app.deselect();
-      if (originalSelection.length > 0) app.select(originalSelection);
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      return { addedCount: 0, removedCount: 0, skippedCount: 0, wasLetterMode: wasLetterMode,
-               aborted: true, abortReason: 'mode-switch-failed', elapsedMs: performance.now() - startTime };
-    }
-    try {
+
     // Pre-filter: skip cells with given/value (immutable), keep the rest.
     var fillable = [];
     var skippedCount = 0;
@@ -4351,106 +5346,79 @@
         if (cell) fillable.push({ key: key, cell: cell });
       }
     });
-
     if (fillable.length === 0) {
       return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
-               wasLetterMode: wasLetterMode, aborted: false,
-               elapsedMs: performance.now() - startTime };
+               wasLetterMode: false, aborted: false, elapsedMs: performance.now() - startTime };
     }
 
+    // Build the plan from a single pre-snapshot: for each digit in the set, the
+    // fillable cells that don't already show it as a centre mark.
+    var preSnap = snapshotPencilmarks();
     var digitList = settings.digitSet.split('');
-
-    // For each digit, select all fillable cells missing it and click once.
-    var addedCount = 0;
+    var plan = [];
     for (var di = 0; di < digitList.length; di++) {
       var d = digitList[di];
-      var digitBtn = getDigitButton(d);
-      if (!digitBtn) continue;
-
-      var cmOk = await ensureMode('centre');
-      if (!cmOk) {
-        return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-                 wasLetterMode: wasLetterMode, aborted: true,
-                 abortReason: 'mode-switch-failed',
-                 elapsedMs: performance.now() - startTime };
-      }
-
-      // Find fillable cells that don't already have this digit as a centre mark.
-      var preSnap = snapshotPencilmarks();
-      var targetsForD = fillable.filter(function(c) {
-        return !preSnap.centre.has(c.key + ',' + d);
-      });
-      if (targetsForD.length === 0) continue;
-
-      // Select exactly these cells via the API and click the digit button once.
+      var targets = fillable.filter(function(c) { return !preSnap.centre.has(c.key + ',' + d); });
+      if (targets.length) plan.push({ digit: d, cells: targets.map(function(c) { return c.cell; }) });
+    }
+    if (plan.length === 0) {
       app.deselect();
-      app.select(targetsForD.map(function(c) { return c.cell; }));
-      await sleep(10);
+      if (originalSelection.length > 0) app.select(originalSelection);
+      return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
+               wasLetterMode: false, aborted: false, elapsedMs: performance.now() - startTime };
+    }
 
-      var expectedAddKeys = new Set(targetsForD.map(function(t) { return t.key + ',' + d; }));
-      var beforeBatch = snapshotPencilmarks();
-      dispatchClickEl(digitBtn);
-      await sleep(50);
-      var afterBatch = snapshotPencilmarks();
-      var diffBatch = diffSnapshots(beforeBatch, afterBatch);
+    try {
+      // One undo-group for the whole fill.
+      app.act({ type: 'groupstart' });
+      for (var i = 0; i < plan.length; i++) {
+        app.deselect();
+        app.select(plan[i].cells);
+        // Every cell here lacks the digit, so one toggle adds it to each.
+        app.act({ type: 'candidates', arg: plan[i].digit });
+      }
+      app.act({ type: 'groupend' });
+      await sleep(20);   // let the render settle before verifying
 
-      if (diffEmpty(diffBatch)) continue;  // All already had it — no-op.
-
-      // Allow incidental non-digitSet centre removals (SudokuPad auto-clears letter marks).
-      var unexpectedRemovedCentre = diffBatch.removed.centre.filter(function(entry) {
-        return settings.digitSet.includes(entry.split(',')[2]);
-      });
-      var batchValid = (
-        diffBatch.removed.corner.length === 0 &&
-        diffBatch.removed.values.length === 0 &&
-        diffBatch.removed.colors.length === 0 &&
-        diffBatch.added.corner.length   === 0 &&
-        diffBatch.added.values.length   === 0 &&
-        diffBatch.added.colors.length   === 0 &&
-        unexpectedRemovedCentre.length  === 0 &&
-        diffBatch.added.centre.length   === targetsForD.length &&
-        diffBatch.added.centre.every(function(k) { return expectedAddKeys.has(k); })
-      );
-
-      if (batchValid) {
-        addedCount += targetsForD.length;
-      } else {
-        console.warn('[spDR-fix] FILL unexpected diff for digit', d, diffBatch);
+      // Verify: the only legitimate changes are added centre marks (digitSet).
+      // SudokuPad clears letter centre marks when a numeric one is added, so we
+      // tolerate removals of non-digitSet centre marks. Anything else (lost
+      // values/colours/corners, stray additions) → roll the whole group back
+      // with a single undo and abort.
+      var diff = diffSnapshots(preSnap, snapshotPencilmarks());
+      var badCentreRemovals = diff.removed.centre.filter(function(k) {
+        return settings.digitSet.includes(k.split(',')[2]);
+      }).length;
+      var unexpected = diff.removed.corner.length + badCentreRemovals +
+                       diff.removed.values.length + diff.removed.colors.length +
+                       diff.added.corner.length + diff.added.values.length + diff.added.colors.length;
+      if (unexpected > 0) {
+        console.warn('[spDR-fix] FILL unexpected diff', diff);
         var undoBtn = getModeButton('undo');
         var rollbackOk = false;
         if (undoBtn) {
           dispatchClickEl(undoBtn);
-          for (var attempt = 0; attempt < 8; attempt++) {
+          for (var att = 0; att < 8; att++) {
             await sleep(25);
-            if (diffEmpty(diffSnapshots(beforeBatch, snapshotPencilmarks()))) { rollbackOk = true; break; }
+            if (diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
           }
         }
-        return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-                 wasLetterMode: wasLetterMode, aborted: true,
-                 abortReason: 'unexpected-diff',
-                 abortTarget: { type: 'centre', digit: String(d),
-                                cellX: String(targetsForD[0].cell.col * 64 + 32),
-                                cellY: String(targetsForD[0].cell.row * 64 + 32) },
-                 rollbackOk: rollbackOk,
-                 elapsedMs: performance.now() - startTime };
+        return { addedCount: 0, removedCount: 0, skippedCount: skippedCount,
+                 wasLetterMode: false, aborted: true, abortReason: 'unexpected-diff',
+                 rollbackOk: rollbackOk, elapsedMs: performance.now() - startTime };
       }
-    }
 
-    return { addedCount: addedCount, removedCount: 0, skippedCount: skippedCount,
-             wasLetterMode: wasLetterMode, aborted: false,
-             elapsedMs: performance.now() - startTime };
-
+      return { addedCount: diff.added.centre.length, removedCount: 0, skippedCount: skippedCount,
+               wasLetterMode: false, aborted: false, elapsedMs: performance.now() - startTime };
     } finally {
-      // Restore original selection and mode on every exit path.
+      // Restore original selection on every exit path.
       app.deselect();
       if (originalSelection.length > 0) app.select(originalSelection);
-      if (wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
-      if (originalMode && originalMode !== getCurrentMode()) await ensureMode(originalMode);
     }
   }
 
   function fillSelectedCellsWithCandidates() {
-    if (actionInProgress) { showRemoveInvalidToast('Another operation is still running.', 'warning'); return; }
+    if (actionInProgress) return;   // locked out (no popup): these finish in a fraction of a second — the lock just blocks a rapid double-click
     var selected = getSelectedCells();
     if (selected.size === 0) {
       showRemoveInvalidToast('No cells selected.', 'success');
@@ -4459,41 +5427,33 @@
     actionInProgress = true;
     var t0 = performance.now();
     var originalMode = getCurrentMode();
+    var preSnap = snapshotPencilmarks();   // pre-button baseline. Fill + sweep are
+                                           // separate undo groups, so on ANY abort
+                                           // we revert the WHOLE thing back to here.
     (async function () {
       var fillResult = await _fillSelectedInternal(selected);
-      var elapsedFill = formatDuration(fillResult.elapsedMs);
       if (fillResult.aborted) {
-        var t = fillResult.abortTarget;
-        var desc = t ? ('digit ' + t.digit + ' in cell (' + t.cellX + ',' + t.cellY + ')') : '(unknown)';
-        var skippedNote = (fillResult.skippedCount > 0) ? ' (skipped ' + fillResult.skippedCount + ' cell' + (fillResult.skippedCount === 1 ? '' : 's') + ')' : '';
-        var inlineNote = (fillResult.removedCount > 0) ? ', removed ' + fillResult.removedCount + ' inline' : '';
-        var msg = 'Fill aborted while adding ' + desc + ' (' + fillResult.abortReason + ').\nAdded ' + fillResult.addedCount + ' candidates' + inlineNote + skippedNote + ' in ' + elapsedFill + ' before stopping.';
-        var kind = (fillResult.abortReason === 'unexpected-diff' && fillResult.rollbackOk === false) ? 'error' : 'warning';
-        if (kind === 'error') msg = 'CRITICAL: ' + msg;
-        else msg += ' Nothing was damaged.';
-        showRemoveInvalidToast(msg, kind);
+        // Fill itself failed → revert the fill group back to the pre-button state.
+        var reverted = await revertToSnapshot(preSnap, 12);
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
         if (originalMode) await ensureMode(originalMode);
+        if (reverted) showRemoveInvalidToast('Stopped while filling candidates — an unexpected change occurred. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while filling candidates and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
         return;
       }
       // Now strip invalid pencilmarks in those same cells.
       var removeResult = await _removeInvalidPencilmarksMultiPass({ cellFilter: selected });
       var totalElapsed = formatDuration(performance.now() - t0);
       if (removeResult.aborted) {
-        // Compose a combined message
+        // Sweep failed AFTER a successful fill (which is its own committed undo
+        // group) → revert EVERYTHING (sweep + fill) back to the pre-button state.
+        var reverted = await revertToSnapshot(preSnap, 12);
         var t = removeResult.abortTarget;
-        var desc = t ? (t.type + ' ' + t.digit + ' in cell (' + t.cellX + ',' + t.cellY + ')') : '(unknown)';
-        var kind = (removeResult.abortReason === 'unexpected-diff' && removeResult.rollbackOk === false) ? 'error' : 'warning';
-        var inlineR = fillResult.removedCount || 0;
-        var msg = 'Filled ' + fillResult.addedCount + ' candidates' + (inlineR > 0 ? ', removed ' + inlineR + ' inline' : '') +
-                  ', then aborted during final removal sweep at ' + desc +
-                  ' (' + removeResult.abortReason + ').\nRemoved ' + removeResult.removed + ' of ' + removeResult.totalTargets +
-                  ' sweep marks. Total time ' + totalElapsed + '.';
-        if (kind === 'error') msg = 'CRITICAL: ' + msg;
-        else msg += ' Nothing was damaged.';
-        showRemoveInvalidToast(msg, kind);
+        var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
         if (originalMode) await ensureMode(originalMode);
+        if (reverted) showRemoveInvalidToast('Filled the candidates, then hit an unexpected change during the cleanup sweep at ' + where + '. All changes were reverted, including the fill: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred during the cleanup sweep at ' + where + ' and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
       } else {
         var n = fillResult.addedCount;
         var inlineR = fillResult.removedCount || 0;
@@ -4519,17 +5479,859 @@
     })().finally(function () { actionInProgress = false; });
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  Validate Constraints — remove candidates that no constraint can satisfy.
+  //  For now this validates KROPKI dots only (black = 2:1 ratio, white =
+  //  consecutive); XV / quadruples / cages are planned but not implemented.
+  //  It only ever REMOVES centre candidates — never adds — so a player's prior
+  //  eliminations are preserved.
+  // ══════════════════════════════════════════════════════════════════════════
+
+  // Collect every STANDARD Kropki dot (unlabeled black/white circle on a cell
+  // border) and the two cells it joins. Labeled dots (difference-N, ratio-N,
+  // XV/Roman) are skipped — those aren't plain 2:1/consecutive constraints.
+  // Returns [{ type:'black'|'white', a:'col,row', b:'col,row' }]. Reuses the
+  // same detection predicates as the Kropki renderer (isKropkiCircle / fill /
+  // isOnCellBorder / getKropkiAdjacentText), so it claims exactly the dots the
+  // script already treats as Kropki.
+  function collectKropkiDots() {
+    var svg = document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return [];
+    var N = detectGridSize();
+    var dots = [];
+    var seen = {};
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+    svg.querySelectorAll('rect.feature-kropki, rect.textbg, #overlay rect, #underlay rect').forEach(function (rect) {
+      if (!isKropkiCircle(rect)) return;
+      var f = (rect.getAttribute('fill') || '').toUpperCase();
+      if (f !== '#FFFFFF' && f !== '#000000') return;
+      if (!isOnCellBorder(rect, cs)) return;
+      if (getKropkiAdjacentText(rect)) return;   // labeled dot → not a plain Kropki constraint
+      var x = parseFloat(rect.getAttribute('x') || 0), y = parseFloat(rect.getAttribute('y') || 0);
+      var w = parseFloat(rect.getAttribute('width') || 0), h = parseFloat(rect.getAttribute('height') || 0);
+      var cx = x + w / 2, cy = y + h / 2;
+      function gridDist(v) { var m = ((v % cs) + cs) % cs; return Math.min(m, cs - m); }
+      var tol = cs * 0.15, half = cs / 2;
+      var onVert = gridDist(cx) < tol && Math.abs(gridDist(cy) - half) < tol;
+      var a, b;
+      if (onVert) {                              // vertical border → left | right cells
+        var bc = Math.round(cx / cs), r = Math.floor(cy / cs);
+        a = (bc - 1) + ',' + r; b = bc + ',' + r;
+      } else {                                   // horizontal border → top | bottom cells
+        var br = Math.round(cy / cs), c = Math.floor(cx / cs);
+        a = c + ',' + (br - 1); b = c + ',' + br;
+      }
+      var ap = a.split(',').map(Number), bp = b.split(',').map(Number);
+      if (!inGrid(ap[0], ap[1]) || !inGrid(bp[0], bp[1])) return;
+      var key = a + '|' + b + '|' + f;
+      if (seen[key]) return;
+      seen[key] = 1;
+      dots.push({ type: f === '#000000' ? 'black' : 'white', a: a, b: b });
+    });
+    return dots;
+  }
+
+  // Compute which centre candidates violate the Kropki dots, by constraint
+  // propagation (arc consistency) iterated to a FIXPOINT. A candidate d in a
+  // markable cell is removed when some dot the cell sits on has no partner for d in
+  // the neighbour's CURRENT set — black: e==2d or d==2e; white: |d-e|==1 — over the
+  // puzzle's digit set. Because each removal shrinks a set that other dots read, we
+  // sweep every dot repeatedly until a full pass changes nothing, so an elimination
+  // propagates all the way down a Kropki chain (e.g. on "Kropki Pairs" 264wvenhmu a
+  // 1-2-4-6-8-9 / 1-2-4-6-8-9 white pair settles to 8-9 / 8-9 — the correct deep
+  // result: once the wider web is propagated, 1/2/4/6 have no surviving partner.
+  // Verified the fixpoint empties 0 cells there and on the dense all-Kropki
+  // algxlb0a1z, i.e. it never contradicts — it's sound, just deep).
+  // A value/given cell contributes its single digit; an empty cell (no value, no
+  // marks) counts as the full digit set, so it never forces a removal and is never
+  // itself modified. NOTE the fixpoint trusts the current marks as COMPLETE: run
+  // mid-solve on a partially-pencilled grid it propagates those partial marks and
+  // can remove more than is "obviously" invalid — cleanest on a fully-pencilled
+  // grid. Monotonic (sets only shrink) so it always terminates; the pass guard is
+  // belt-and-braces. Pure w.r.t. the board: reads the DOM and mutates only
+  // in-memory sets, returning the removal list without touching the board.
+  // Shared board read for the constraint validators (Kropki, cages, …). Returns
+  // null when the digit set isn't numeric (ratio/sum/consecutive are undefined for
+  // letter grids). Otherwise a snapshot of the CURRENT board:
+  //   uni     — { digit:1 } membership map of the puzzle's digit set
+  //   fullSet — Set<num> of that digit set (an empty/unmarked cell stands in as this)
+  //   values  — cellKey → placed/given digit (a value owns its cell)
+  //   centre  — cellKey → Set<num> of the player's centre pencilmarks (numeric, in set)
+  // Read-only w.r.t. the board: every validator works on copies of these sets and
+  // returns a removal list without touching the DOM. Cell keys are "col,row"
+  // 0-indexed (cellKeyFromMarkXY), matching app.puzzle.cells' c.col+','+c.row.
+  function readValidatorBoardState() {
+    var digitChars = (settings.digitSet || '').split('');
+    if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) return null;
+    var uni = {};
+    digitChars.forEach(function (c) { uni[Number(c)] = 1; });
+    var values = {};
+    document.querySelectorAll('#cell-values text, #cell-givens text, text.cell-given').forEach(function (t) {
+      var x = t.getAttribute('x'), y = t.getAttribute('y');
+      if (x == null || y == null) return;
+      var v = (t.textContent || '').trim();
+      if (/^[0-9]$/.test(v)) values[cellKeyFromMarkXY(x, y)] = Number(v);
+    });
+    var centre = {};
+    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (text) {
+      var ck = cellKeyFromMarkXY(text.getAttribute('x'), text.getAttribute('y'));
+      if (values[ck] != null) return;   // a placed value owns the cell; ignore stray marks
+      var s = centre[ck] || (centre[ck] = new Set());
+      text.querySelectorAll('tspan').forEach(function (sp) {
+        var dv = sp.getAttribute('data-val');
+        if (/^[0-9]$/.test(dv) && uni[Number(dv)]) s.add(Number(dv));
+      });
+      if (s.size === 0) delete centre[ck];
+    });
+    return { uni: uni, fullSet: new Set(Object.keys(uni).map(Number)), values: values, centre: centre };
+  }
+
+  function computeKropkiRemovals() {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };   // letters / empty → ratio & consecutive are undefined
+    var uni = st.uni;
+    function blackPartners(d) {
+      var r = [];
+      if (uni[2 * d] && 2 * d !== d) r.push(2 * d);
+      if (d % 2 === 0 && uni[d / 2] && d / 2 !== d) r.push(d / 2);
+      return r;
+    }
+    function whitePartners(d) {
+      var r = [];
+      if (uni[d - 1]) r.push(d - 1);
+      if (uni[d + 1]) r.push(d + 1);
+      return r;
+    }
+    function partners(type, d) { return type === 'black' ? blackPartners(d) : whitePartners(d); }
+
+    var dots = collectKropkiDots();
+    if (dots.length === 0) return { noDots: true };
+
+    var values = st.values, centre = st.centre, fullSet = st.fullSet;
+    // A neighbour cell's candidate set: its value/given (one digit), its centre
+    // marks, or — for an empty cell — the full digit set (so an unfilled neighbour
+    // never forces a removal). Read-only: never mutated during the pass.
+    function neighbourSet(key) {
+      if (values[key] != null) return new Set([values[key]]);
+      if (centre[key]) return centre[key];
+      return fullSet;
+    }
+    function hasPartner(type, d, otherSet) {
+      var ps = partners(type, d);
+      for (var i = 0; i < ps.length; i++) if (otherSet.has(ps[i])) return true;
+      return false;
+    }
+
+    // Sweep every dot (both directions), deleting unsupported candidates from the
+    // live working set so removals cascade; repeat until a pass changes nothing.
+    var markedKeys = Object.keys(centre);   // cells that started with centre marks
+    var removals = [], seen = {};
+    function consider(self, other, type) {
+      if (values[self] != null || !centre[self]) return;   // only modifiable candidate cells
+      var os = neighbourSet(other);                         // live set for marked neighbours → cascade
+      Array.from(centre[self]).forEach(function (d) {       // snapshot: we mutate the set inside the loop
+        if (!hasPartner(type, d, os)) {
+          centre[self].delete(d);
+          var k = self + '/' + d;
+          if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: self, digit: String(d) }); }
+        }
+      });
+    }
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      var before = removals.length;
+      dots.forEach(function (dot) {
+        consider(dot.a, dot.b, dot.type);
+        consider(dot.b, dot.a, dot.type);
+      });
+      changed = removals.length > before;
+    }
+
+    // Cells whose candidate set the fixpoint wiped out entirely → contradiction worth flagging.
+    var emptied = 0;
+    markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
+
+    return { removals: removals, dotCount: dots.length, emptiedCells: emptied };
+  }
+
+  // ── Cage validator ────────────────────────────────────────────────────────
+  // Standard killer cages (a small total in a corner, no repeated digit). For
+  // each cage we generate every distinct-digit combination matching its size and
+  // sum, then remove any centre candidate that NO combination can place — where
+  // "can place" means there's a full distinct-cell assignment of one such
+  // combination to the cage's cells (respecting every cell's current candidates)
+  // with this candidate in this cell. Independent of the Kropki validator (own
+  // board read, own removal list) so the two can be toggled separately later.
+
+  // Read the puzzle's killer cages from the parsed model (synchronous, side-effect
+  // -free Framework.app getter — same access pattern as readModelExtraRegions).
+  // Returns [{ keys:[<col,row>…], sum:<num> }] for cages we can validate: a numeric
+  // total, distinct digits (unique !== false), at least two cells, all cells in
+  // grid. Cages without a sum (plain regions, sandwich clues) or that allow repeats
+  // are skipped. Cell strings "r1c3" are 1-indexed (row,col) → 0-indexed "col,row".
+  function getKillerCages() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return [];
+    var N = detectGridSize();
+    var out = [];
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.unique === false) return;
+      var sum = typeof cage.sum === 'number' ? cage.sum : Number(cage.value);
+      if (!isFinite(sum)) return;
+      var cellStr = cage.cells || '';
+      var keys = [], ok = true, m, re = /r(\d+)c(\d+)/gi;
+      while ((m = re.exec(cellStr)) !== null) {
+        var col = Number(m[2]) - 1, row = Number(m[1]) - 1;
+        if (col < 0 || row < 0 || col >= N || row >= N) { ok = false; break; }
+        keys.push(col + ',' + row);
+      }
+      if (ok && keys.length >= 2) out.push({ keys: keys, sum: sum });
+    });
+    return out;
+  }
+
+  // All distinct-digit combinations of `size` digits drawn from `digits` (sorted
+  // ascending) that sum to `target`. Each combination is returned as an array of
+  // numbers. Plain subset-sum recursion; digit counts are tiny (≤ grid size).
+  function cageCombinations(digits, size, target) {
+    var res = [];
+    (function rec(start, chosen, remaining, need) {
+      if (need === 0) { if (remaining === 0) res.push(chosen.slice()); return; }
+      for (var i = start; i < digits.length; i++) {
+        var d = digits[i];
+        if (d > remaining) break;                       // sorted → no larger digit fits
+        chosen.push(d);
+        rec(i + 1, chosen, remaining - d, need - 1);
+        chosen.pop();
+      }
+    })(0, [], target, size);
+    return res;
+  }
+
+  // Can the digits be placed one-per-cell (a perfect matching), where digit i may
+  // occupy cell j iff allowed(i, j)? Kuhn's augmenting-path bipartite matching;
+  // returns true only when every digit finds a distinct cell. With equal counts
+  // that means every cell is filled — i.e. a complete legal fill of the cage.
+  function hasPerfectMatching(numDigits, numCells, allowed) {
+    var matchCell = new Array(numCells).fill(-1);   // cell → digit index, or -1
+    function augment(di, visited) {
+      for (var cj = 0; cj < numCells; cj++) {
+        if (allowed(di, cj) && !visited[cj]) {
+          visited[cj] = true;
+          if (matchCell[cj] === -1 || augment(matchCell[cj], visited)) {
+            matchCell[cj] = di;
+            return true;
+          }
+        }
+      }
+      return false;
+    }
+    for (var di = 0; di < numDigits; di++) {
+      if (!augment(di, new Array(numCells).fill(false))) return false;
+    }
+    return true;
+  }
+
+  // Compute centre-candidate removals forced by the killer cages, iterated to a
+  // fixpoint (a removal in one cell can invalidate a neighbour's only supporting
+  // combination, so we re-sweep until a full pass changes nothing). Pure w.r.t. the
+  // board — works on copies of the candidate sets and returns the removal list.
+  function computeCageRemovals() {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cages = getKillerCages();
+    if (cages.length === 0) return { noCages: true };
+
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
+
+    // Per-cage combination list. A cage with ZERO valid combinations (an impossible
+    // total, or a digit set that doesn't match the puzzle's) is dropped rather than
+    // allowed to wipe out every candidate — the validator must never over-remove.
+    var active = [];
+    cages.forEach(function (cage) {
+      var combos = cageCombinations(digitList, cage.keys.length, cage.sum)
+        .map(function (c) { return { arr: c, set: new Set(c) }; });
+      if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
+    });
+    if (active.length === 0) return { noCages: true };
+
+    // Working copies of the player's centre marks (the only cells we may modify).
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                // empty cell → unconstrained, never modified
+    }
+
+    // Does some combination of `cage` admit a full fill with digit d in cell C?
+    // Fix d→C, then require a perfect matching of the combo's remaining digits onto
+    // the cage's remaining cells (each respecting that cell's current candidates).
+    function cageSupports(cage, cIdx, d) {
+      var keys = cage.keys;
+      for (var ci = 0; ci < cage.combos.length; ci++) {
+        var combo = cage.combos[ci];
+        if (!combo.set.has(d)) continue;
+        // remaining digits (the combo minus one occurrence of d) and cells (minus C)
+        var digits = [], used = false;
+        for (var i = 0; i < combo.arr.length; i++) {
+          if (!used && combo.arr[i] === d) { used = true; continue; }
+          digits.push(combo.arr[i]);
+        }
+        var cells = [];
+        for (var j = 0; j < keys.length; j++) if (j !== cIdx) cells.push(cellSet(keys[j]));
+        // each remaining cell must still be able to hold a combo digit; matching
+        // confirms a *distinct*-cell assignment exists.
+        if (hasPerfectMatching(digits.length, cells.length, function (a, b) {
+          return cells[b].has(digits[a]);
+        })) return true;
+      }
+      return false;
+    }
+
+    var removals = [], seen = {};
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      active.forEach(function (cage) {
+        cage.keys.forEach(function (C, cIdx) {
+          if (st.values[C] != null || !work[C]) return;   // only cells with player marks
+          Array.from(work[C]).forEach(function (d) {       // snapshot: set mutates in loop
+            if (!cageSupports(cage, cIdx, d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, cageCount: active.length, emptiedCells: emptied };
+  }
+
+  // ── Little-killer validator ───────────────────────────────────────────────
+  // A little killer constrains the SUM along a diagonal. Unlike a cage, digits
+  // may REPEAT along the diagonal — except where ordinary Sudoku rules forbid
+  // it: two diagonal cells in the same BOX, or the same uniqueness CAGE, must
+  // differ. (Two cells on a diagonal never share a row or column, so those never
+  // apply.) A candidate d in a diagonal cell is removed only when NO assignment
+  // of digits to the whole diagonal — each within its current candidates,
+  // summing to the target, with every box-/cage-sharing pair distinct — places d
+  // in that cell. Independent of the other validators (own board read + removal
+  // list), iterated to a fixpoint like the cage validator.
+
+  // Regular box dimensions for an N×N grid: { h: rows, w: cols }. h = the largest
+  // divisor of N that is ≤ √N (so 9→3×3, 6→2×3, 8→2×4, 12→3×4, 16→4×4). Used for
+  // the box-conflict test; jigsaw/irregular regions aren't derived here, so on
+  // such a (rare) puzzle the box constraint is simply under-applied, never wrong.
+  function regularBoxDims(N) {
+    var h = 1;
+    for (var k = 1; k * k <= N; k++) if (N % k === 0) h = k;
+    return { h: h, w: N / h };
+  }
+
+  // Cell-key sets for every cage that forbids repeats (unique !== false), incl.
+  // sum-less "region" cages — any such cage makes two diagonal cells in it differ.
+  // Separate from getKillerCages (which needs a numeric sum); here only uniqueness
+  // matters. Returns [Set<"col,row">]. Cells "r1c3" 1-indexed → "col,row" 0-indexed.
+  function getUniqueCageCellSets() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return [];
+    var N = detectGridSize();
+    var out = [];
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.unique === false) return;
+      var keys = [], m, re = /r(\d+)c(\d+)/gi, s = cage.cells || '';
+      while ((m = re.exec(s)) !== null) {
+        var col = Number(m[2]) - 1, row = Number(m[1]) - 1;
+        if (col >= 0 && row >= 0 && col < N && row < N) keys.push(col + ',' + row);
+      }
+      if (keys.length >= 2) out.push(new Set(keys));
+    });
+    return out;
+  }
+
+  // Read the puzzle's little killers as [{ keys:[<col,row>…], sum }]. Detection is
+  // DOM-based and era-independent: SudokuPad renders every little killer (native
+  // SCL or legacy-cosmetic, e.g. vurjqaca3k) the same way — a numeric label
+  // anchored just OUTSIDE the grid plus a short diagonal arrow in #arrows. We read
+  // the sum from the label and, from the arrow, its TIP (which points at a real
+  // grid corner) plus its direction signs; the first in-grid cell is the corner's
+  // neighbour in the pointing direction, then we walk the diagonal by (±1,±1).
+  // (Using the tip-corner + direction — rather than a c±r constant off the label
+  // centre — avoids the half-cell off-by-one that the anti-diagonal otherwise
+  // hits.) Guards keep it specific
+  // (only an outside-grid numeric label matched to an outside-grid ~45° arrow
+  // counts), so sandwich/X-sum frame numbers and in-grid arrow constraints are
+  // ignored; if a future puzzle renders LKs differently it simply isn't detected
+  // (under-removal, safe) rather than mis-detected. Extensible: add another source
+  // returning the same { keys, sum } shape and union it in.
+  function getLittleKillers() {
+    var cs = getGridCellSize();
+    var svg = document.getElementById('svgrenderer');
+    if (!cs || !svg) return [];
+    var N = detectGridSize();
+    var gridPx = N * cs;
+    function outside(px, py) {
+      return px < -cs * 0.1 || py < -cs * 0.1 || px > gridPx + cs * 0.1 || py > gridPx + cs * 0.1;
+    }
+
+    // 1) Diagonal arrow shafts (~45°) whose START is outside the grid. The first
+    //    "M x y L x y" coordinate pair is the shaft tail (out near the label); the
+    //    sign of dx·dy picks the diagonal family. The arrowhead marker paths in
+    //    each <g>'s <defs> start near the origin (inside) → filtered out here.
+    var shafts = [];
+    var arrowsLayer = document.getElementById('arrows');
+    if (arrowsLayer) {
+      arrowsLayer.querySelectorAll('path').forEach(function (p) {
+        var d = p.getAttribute('d') || '';
+        var nums = d.match(/-?\d+(?:\.\d+)?/g);
+        if (!nums || nums.length < 4) return;
+        var x1 = +nums[0], y1 = +nums[1], x2 = +nums[2], y2 = +nums[3];
+        var dx = x2 - x1, dy = y2 - y1;
+        if (Math.abs(dx) < cs * 0.05 || Math.abs(dy) < cs * 0.05) return;   // must be diagonal
+        if (Math.abs(Math.abs(dx) - Math.abs(dy)) > cs * 0.3) return;        // ~45° only
+        if (!outside(x1, y1)) return;                                        // tail outside grid
+        shafts.push({ x: x1, y: y1, tipx: x2, tipy: y2,
+          sgnx: Math.sign(dx), sgny: Math.sign(dy), used: false });
+      });
+    }
+    if (shafts.length === 0) return [];
+
+    // 2) Numeric labels positioned outside the grid, each matched to the nearest
+    //    unused shaft tail (within ~1 cell). Label x/y ≈ the anchor cell centre in
+    //    px, so ar = y/cs, ac = x/cs (continuous, half-integer-ish).
+    var out = [], seen = {};
+    svg.querySelectorAll('text').forEach(function (t) {
+      var txt = (t.textContent || '').trim();
+      if (!/^\d+$/.test(txt)) return;
+      var x = parseFloat(t.getAttribute('x')), y = parseFloat(t.getAttribute('y'));
+      if (!isFinite(x) || !isFinite(y) || !outside(x, y)) return;
+      var best = null, bestD = cs * 1.0;
+      shafts.forEach(function (s) {
+        if (s.used) return;
+        var dist = Math.hypot(s.x - x, s.y - y);
+        if (dist < bestD) { bestD = dist; best = s; }
+      });
+      if (!best) return;
+      best.used = true;
+      // Arrow tip → the grid corner it points at; first cell = the corner's
+      // neighbour in the pointing direction; then walk the diagonal by (sgn,sgn).
+      var R = Math.round(best.tipy / cs), C = Math.round(best.tipx / cs);
+      var keys = [];
+      for (var r = best.sgny > 0 ? R : R - 1, c = best.sgnx > 0 ? C : C - 1;
+           r >= 0 && r < N && c >= 0 && c < N; r += best.sgny, c += best.sgnx) {
+        keys.push(c + ',' + r);
+      }
+      if (keys.length < 1) return;
+      var sig = keys.join(' ') + '=' + txt;
+      if (seen[sig]) return;
+      seen[sig] = 1;
+      out.push({ keys: keys, sum: Number(txt) });
+    });
+    return out;
+  }
+
+  // Compute centre-candidate removals forced by the little killers, iterated to a
+  // fixpoint (a removal can invalidate another diagonal's support; diagonals may
+  // also cross-share cells). Pure w.r.t. the board — works on copies of the
+  // candidate sets and returns the removal list.
+  function computeLittleKillerRemovals() {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var lks = getLittleKillers();
+    if (lks.length === 0) return { noLittleKillers: true };
+
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var cageSets = getUniqueCageCellSets();
+    function boxId(key) { var p = key.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
+    function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
+    function conflict(a, b) { return boxId(a) === boxId(b) || shareCage(a, b); }
+
+    // Per-diagonal conflict matrix (which cell pairs must differ).
+    var diags = lks.map(function (lk) {
+      var keys = lk.keys;
+      var conf = keys.map(function (_, i) { return keys.map(function (__, j) { return i !== j && conflict(keys[i], keys[j]); }); });
+      return { keys: keys, sum: lk.sum, conf: conf };
+    });
+
+    // Working copies of the player's centre marks (the only cells we may modify).
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                // empty cell → unconstrained, never modified
+    }
+
+    // Which (cell-index, digit) pairs the diagonal can still place: enumerate every
+    // assignment hitting the target sum with all box/cage-sharing pairs distinct,
+    // each cell drawing from its CURRENT candidate set, and union the digits used
+    // per cell. Backtracking with exact-sum suffix-bound + conflict pruning. A node
+    // cap guards a pathological search; if hit we bail (no removals from this
+    // diagonal this pass — never over-remove).
+    function computeSupported(diag) {
+      var keys = diag.keys, n = keys.length, conf = diag.conf, target = diag.sum;
+      var sets = keys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
+      if (sets.some(function (s) { return s.length === 0; })) return { supported: null, bailed: false, empty: true };
+      var sufMin = new Array(n + 1).fill(0), sufMax = new Array(n + 1).fill(0);
+      for (var i = n - 1; i >= 0; i--) {
+        sufMin[i] = sufMin[i + 1] + sets[i][0];
+        sufMax[i] = sufMax[i + 1] + sets[i][sets[i].length - 1];
+      }
+      var supported = keys.map(function () { return new Set(); });
+      var assign = new Array(n), nodes = 0, CAP = 300000, bailed = false;
+      (function dfs(idx, sum) {
+        if (bailed) return;
+        if (nodes++ > CAP) { bailed = true; return; }
+        if (idx === n) { if (sum === target) for (var k = 0; k < n; k++) supported[k].add(assign[k]); return; }
+        if (sum + sufMin[idx] > target || sum + sufMax[idx] < target) return;
+        var opts = sets[idx];
+        for (var oi = 0; oi < opts.length; oi++) {
+          var d = opts[oi];
+          if (sum + d + sufMin[idx + 1] > target) break;          // sorted asc → larger d only worse
+          var ok = true;
+          for (var j = 0; j < idx; j++) if (conf[idx][j] && assign[j] === d) { ok = false; break; }
+          if (!ok) continue;
+          assign[idx] = d;
+          dfs(idx + 1, sum + d);
+          if (bailed) return;
+        }
+      })(0, 0);
+      return { supported: supported, bailed: bailed, empty: false };
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      diags.forEach(function (diag) {
+        var res = computeSupported(diag);
+        if (res.bailed || res.empty || !res.supported) return;    // give up safely on this diagonal
+        diag.keys.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C]) return;           // only cells with player marks
+          Array.from(work[C]).forEach(function (d) {              // snapshot: set mutates in loop
+            if (!res.supported[i].has(d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, lkCount: diags.length, emptiedCells: emptied };
+  }
+
+  // Worker: remove a specific list of centre candidates via SudokuPad's own
+  // candidates op (one undo group). Mirrors _removeInvalidPencilmarksInternal but
+  // takes an explicit [{cellKey,digit}] list instead of scanning .conflict marks.
+  // Groups by digit so each digit is one api-select + one toggle (every selected
+  // cell already HAS the digit, so the toggle only removes). Verifies the net diff
+  // and rolls its group back on any unexpected change. Returns
+  // { removed, aborted, rollbackOk, elapsedMs }.
+  async function _removeCandidatesInternal(removals) {
+    var start = performance.now();
+    var app = await Framework.getApp();
+    var cellByKey = {};
+    app.puzzle.cells.forEach(function (c) { cellByKey[c.col + ',' + c.row] = c; });
+    var originalSelection = Array.from(app.puzzle.selectedCells || []);
+    var preSnap = snapshotPencilmarks();
+
+    var byDigit = new Map();
+    removals.forEach(function (r) {
+      if (!byDigit.has(r.digit)) byDigit.set(r.digit, []);
+      byDigit.get(r.digit).push(r.cellKey);
+    });
+
+    try {
+      app.act({ type: 'groupstart' });
+      var iter = byDigit.entries(), step;
+      while (!(step = iter.next()).done) {
+        var digit = step.value[0];
+        var cells = step.value[1].map(function (k) { return cellByKey[k]; }).filter(Boolean);
+        if (cells.length === 0) continue;
+        app.deselect();
+        app.select(cells);
+        app.act({ type: 'candidates', arg: digit });
+        await sleep(20);
+      }
+      app.act({ type: 'groupend' });
+      await sleep(20);
+
+      // Verify: the only legitimate change is removing exactly the listed centre marks.
+      var diff = diffSnapshots(preSnap, snapshotPencilmarks());
+      var expected = new Set(removals.map(function (r) { return r.cellKey + ',' + r.digit; }));
+      var badRemoved = diff.removed.centre.filter(function (k) { return !expected.has(k); }).length;
+      var unexpected = diff.added.centre.length + diff.added.corner.length +
+                       diff.added.values.length + diff.added.colors.length +
+                       diff.removed.corner.length + diff.removed.values.length +
+                       diff.removed.colors.length + badRemoved;
+      if (unexpected > 0) {
+        console.error('[spDR-fix] VALIDATE unexpected diff', diff);
+        var undoBtn = getModeButton('undo');
+        var rollbackOk = false;
+        if (undoBtn) {
+          dispatchClickEl(undoBtn);
+          for (var att = 0; att < 8; att++) {
+            await sleep(25);
+            if (diffEmpty(diffSnapshots(preSnap, snapshotPencilmarks()))) { rollbackOk = true; break; }
+          }
+        }
+        return { removed: 0, aborted: true, rollbackOk: rollbackOk, elapsedMs: performance.now() - start };
+      }
+      return { removed: diff.removed.centre.length, aborted: false, elapsedMs: performance.now() - start };
+    } finally {
+      app.deselect();
+      if (originalSelection.length > 0) app.select(originalSelection);
+    }
+  }
+
+  // The validators wired into the button. Each is independent (own board read, own
+  // removal list) so a future Settings panel can toggle them individually — to add
+  // one, append an entry here. `enabled` reads its settings flag (default on);
+  // `compute` returns { removals, emptiedCells, <unitCount>, unsupported?, <none>? }.
+  function constraintValidators() {
+    return [
+      { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots', enabled: function () { return settings.validateKropkiEnabled !== false; },
+        compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
+      { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages', enabled: function () { return settings.validateCagesEnabled  !== false; },
+        compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
+      { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
+        compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
+    ];
+  }
+
+  // ── "Validate Constraints" button: menu + runners ─────────────────────────
+  // Clicking the button opens a dropdown (openValidateMenu). The user picks ONE
+  // validator to run alone, or "Run all" to run every enabled validator in
+  // sequence, repeating the whole cycle until a full pass removes nothing — a
+  // cross-constraint fixpoint (e.g. a cage removal that unlocks a further Kropki
+  // removal, which the old single combined pass would have missed, forcing the
+  // user to click again). Nothing runs concurrently any more: each validator is
+  // its own compute → apply (its own undo group).
+
+  function pluralUnit(unitNoun, n) { return unitNoun + (n === 1 ? '' : 's'); }
+
+  // Cell keys ("col,row") currently holding centre marks (value cells excluded).
+  // Diffed before/after a run to count how many marked cells were EMPTIED —
+  // accurate across a multi-pass run-all (summing per-pass counts double-counts).
+  function markedCellKeys() {
+    var st = readValidatorBoardState();
+    return st ? new Set(Object.keys(st.centre)) : new Set();
+  }
+  function countEmptiedSince(beforeSet) {
+    var st = readValidatorBoardState();
+    if (!st) return 0;
+    var n = 0;
+    beforeSet.forEach(function (k) { if (st.values[k] == null && !st.centre[k]) n++; });
+    return n;
+  }
+  function emptiedSuffix(emptied) {
+    if (emptied <= 0) return '';
+    return ' ⚠ ' + emptied + ' cell' + (emptied === 1 ? '' : 's') +
+           ' now ha' + (emptied === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
+  }
+  function validateAbortToast(reverted) {
+    if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+    else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+  }
+
+  // Apply ONE validator against the CURRENT board (compute → apply its removals
+  // via the shared paste-path worker). Reads the live DOM, so each call sees prior
+  // removals (this is what lets run-all cross-feed). No lock toggle, no toast —
+  // callers own those. Resolves to { unsupported } | { present:false } |
+  // { present:true, removed, count, aborted?, reverted? }.
+  async function applyOneValidator(def) {
+    var comp = def.compute();
+    if (comp.unsupported) return { unsupported: true };
+    if (comp[def.noneKey]) return { present: false, removed: 0 };
+    var count = comp[def.countKey] || 0;
+    var removals = comp.removals || [];
+    if (removals.length === 0) return { present: true, removed: 0, count: count };
+    var preSnap = snapshotPencilmarks();
+    var r = await _removeCandidatesInternal(removals);
+    if (r.aborted) {
+      var reverted = await revertToSnapshot(preSnap, 12);
+      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted };
+    }
+    return { present: true, removed: r.removed, count: count };
+  }
+
+  // Run a single validator (a menu pick): lock, compute+apply once, toast.
+  function runSingleValidator(def) {
+    if (actionInProgress) return;
+    actionInProgress = true;
+    var before = markedCellKeys();
+    var t0 = performance.now();
+    applyOneValidator(def).then(function (res) {
+      if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+      if (!res.present) { showRemoveInvalidToast('No ' + pluralUnit(def.unitNoun, 0) + ' found in this puzzle.', 'success'); return; }
+      if (res.aborted) { validateAbortToast(res.reverted); return; }
+      var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
+      if (res.removed === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
+      var emptied = countEmptiedSince(before);
+      var msg = 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
+                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.' + emptiedSuffix(emptied);
+      showRemoveInvalidToast(msg, emptied > 0 ? 'warning' : 'success');
+    }).finally(function () { actionInProgress = false; });
+  }
+
+  // Run every ENABLED validator in sequence, repeating the whole cycle until a
+  // full pass removes nothing (cross-constraint fixpoint). One combined toast.
+  function runAllValidators() {
+    if (actionInProgress) return;
+    var defs = constraintValidators().filter(function (v) { return v.enabled(); });
+    if (defs.length === 0) { showRemoveInvalidToast('No constraint validators are enabled. Turn one on in Settings.', 'warning'); return; }
+    actionInProgress = true;
+    var before = markedCellKeys();
+    var t0 = performance.now();
+    (async function () {
+      var totalRemoved = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
+      var changed = true, guard = 0;
+      while (changed && guard++ < 50) {
+        changed = false;
+        for (var i = 0; i < defs.length; i++) {
+          var res = await applyOneValidator(defs[i]);
+          if (res.unsupported) { unsupported = true; break; }
+          if (res.aborted) { aborted = true; reverted = res.reverted; break; }
+          if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
+          if (res.removed > 0) { totalRemoved += res.removed; changed = true; }
+        }
+        passes++;
+        if (unsupported || aborted) break;
+      }
+      return { totalRemoved: totalRemoved, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted };
+    })().then(function (s) {
+      if (s.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+      if (s.aborted) { validateAbortToast(s.reverted); return; }
+      var names = Object.keys(s.present);
+      if (names.length === 0) {
+        var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
+        showRemoveInvalidToast('No ' + nouns + ' found in this puzzle.', 'success');
+        return;
+      }
+      var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
+      if (s.totalRemoved === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
+      var emptied = countEmptiedSince(before);
+      var msg = 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
+                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
+                ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').' + emptiedSuffix(emptied);
+      showRemoveInvalidToast(msg, emptied > 0 ? 'warning' : 'success');
+    }).finally(function () { actionInProgress = false; });
+  }
+
+  // ── Validate dropdown menu ────────────────────────────────────────────────
+  function closeValidateMenu() {
+    var m = document.getElementById('sp-validate-menu');
+    if (m) m.remove();
+    document.removeEventListener('mousedown', onValidateMenuDocDown, true);
+    window.removeEventListener('resize', closeValidateMenu);
+  }
+  function onValidateMenuDocDown(e) {
+    var m = document.getElementById('sp-validate-menu');
+    var btn = document.getElementById('sp-validate-btn');
+    if (m && !m.contains(e.target) && e.target !== btn) closeValidateMenu();
+  }
+  function toggleValidateMenu() {
+    if (document.getElementById('sp-validate-menu')) closeValidateMenu();
+    else openValidateMenu();
+  }
+  function openValidateMenu() {
+    var btn = document.getElementById('sp-validate-btn');
+    if (!btn) return;
+    var bs = getComputedStyle(btn);
+    var bg = bs.backgroundColor || 'rgb(34, 36, 38)';
+    var border = bs.borderColor || 'rgb(62, 68, 70)';
+    var text = bs.color || 'rgb(181, 104, 228)';
+
+    var menu = document.createElement('div');
+    menu.id = 'sp-validate-menu';
+    Object.assign(menu.style, {
+      position: 'fixed', zIndex: '901',
+      minWidth: Math.max(btn.offsetWidth, 180) + 'px',
+      borderRadius: '8px', padding: '4px', boxSizing: 'border-box',
+      fontFamily: 'Roboto, Arial, sans-serif',
+      boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
+    });
+    menu.style.setProperty('background-color', bg, 'important');
+    menu.style.setProperty('border', '1px solid ' + border, 'important');
+
+    function addItem(label, onClick, primary) {
+      var it = document.createElement('div');
+      it.textContent = label;
+      Object.assign(it.style, {
+        padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '13px', fontWeight: primary ? '700' : '600',
+        whiteSpace: 'nowrap', userSelect: 'none',
+      });
+      it.style.setProperty('color', text, 'important');
+      it.addEventListener('mouseenter', function () { it.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+      it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', 'transparent', 'important'); });
+      it.addEventListener('click', function (e) { e.stopPropagation(); closeValidateMenu(); onClick(); });
+      menu.appendChild(it);
+    }
+
+    addItem('Run all (loop until stable)', runAllValidators, true);
+    var sep = document.createElement('div');
+    Object.assign(sep.style, { height: '1px', margin: '4px 6px' });
+    sep.style.setProperty('background-color', border, 'important');
+    menu.appendChild(sep);
+    constraintValidators().filter(function (v) { return v.enabled(); }).forEach(function (def) {
+      addItem(def.menuLabel || def.name, function () { runSingleValidator(def); }, false);
+    });
+
+    document.body.appendChild(menu);
+    positionValidateMenu(menu, btn);
+    // defer so the click that opened the menu doesn't immediately close it
+    setTimeout(function () {
+      document.addEventListener('mousedown', onValidateMenuDocDown, true);
+      window.addEventListener('resize', closeValidateMenu);
+    }, 0);
+  }
+  // Align the menu's right edge to the button; open UPWARD when a downward menu
+  // would run off the bottom (the button sits near the bottom), else downward.
+  // Clamp into view if neither direction fully fits.
+  function positionValidateMenu(menu, btn) {
+    var br = btn.getBoundingClientRect();
+    var mh = menu.offsetHeight, gap = 6, vh = window.innerHeight;
+    menu.style.right = (window.innerWidth - br.right) + 'px';
+    menu.style.left = 'auto';
+    var fitsDown = br.bottom + gap + mh <= vh;
+    var fitsUp = br.top - gap - mh >= 0;
+    if (!fitsDown && fitsUp) {
+      menu.style.bottom = (vh - br.top + gap) + 'px'; menu.style.top = 'auto';
+    } else if (fitsDown) {
+      menu.style.top = (br.bottom + gap) + 'px'; menu.style.bottom = 'auto';
+    } else {
+      menu.style.top = Math.max(8, vh - mh - 8) + 'px'; menu.style.bottom = 'auto';
+    }
+  }
+
   function buildActionButton(opts) {
     // opts: { id, wrapId, shortLabel, fullLabel, settingsKey, onClick }
     //
-    // Architecture:
-    //   wrap (div, fixed btnW×btnH in grid) — never resizes, so expanding never shifts page layout
-    //     clipper (div, position:absolute, overflow:hidden) — transitions width rightward on hover
-    //       label (div, EXPANDED_W wide) — single text element; textContent swaps at expand/collapse
+    // A static toolbar button matching the native controls-tool buttons. It shows
+    // the short label; the full description is the native hover tooltip (title attr).
     //
-    // Single element means both states share identical position — no sliding or alignment mismatch.
-    // Because clipper is position:absolute inside wrap, its growth is out-of-flow and
-    // cannot push the banner, puzzle, or any other page element.
+    //   wrap (div, 100%×100% grid cell) — in-flow grid item, sizes like its neighbours
+    //     btn (div, position:absolute, inset by the native margins, btnW×btnH)
+    //
+    // btn is absolutely positioned so it sits exactly where a native button would
+    // (margin inset) without depending on the grid cell's exact computed size.
     var refBtn    = document.querySelector('[data-control="normal"]');
     var refStyle  = refBtn ? getComputedStyle(refBtn) : null;
     var btnW      = (refBtn && refBtn.offsetWidth  > 0) ? refBtn.offsetWidth  : 56;
@@ -4548,151 +6350,64 @@
     var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
                       ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
     // Literal theme purple (not a snapshot of colorRefStyle.color): a captured
-    // computed colour races DR's build-time conversion and can load grey, and
-    // also lets DR ping-pong our label on hover. A literal + watchDR is stable.
+    // computed colour can load grey if read before the theme settles. A literal
+    // + !important is stable.
     var textColor = 'rgb(181, 104, 228)';
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
     var borderRad = refStyle ? refStyle.borderRadius : '8px';
-    var EXPANDED_W = 245;    // ← expanded button width in pixels — change to taste
-    var DELAY_MS   = 300;    // ← hover delay before expanding (ms)
-    var EXPAND_S   = '0.4s'; // ← expansion animation duration
-    var COLLAPSE_S = '0.15s'; // ← collapse animation duration
-
-    function applyColors(el, props) {
-      Object.keys(props).forEach(function (p) { el.style.setProperty(p, props[p], 'important'); });
-    }
-    function watchDR(el, props) {
-      new MutationObserver(function (mutations) {
-        var hit = false;
-        mutations.forEach(function (m) {
-          if (m.attributeName && m.attributeName.indexOf('darkreader') !== -1) {
-            el.removeAttribute(m.attributeName); hit = true;
-          }
-        });
-        if (hit) applyColors(el, props);
-      }).observe(el, { attributes: true });
-    }
 
     // Wrapper: fills the grid cell (100%×100%) so sizing matches neighboring buttons
     var wrap = document.createElement('div');
     wrap.id = opts.wrapId;
     Object.assign(wrap.style, {
       position:   'relative',
-      overflow:   'visible',
       width:      '100%',
       height:     '100%',
       visibility: settings[opts.settingsKey] === false ? 'hidden' : 'visible',
     });
 
-    // Clipper: absolutely-positioned within wrap; top:2px nudges it down to align with neighbors.
-    // overflow:hidden clips the label; width transitions reveal/hide the full label text.
-    var clipper = document.createElement('div');
-    Object.assign(clipper.style, {
-      position:     'absolute',
-      left:         btnMarginL + 'px',  // matches margin-left of neighboring toolbar buttons
-      top:          btnMarginT + 'px',  // matches margin-top of neighboring toolbar buttons
-      width:        btnW + 'px',
-      height:       btnH + 'px',
-      overflow:     'hidden',
-      borderRadius: borderRad,
-      boxSizing:    'border-box',
-      cursor:       'pointer',
-    });
-    // Record the collapsed width so mouseleave always collapses to the live
-    // value — syncClipperOffsets updates this after CSS settles, preventing
-    // the button from collapsing to a stale (pre-CSS-load) smaller size.
-    clipper.dataset.collapsedW = btnW;
-    applyColors(clipper, { 'background-color': bgColor, 'border': '1px solid ' + borderCol });
-    watchDR(clipper,     { 'background-color': bgColor, 'border': '1px solid ' + borderCol });
-
-    // Calculate padding-left so the short label appears centered in btnW.
-    // Both collapsed and expanded text use the same paddingLeft, so they share the same x position.
-    var _canvas = document.createElement('canvas');
-    var _ctx = _canvas.getContext('2d');
-    _ctx.font = '700 14px Roboto, Arial, sans-serif';  // ← keep in sync with the label fontSize/weight below
-    var _maxLineW = Math.max.apply(null, opts.shortLabel.split('\n').map(function(l) { return _ctx.measureText(l).width; }));
-    var labelPadLeft = Math.max(2, Math.round((btnW - _maxLineW) / 2));
-
-    // Single label element. Two rendering modes:
-    //   Collapsed: width=btnW, justifyContent+textAlign center → each short-label line centered
-    //              independently (works for "Clear\nAll" — both lines center individually)
-    //   Expanded:  width=EXPANDED_W, left-aligned at paddingLeft=labelPadLeft → same start x
-    //              as the centered short text, so the swap is seamless
-    var label = document.createElement('div');
-    label.id = opts.id;
-    Object.assign(label.style, {
+    // The button: absolutely positioned within wrap, inset by the native margins
+    // and sized to a native button. Short label centered (white-space:pre renders
+    // the "Clear\nAll" newline; flex+textAlign centers each line independently).
+    var btn = document.createElement('div');
+    btn.id = opts.id;
+    Object.assign(btn.style, {
       position:       'absolute',
-      left: '0', top: '0',
-      width:          btnW + 'px',     // starts at collapsed width
+      left:           btnMarginL + 'px',  // matches margin-left of neighboring toolbar buttons
+      top:            btnMarginT + 'px',  // matches margin-top of neighboring toolbar buttons
+      width:          btnW + 'px',
       height:         btnH + 'px',
       display:        'flex',
-      alignItems:     'center',        // vertical center
-      justifyContent: 'center',        // horizontal center of the text block within btnW
-      textAlign:      'center',        // centers each line within the text block
-      whiteSpace:     'pre',           // preserves \n in shortLabel
+      alignItems:     'center',           // vertical center
+      justifyContent: 'center',           // horizontal center
+      textAlign:      'center',           // centers each line within the text block
+      whiteSpace:     'pre',              // preserves \n in shortLabel
+      borderRadius:   borderRad,
       boxSizing:      'border-box',
-      fontSize:       '14px',          // ← font size — change to taste (keep canvas font above in sync)
+      fontSize:       '14px',             // ← font size — change to taste
       fontFamily:     'Roboto, Arial, sans-serif',
-      fontWeight:     '700',           // ← weight — 700=bold, 800/900=heavier
+      fontWeight:     '700',              // ← weight — 700=bold, 800/900=heavier
       lineHeight:     '1.2',
-      pointerEvents:  'none',
-      zIndex:         '2',
+      cursor:         'pointer',
     });
-    applyColors(label, { 'color': textColor });
-    watchDR(label,     { 'color': textColor });
-    label.textContent = opts.shortLabel;
+    btn.style.setProperty('background-color', bgColor, 'important');
+    btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    btn.style.setProperty('color', textColor, 'important');
+    btn.textContent = opts.shortLabel;
+    btn.title = opts.fullLabel;   // native hover tooltip (replaces the old expand-on-hover)
 
-    clipper.appendChild(label);
-    wrap.appendChild(clipper);
+    btn.addEventListener('click', function (e) { e.stopPropagation(); opts.onClick(); });
+    spdrFxButton(btn);   // hover-brighten + active-depress + click flash (matches the floating Fill-single button + native buttons)
 
-    // Interaction: clipper is the visible mouse target
-    clipper.addEventListener('click', function (e) { e.stopPropagation(); opts.onClick(); });
-
-    var expandTimer, collapseEndTimer;
-    clipper.addEventListener('mouseenter', function () {
-      clearTimeout(collapseEndTimer);
-      expandTimer = setTimeout(function () {
-        // Switch to expanded mode: left-aligned, starting at same x as the centered short text
-        label.style.width          = EXPANDED_W + 'px';
-        label.style.justifyContent = 'flex-start';
-        label.style.textAlign      = 'left';
-        label.style.paddingLeft    = labelPadLeft + 'px';
-        label.style.paddingRight   = '12px';
-        label.style.whiteSpace     = 'nowrap';
-        label.textContent          = opts.fullLabel;
-        clipper.style.transition   = 'width ' + EXPAND_S + ' ease';
-        clipper.style.width        = EXPANDED_W + 'px';
-      }, DELAY_MS);
-    });
-    clipper.addEventListener('mouseleave', function () {
-      clearTimeout(expandTimer);
-      clearTimeout(collapseEndTimer);
-      // Read the live collapsed width (syncClipperOffsets keeps this current
-      // after CSS settles); avoids collapsing to the stale build-time value.
-      var cw = parseInt(clipper.dataset.collapsedW, 10) || btnW;
-      clipper.style.transition = 'width ' + COLLAPSE_S + ' ease';
-      clipper.style.width      = cw + 'px';
-      var collapseMs = Math.round(parseFloat(COLLAPSE_S) * 1000);
-      collapseEndTimer = setTimeout(function () {
-        // Restore collapsed mode: centered short text
-        label.style.width          = cw + 'px';
-        label.style.justifyContent = 'center';
-        label.style.textAlign      = 'center';
-        label.style.paddingLeft    = '0';
-        label.style.paddingRight   = '0';
-        label.style.whiteSpace     = 'pre';
-        label.textContent          = opts.shortLabel;
-      }, collapseMs);
-    });
-
+    wrap.appendChild(btn);
     return wrap;
   }
 
   // Re-reads the reference button geometry and colour, then applies them to every
-  // action-button clipper. Called right after DOM insertion (handles the common case
-  // where SudokuPad CSS is already applied) and again at 100 ms / 500 ms to cover the
-  // race where the CSS loads late.
-  function syncClipperOffsets() {
+  // action button. Called right after DOM insertion (handles the common case where
+  // SudokuPad CSS is already applied) and again at 100 ms / 500 ms to cover the race
+  // where the CSS loads late.
+  function syncActionButtonGeometry() {
     var ref = document.querySelector('[data-control="normal"]');
     if (!ref) return;
     var cs = getComputedStyle(ref);
@@ -4706,22 +6421,18 @@
                    document.querySelector('[data-control="centre"]') || ref;
     var colorCs = getComputedStyle(colorRef);
     var bg = colorCs.backgroundColor !== 'rgba(0, 0, 0, 0)' ? colorCs.backgroundColor : null;
-    // Text colour is a fixed literal (set in buildActionButton) + held by watchDR —
-    // we deliberately do NOT re-read/re-apply a live colour here, which used to
-    // re-introduce the snapshot race.
+    // Text colour is a fixed literal (set in buildActionButton) — we deliberately
+    // do NOT re-read/re-apply a live colour here, which used to re-introduce the
+    // snapshot race.
     ['sp-fill-btn-wrap', 'sp-clear-btn-wrap', 'sp-clearall-btn-wrap'].forEach(function(id) {
       var wrap = document.getElementById(id);
       if (!wrap || !wrap.firstElementChild) return;
-      var clipper = wrap.firstElementChild;
-      if (ml) clipper.style.left = ml + 'px';
-      if (mt) clipper.style.top  = mt + 'px';
-      if (bw) { clipper.style.width = bw + 'px'; clipper.dataset.collapsedW = bw; }
-      if (bh) clipper.style.height = bh + 'px';
-      if (bg) clipper.style.setProperty('background-color', bg, 'important');
-      // Keep label dimensions in sync so collapsed-state centering stays correct.
-      var label = clipper.firstElementChild;
-      if (label && bw) label.style.width = bw + 'px';
-      if (label && bh) label.style.height = bh + 'px';
+      var btn = wrap.firstElementChild;
+      if (ml) btn.style.left = ml + 'px';
+      if (mt) btn.style.top  = mt + 'px';
+      if (bw) btn.style.width = bw + 'px';
+      if (bh) btn.style.height = bh + 'px';
+      if (bg) btn.style.setProperty('background-color', bg, 'important');
     });
   }
 
@@ -4765,9 +6476,9 @@
     toolContainer.appendChild(fillWrap);
     toolContainer.appendChild(clearWrap);
     toolContainer.appendChild(clearAllWrap);
-    syncClipperOffsets();                  // immediate: correct if CSS already applied
-    setTimeout(syncClipperOffsets, 100);   // early retry: covers most race conditions
-    setTimeout(syncClipperOffsets, 500);   // late safety net: always correct after 500 ms
+    syncActionButtonGeometry();                  // immediate: correct if CSS already applied
+    setTimeout(syncActionButtonGeometry, 100);   // early retry: covers most race conditions
+    setTimeout(syncActionButtonGeometry, 500);   // late safety net: always correct after 500 ms
     if (buttonsAnyEnabled() && needsDigitSetCheck()) runDigitSetCheck();
     return true;
   }
@@ -4988,7 +6699,7 @@
       hasColor: false,
       noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone
       enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
-      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary',
+      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary', 'regionHideAuthorBorders',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
                   'regionColorStripeWidth', 'regionColorOpacity',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
@@ -5021,14 +6732,18 @@
           return { row: r, ref: ref };
         }
 
+        // ── Top-level toggles (always visible, outside every collapsible subsection) ──
+        wrap.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries'));
+        wrap.appendChild(makeSubCheckbox('regionHideAuthorBorders', 'Hide author-drawn region borders'));
+
         // ── Subsection 1: Center borders ──────────────────────────────────
-        wrap.appendChild(makeSubsection('regionBorderCenterEnabled', 'Center borders', function (opt) {
+        wrap.appendChild(divider());
+        wrap.appendChild(makeSubsection('regionBorderCenterEnabled', 'Centre borders', function (opt) {
           var c = colorRow('Color:', 'regionBorderColor', 'regionBorderOpacity');
           opt.appendChild(c.row);
           opt.appendChild(makeOpacityRow('regionBorderOpacity', c.ref));
           opt.appendChild(makeWidthRow('regionBorderWidth'));
-          opt.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries'));
-        }, 'regCenter', 'Highlight the center region borders (or where they\'d be drawn)'));
+        }, 'regCenter', 'Highlight the centre region borders (or where they\'d be drawn)'));
 
         // ── Subsection 2: Multi-color borders ─────────────────────────────
         wrap.appendChild(divider());
@@ -5097,7 +6812,7 @@
 
     content.appendChild(buildSection({
       label: 'Pencilmarks',
-      desc: 'The small candidate digits you pencil into cells — center marks and corner marks.',
+      desc: 'The small candidate digits you pencil into cells — centre marks and corner marks.',
       hasColor: false,
       noMasterCheckbox: true,
       enableKeys: ['centerEnabled', 'cornerEnabled'],
@@ -5121,12 +6836,12 @@
         }
 
         // ── Center marks ──────────────────────────────────────────────────
-        wrap.appendChild(sub('centerEnabled', 'Center marks', function (opt) {
+        wrap.appendChild(sub('centerEnabled', 'Centre marks', function (opt) {
           opt.appendChild(makeColorRow('Valid digits',   'centerValidColor',   'centerValidOpacity'));
           opt.appendChild(makeColorRow('Invalid digits', 'centerInvalidColor', 'centerInvalidOpacity'));
           opt.appendChild(makeSubCheckbox('centerHideInvalid',      'Hide invalid digits'));
           opt.appendChild(makeSubCheckbox('centerMoveInvalidRight', 'Move invalid digits to the right'));
-        }, 'centerMarks', 'Highlight the center pencilmarks'));
+        }, 'centerMarks', 'Highlight the centre pencilmarks'));
 
         // ── Corner marks ──────────────────────────────────────────────────
         wrap.appendChild(divider());
@@ -5371,13 +7086,14 @@
     }));
 
     content.appendChild(buildSection({
-      enabledKey: 'selectionColorEnabled',
-      label: 'Cell selection border',
+      label: 'Cell selection',
       desc: 'The outline drawn around the cells you currently have selected.',
       hilite: 'selection', hiliteTitle: 'Highlight the selection border (select cells first)',
       hasColor: false,
-      resetKeys: ['selectionColorEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth',
-                  'selectionBorderMode', 'selectionBorderOffset'],
+      noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone (like Given / placed digits)
+      enableKeys: ['selectionBorderEnabled', 'selectionBgEnabled'],
+      resetKeys: ['selectionBorderEnabled', 'selectionColor', 'selectionOpacity', 'selectionWidth', 'selectionBorderMode', 'selectionBorderOffset',
+                  'selectionBgEnabled', 'selectionBgColor', 'selectionBgOpacity'],
       subBuilder: function (wrap) {
         // Migrate any leftover 'center' value from a previous version of this
         // script to 'inside' (the new default), so the radio row has a
@@ -5386,13 +7102,37 @@
           settings.selectionBorderMode = 'inside';
           saveSettings(settings);
         }
-        wrap.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
-        wrap.appendChild(makeWidthRow('selectionWidth'));
-        wrap.appendChild(makeRadioRow('Grow', 'selectionBorderMode', [
-          { value: 'inside',  label: 'Inside'  },
-          { value: 'outside', label: 'Outside' },
-        ]));
-        wrap.appendChild(makeOffsetRow('selectionBorderOffset'));
+        function divider() {
+          var d = document.createElement('div');
+          Object.assign(d.style, { borderTop: '1px solid #45475a', margin: '12px 12px 0 12px' });
+          return d;
+        }
+        // ── Subsection: Border (the selection outline) ────────────────────
+        wrap.appendChild(makeCollapsibleSubsection({
+          enabledKey: 'selectionBorderEnabled',
+          labelText: 'Border',
+          buildOptions: function (opt) {
+            opt.appendChild(makeColorRow('Color', 'selectionColor', 'selectionOpacity'));
+            opt.appendChild(makeWidthRow('selectionWidth'));
+            opt.appendChild(makeRadioRow('Grow', 'selectionBorderMode', [
+              { value: 'inside',  label: 'Inside'  },
+              { value: 'outside', label: 'Outside' },
+            ]));
+            opt.appendChild(makeOffsetRow('selectionBorderOffset'));
+          },
+        }));
+        // ── Subsection: Background (the fill behind the selection) ─────────
+        wrap.appendChild(divider());
+        wrap.appendChild(makeCollapsibleSubsection({
+          enabledKey: 'selectionBgEnabled',
+          labelText: 'Background',
+          buildOptions: function (opt) {
+            // Accent tick at 0.4 = where white@opacity reproduces SudokuPad's native
+            // grey selection fill (the look when this subsection is off).
+            opt.appendChild(makeColorRow('Color', 'selectionBgColor', 'selectionBgOpacity', null, null,
+              [{ value: 0.4, title: 'Matches the native gray fill (Background off)', accent: true }]));
+          },
+        }));
       },
     }));
 
@@ -5419,7 +7159,7 @@
       flexShrink: '0',
     });
     spdrFxButton(actionResetBtn);
-    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'suppressStartDialog', 'showToasts', 'toastPersist'];
+    var ACTION_RESET_KEYS = ['showActionButtons', 'showEasyShadeButton', 'showFillSingleButton', 'showValidateButton', 'fsSelectDelayMs', 'fsFillDelayMs', 'fsUndoDelayMs', 'suppressStartDialog', 'showToasts', 'toastPersist'];
     actionResetBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       ACTION_RESET_KEYS.forEach(function (k) { if (k in DEFAULTS) settings[k] = DEFAULTS[k]; });
@@ -5467,6 +7207,96 @@
     easyShadeVisCbRow.appendChild(document.createTextNode('Show Easy Shade button'));
     easyShadeVisCbRow.appendChild(makeHiliteIcon('easyShade', 'Highlight the Easy Shade button'));
     actionSection.appendChild(easyShadeVisCbRow);
+
+    // Auto-fill (single candidate) button visibility
+    var fsVisCbRow = document.createElement('label');
+    fsVisCbRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-size:12px;';
+    var fsVisCb = document.createElement('input');
+    fsVisCb.id = 'sp-fs-vis-cb';
+    fsVisCb.type = 'checkbox';
+    fsVisCb.checked = settings.showFillSingleButton !== false;
+    Object.assign(fsVisCb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+    fsVisCb.addEventListener('change', function () {
+      settings.showFillSingleButton = fsVisCb.checked;
+      saveSettings(settings);
+      if (controlSyncers['showFillSingleButton']) controlSyncers['showFillSingleButton']();
+    });
+    fsVisCbRow.appendChild(fsVisCb);
+    fsVisCbRow.appendChild(document.createTextNode('Show Auto-fill (single candidate) button'));
+    actionSection.appendChild(fsVisCbRow);
+    // Keep the checkbox in sync when the button's own controlSyncer is invoked
+    // (e.g. by the section reset). Chain onto the visibility syncer set in buildFillSingleButton.
+    (function () {
+      var btnSync = controlSyncers['showFillSingleButton'];
+      controlSyncers['showFillSingleButton'] = function () {
+        if (btnSync) btnSync();
+        fsVisCb.checked = settings.showFillSingleButton !== false;
+      };
+    })();
+
+    // "Validate Constraints" button visibility (Kropki validation; more constraints later)
+    var validateVisCbRow = document.createElement('label');
+    validateVisCbRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:4px;cursor:pointer;font-size:12px;';
+    var validateVisCb = document.createElement('input');
+    validateVisCb.id = 'sp-validate-vis-cb';
+    validateVisCb.type = 'checkbox';
+    validateVisCb.checked = settings.showValidateButton !== false;
+    Object.assign(validateVisCb.style, { cursor:'pointer', accentColor:'#89b4fa', width:'13px', height:'13px', flexShrink:'0', margin:'0' });
+    validateVisCb.addEventListener('change', function () {
+      settings.showValidateButton = validateVisCb.checked;
+      saveSettings(settings);
+      if (controlSyncers['showValidateButton']) controlSyncers['showValidateButton']();
+    });
+    validateVisCbRow.appendChild(validateVisCb);
+    validateVisCbRow.appendChild(document.createTextNode('Show Validate Constraints button'));
+    actionSection.appendChild(validateVisCbRow);
+    // Keep the checkbox in sync when the button's controlSyncer is invoked (e.g. section reset).
+    (function () {
+      var btnSync = controlSyncers['showValidateButton'];
+      controlSyncers['showValidateButton'] = function () {
+        if (btnSync) btnSync();
+        validateVisCb.checked = settings.showValidateButton !== false;
+      };
+    })();
+
+    // Auto-fill delays — live-editable (no reload), indented under the checkbox.
+    var fsDelayWrap = document.createElement('div');
+    Object.assign(fsDelayWrap.style, { paddingLeft: '20px', marginBottom: '4px' });
+    function makeFsDelayRow(labelText, key) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:3px;font-size:11px;color:#a6adc8;cursor:text;';
+      var inp = document.createElement('input');
+      inp.type = 'number'; inp.min = '0'; inp.step = '50';
+      inp.value = (settings[key] != null ? settings[key] : DEFAULTS[key]);
+      Object.assign(inp.style, { width:'62px', background:'#181825', color:'#cdd6f4', border:'1px solid #45475a', borderRadius:'4px', padding:'2px 6px', fontSize:'11px', flexShrink:'0' });
+      inp.addEventListener('input', function () {
+        var v = parseInt(inp.value, 10);
+        if (isNaN(v) || v < 0) v = 0;
+        settings[key] = v;
+        saveSettings(settings);
+      });
+      controlSyncers[key] = function () { inp.value = (settings[key] != null ? settings[key] : DEFAULTS[key]); };
+      row.appendChild(inp);
+      row.appendChild(document.createTextNode(labelText));
+      fsDelayWrap.appendChild(row);
+    }
+    makeFsDelayRow('Select delay (ms) — before filling the chosen cell', 'fsSelectDelayMs');
+    makeFsDelayRow('Fill delay (ms) — after filling, before the next cell', 'fsFillDelayMs');
+    makeFsDelayRow('Undo delay (ms) — between undo steps', 'fsUndoDelayMs');
+    actionSection.appendChild(fsDelayWrap);
+
+    // Debug: preview every Auto-fill popup without building a puzzle into each state.
+    var fsDebugBtn = document.createElement('button');
+    fsDebugBtn.type = 'button';
+    fsDebugBtn.textContent = 'Debug: show popup 1/' + fsDebugList.length;
+    Object.assign(fsDebugBtn.style, { marginLeft:'20px', marginBottom:'6px', background:'#313244', color:'#a6adc8', border:'1px solid #45475a', borderRadius:'4px', padding:'3px 11px', cursor:'pointer', fontSize:'11px', fontFamily:'system-ui, -apple-system, sans-serif' });
+    spdrFxButton(fsDebugBtn);
+    fsDebugBtn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var nextN = fsDebugShowNext();
+      fsDebugBtn.textContent = 'Debug: show popup ' + nextN + '/' + fsDebugList.length;
+    });
+    actionSection.appendChild(fsDebugBtn);
 
     // Suppress the "Start/Resume Puzzle" rules popup on load (applies next load).
     var suppressDlgCbRow = document.createElement('label');
@@ -5621,9 +7451,10 @@
       border: '1px solid #45475a', borderRadius: '8px',
       cursor: 'pointer', fontSize: '18px',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      zIndex: '999999', boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
+      zIndex: '900', boxShadow: '0 2px 8px rgba(0,0,0,0.4)',   // below the native dialog scrim (z 1000) so it dims with the page
       padding: '0', lineHeight: '1',
     });
+    spdrFxButton(triggerBtn);   // hover-brighten + active-depress + click flash
     // Save the digit set field and hide the panel.
     function closePanel() {
       if (panel.style.display === 'none') return;
@@ -5730,9 +7561,8 @@
 
     // Four swatches mirroring the current Multi-color border palette
     // (regionColorPalette0-3). They are plain coloured <div>s, not icons, so they
-    // always reflect the chosen colours. setProperty !important + stripping DR's
-    // markers keeps DarkReader from darkening them; refreshSwatches re-asserts on
-    // palette change (via applySettings) and on DR rewrites (via the observer).
+    // always reflect the chosen colours. setProperty !important keeps them at the
+    // chosen colour; refreshSwatches re-asserts on palette change (via applySettings).
     var swatches = document.createElement('div');
     Object.assign(swatches.style, { display: 'flex', gap: '2px', pointerEvents: 'none' });
     var swatchEls = [];
@@ -5747,13 +7577,10 @@
                  settings.regionColorPalette2, settings.regionColorPalette3];
       swatchEls.forEach(function (sq, i) {
         sq.style.setProperty('background-color', pal[i] || '#888', 'important');
-        sq.removeAttribute('data-darkreader-inline-bgcolor');
-        sq.style.removeProperty('--darkreader-inline-bgcolor');
       });
     }
     refreshSwatches();
     easyShadeSwatchRefresh = refreshSwatches; // let applySettings keep them current
-    // (DR re-assertion for swatches is handled by the subtree observer on btn below.)
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
@@ -5786,7 +7613,7 @@
       fontFamily:  'system-ui, -apple-system, sans-serif',
     });
 
-    var cardTextEls = [];  // text nodes whose colour we hold against DR (see refreshCardText)
+    var cardTextEls = [];  // text nodes we hold at the accent purple (see refreshCardText)
 
     var noteDiv = document.createElement('div');
     noteDiv.textContent = 'Colors can be changed in Settings under "Multi-color borders"';
@@ -5837,14 +7664,11 @@
     card.appendChild(shadedOp.row);
     document.body.appendChild(card);
 
-    // Hold the card text at the accent purple against DarkReader. A literal
-    // colour + !important + stripping DR's marker is stable (DR doesn't come back
-    // — unlike the var/observer approaches that flickered). Re-asserted on show.
+    // Hold the card text at the accent purple. A literal colour + !important keeps
+    // it stable. Re-asserted on show.
     function refreshCardText() {
       cardTextEls.forEach(function (el) {
         el.style.setProperty('color', accentCol, 'important');
-        el.removeAttribute('data-darkreader-inline-color');
-        el.style.removeProperty('--darkreader-inline-color');
       });
     }
     refreshCardText();
@@ -5897,30 +7721,14 @@
       } else {
         modeLbl.style.display = 'none';
       }
-      // Force the text colour on the button AND its child text divs — DarkReader
-      // converts child text nodes independently, so the label would otherwise go
-      // grey while btn's own colour stays purple. Literal + !important + strip = stable.
+      // Force the text colour on the button AND its child text divs (each is a
+      // separate element, so set them all).
       [btn, lbl, modeLbl].forEach(function (el) {
         el.style.setProperty('color', accentCol, 'important');
-        el.removeAttribute('data-darkreader-inline-color');
-        el.style.removeProperty('--darkreader-inline-color');
       });
       // Keep sliders in sync with settings (e.g. after a reset).
       regionOp.sync(); shadedOp.sync();
     }
-
-    // DarkReader may rewrite inline styles on the button OR its children (text
-    // divs, swatches) — restore ours when it does. Subtree so child mutations fire.
-    new MutationObserver(function (mutations) {
-      var hit = false;
-      mutations.forEach(function (m) {
-        if (m.attributeName && m.attributeName.indexOf('darkreader') !== -1) {
-          if (m.target.removeAttribute) m.target.removeAttribute(m.attributeName);
-          hit = true;
-        }
-      });
-      if (hit) { applyToggleStyle(); refreshSwatches(); }
-    }).observe(btn, { attributes: true, subtree: true, attributeFilter: ['data-darkreader-inline-color', 'data-darkreader-inline-bgcolor'] });
 
     btn.addEventListener('click', function () {
       var reg = !!settings.regionColorFillEnabled;
@@ -5951,6 +7759,7 @@
     controlSyncers['shadedRegionColorOpacity']  = shadedOp.sync;
 
     auxRow.appendChild(btn);
+    spdrFxButton(btn);   // hover-brighten + active-depress + click flash
 
     // Visibility — controlled independently by the settings checkbox.
     function applyButtonVisibility() {
@@ -5984,11 +7793,56 @@
       lineHeight:    '1.2',
       textAlign:     'right',
       pointerEvents: 'none',
-      zIndex:        '999999',
+      zIndex:        '900',   // below the native dialog scrim (z 1000) so it dims with the page
       whiteSpace:    'nowrap',
     });
     label.textContent = 'v' + SCRIPT_VERSION;
     document.body.appendChild(label);
+  }
+
+  // ── TEMP dev tool (native-mode migration): auto gap-scan badge ──────────────
+  // Runs spdrGapScan() automatically once the board settles and, if it finds
+  // invisible-object gaps, shows a small ⚠ badge beside the version label; click
+  // it to LIST the suspect cells inline (no console needed). DEBUGGING aid for
+  // the migration only — to retire it, flip GAPSCAN_AUTO to false (or delete this
+  // whole block + the buildAllUI call + optionally window.spdrGapScan). Tracked
+  // in the cleanup checklist in docs/NATIVE_MODE_MIGRATION.md.
+  var GAPSCAN_AUTO = true;
+  function startGapAutoScan() {
+    if (!GAPSCAN_AUTO) return;
+    var t0 = Date.now(), done = false;
+    (function poll() {
+      var svg = document.getElementById('svgrenderer');
+      if (svg && svg.querySelectorAll('#underlay rect,#overlay rect,#arrows path,#cages path').length) {
+        setTimeout(function () {            // let our fixes (object shading, label-bg) apply first
+          if (done) return; done = true;
+          var res; try { res = spdrGapScan({ quiet: true }); } catch (e) { return; }
+          renderGapBadge(res);
+        }, 2500);
+      } else if (Date.now() - t0 < 15000) {
+        setTimeout(poll, 300);
+      }
+    })();
+  }
+  function renderGapBadge(res) {
+    var old = document.getElementById('spdr-gap-badge'); if (old) old.remove();
+    if (!res || !res.gaps) return;
+    var badge = document.createElement('div');
+    badge.id = 'spdr-gap-badge';
+    badge.style.cssText = 'position:fixed;bottom:46px;right:56px;z-index:999999;background:#7a2b2b;color:#ffd7d7;font:600 11px system-ui,sans-serif;padding:3px 7px;border-radius:10px;cursor:pointer;pointer-events:auto;box-shadow:0 1px 4px rgba(0,0,0,.5);user-select:none';
+    badge.textContent = '⚠ ' + res.gaps + ' gap' + (res.gaps > 1 ? 's' : '');
+    badge.title = 'spdrGapScan: possible invisible render gap(s) on this puzzle — click to list cells';
+    var panel = null;
+    badge.addEventListener('click', function () {
+      if (panel) { panel.remove(); panel = null; return; }
+      panel = document.createElement('div');
+      panel.style.cssText = 'position:fixed;bottom:74px;right:56px;z-index:999999;background:#23232b;color:#e8e6e3;font:11px ui-monospace,monospace;padding:8px 10px;border-radius:6px;max-width:340px;max-height:42vh;overflow:auto;box-shadow:0 2px 10px rgba(0,0,0,.6);pointer-events:auto;white-space:pre';
+      panel.textContent = 'Possible invisible gap(s) — eyeball these cells:\n' +
+        res.flags.map(function (f) { return '  ' + (f.rc || '?') + '  ' + (f.layer || '') + '  ' + (f.fill || f.stroke || '') + ' → ' + f.eff + '  (contrast ' + f.contrast + ')'; }).join('\n') +
+        '\n\nLow-contrast & unfixed only. Full data: spdrGapScan() in console.';
+      document.body.appendChild(panel);
+    });
+    document.body.appendChild(badge);
   }
 
   // Auto-dismiss SudokuPad's start gate — the "Start Puzzle" / "Resume Puzzle"
@@ -6038,9 +7892,544 @@
     }, 50);
   }
 
+  // ── Fill single candidate (endgame autocomplete) ───────────────────────────
+  // Premise: SudokuPad tags a centre candidate that clashes with a placed peer
+  // value with class="conflict" (verified: the re-tag is synchronous with
+  // app.act value placement). So a "valid candidate" is just a non-.conflict
+  // tspan in #cell-candidates — we never validate, never eliminate, and ignore
+  // corner marks entirely. Placing a value naturally re-tags peers, dropping
+  // cells to one valid candidate and propagating the chain.
+  //
+  // Cadence: select the single-candidate cell → (select delay) → place its digit
+  // → (fill delay) → rescan → repeat. The undo delay paces the message's Undo
+  // (re-clicks the native undo button N times). All three live in settings and are
+  // live-editable in Settings → Action buttons (no reload); read at runtime.
+  function fsSelectDelay() { return settings.fsSelectDelayMs != null ? settings.fsSelectDelayMs : DEFAULTS.fsSelectDelayMs; }
+  function fsFillDelay()   { return settings.fsFillDelayMs   != null ? settings.fsFillDelayMs   : DEFAULTS.fsFillDelayMs; }
+  function fsUndoDelay()   { return settings.fsUndoDelayMs   != null ? settings.fsUndoDelayMs   : DEFAULTS.fsUndoDelayMs; }
+
+  // "col,row" key → human "(R<row+1>,C<col+1>)" — 1-indexed, row-first (R1C1 =
+  // top-left). The only place we surface a specific cell to the player.
+  function fsCellLabel(key) {
+    var p = String(key).split(',');
+    var col = parseInt(p[0], 10), row = parseInt(p[1], 10);
+    return '(R' + (row + 1) + ',C' + (col + 1) + ')';
+  }
+
+  // Single source of run/message state.
+  var fsState = {
+    running: false,        // the loop is executing
+    aborted: false,        // a 2nd button press requested a stop
+    result: null,          // sticky post-run message: { kind, message }
+    resultPinned: false,   // result toast stays until the user clicks elsewhere
+    firstFill: null,       // {col,row} of the first cell we filled — anchors the Undo
+    filledCount: 0,
+    undoing: false,        // suppress the cell observer while WE drive undos
+    postFillSnapshot: null, // snapshotPencilmarks() captured right after a run (≥1 fill);
+                            // the floating button shows "Undo" only while the live puzzle
+                            // still matches it (see fsUndoAvailable / fsRefreshUndoButton)
+    buttonMode: 'idle',    // current floating-button mode: 'idle' | 'stop' | 'undo'
+  };
+  var fsObserver = null;   // watches the cell layers: revokes a pending result on edit AND
+                           // shows/hides the post-run Undo button as the player leaves/returns
+
+  function fsScanValid() {
+    var map = {};
+    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (t) {
+      var ck = cellKeyFromMarkXY(t.getAttribute('x'), t.getAttribute('y'));
+      var digits = [];
+      t.querySelectorAll('tspan').forEach(function (sp) {
+        if (!sp.classList.contains('conflict')) { var d = sp.getAttribute('data-val'); if (d) digits.push(d); }
+      });
+      map[ck] = digits;
+    });
+    return map;
+  }
+  // Classify every empty cell by its valid-candidate count (no marks at all → zero).
+  function fsAnalyse(app) {
+    var map = fsScanValid();
+    var empties = [], zero = [], singles = [];
+    app.puzzle.cells.forEach(function (c) {
+      if (cellHasValueOrGiven(c.col, c.row)) return;
+      var ck = c.col + ',' + c.row;
+      var digits = map[ck] || [];
+      empties.push(ck);
+      if (digits.length === 0) zero.push(ck);
+      else if (digits.length === 1) singles.push({ cell: c, ck: ck, digit: digits[0] });
+    });
+    return { empties: empties, zero: zero, singles: singles };
+  }
+
+  // Low-level toast for this feature (distinct id from the action-button toast).
+  // Purely informational — the Undo affordance now lives on the floating button
+  // (see fsArmUndo). NEVER auto-fades; visibility is driven by hover + pin state.
+  function fsHideToast() { var t = document.getElementById('sp-fs-toast'); if (t) t.remove(); }
+  function fsRenderToast(colorKind, message) {
+    fsHideToast();
+    var colours = {
+      success: { bg: '#2d4a36', border: '#3d8b54', text: '#cdebd1' },
+      warning: { bg: '#4a3f2d', border: '#a3853d', text: '#ebe1cd' },
+      error:   { bg: '#4a2d2d', border: '#a33d3d', text: '#ebcdcd' },
+    };
+    var c = colours[colorKind] || colours.success;
+    var toast = document.createElement('div');
+    toast.id = 'sp-fs-toast';
+    Object.assign(toast.style, {
+      position: 'fixed', bottom: getToastBottom(), right: '12px', width: '320px',
+      padding: '10px 12px', background: c.bg, color: c.text, border: '1px solid ' + c.border,
+      borderRadius: '6px', fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: '12px',
+      lineHeight: '1.4', zIndex: '900', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+      whiteSpace: 'pre-line', boxSizing: 'border-box',
+    });
+    var msg = document.createElement('div');
+    msg.textContent = message;
+    toast.appendChild(msg);
+    document.body.appendChild(toast);
+  }
+
+  // Hover explainer (shown when idle, no pending result). Green when the function
+  // would run, yellow with the blocking reason when it would not.
+  function fsRenderExplainer(a) {
+    var base = 'Auto-fills every empty cell that has exactly one valid (non-conflict) centre candidate, one at a time.';
+    if (a.empties.length === 0) { fsRenderToast('success', base + '\n\nThe puzzle is already complete.'); return; }
+    if (a.zero.length > 0) { fsRenderToast('warning', base + '\n\nNot ready: every cell in the grid needs at least one valid centre candidate before it can be used.'); return; }
+    if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one valid candidate yet.'); return; }
+    fsRenderToast('success', base + '\n\nReady — click to run.');
+  }
+  // Persistent "running" popup — shown for the WHOLE auto-fill run, independent of
+  // the mouse (the runner renders it at start; the mouseleave handler + fsShowOnHover
+  // both leave it alone while fsState.running). Replaced by the result toast at the end.
+  function fsRenderRunning() {
+    fsRenderToast('success', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.');
+    var t = document.getElementById('sp-fs-toast');
+    if (t) {
+      t.style.cursor = 'pointer';
+      t.title = 'Click to stop the auto-fill';
+      // Clicking anywhere on the toast aborts, same as pressing Stop. Guarded by
+      // fsState.running so a debug-preview of this popup (no live run) is inert.
+      t.addEventListener('click', function () { if (fsState.running) fsState.aborted = true; });
+    }
+  }
+  // Post-run message text per terminal kind — shared by the runner and the debug
+  // cycler so they never drift. The broken case names the offending cell.
+  function fsResultMessage(kind, n, cellKey) {
+    var pl = n === 1 ? '' : 's';
+    if (kind === 'complete') return 'Done — auto-filled ' + n + ' cell' + pl + '. Puzzle complete.';
+    if (kind === 'stuck')    return 'Stopped — no cell has a single valid candidate. Filled ' + n + ' cell' + pl + '; more information needed.';
+    if (kind === 'broken')   return 'Stopped — cell ' + fsCellLabel(cellKey) + ' has no valid candidates left, likely a mistake or incomplete pencilmarks. Filled ' + n + ' cell' + pl + ' before stopping.';
+    return 'You stopped the auto-fill after ' + n + ' cell' + pl + '.';   // stopped
+  }
+
+  // Debug preview: cycle through EVERY popup the script can show — both the
+  // Auto-fill (Fill-single) explainer/result states AND the action-button toasts
+  // (Fill / Clear / Clear All / Remove invalid) — without engineering a puzzle
+  // into each condition. Each entry renders one popup exactly as it appears in
+  // real use. The worker-result toasts are produced by calling the real
+  // showWorkerResult() with a synthetic result object, so their text never drifts
+  // from production. (Undo in a previewed result is inert — there is no real run
+  // to rewind. fsPreviewActive forces every toast to show + persist above the panel.)
+  //
+  // A representative aborted action-toast target (centre 4 from cell (R4,C3)):
+  // cellKeyFromMarkXY('160','224') → col 2, row 3 → fsCellLabel "(R4,C3)".
+  var fsDebugList = [
+    // ── Auto-fill (Fill-single) popups ───────────────────────────────────────
+    function () { fsRenderExplainer({ empties: ['x'], zero: [], singles: ['x'] }); },        // explainer: ready (green)
+    function () { fsRenderExplainer({ empties: [], zero: [], singles: [] }); },              // explainer: already complete (green)
+    function () { fsRenderExplainer({ empties: ['x'], zero: ['x'], singles: [] }); },        // explainer: not ready — a zero-candidate cell (yellow)
+    function () { fsRenderExplainer({ empties: ['x', 'y'], zero: [], singles: [] }); },      // explainer: not ready — no single (yellow)
+    function () { fsRenderRunning(); },                                                      // running: persistent "click Stop" popup (yellow)
+    function () { fsRenderToast('success', fsResultMessage('complete', 12)); },          // result: complete (green)
+    function () { fsRenderToast('warning', fsResultMessage('stuck', 5)); },              // result: stuck (yellow)
+    function () { fsRenderToast('error',   fsResultMessage('broken', 7, '5,3')); },      // result: broken (red)
+    function () { fsRenderToast('warning', fsResultMessage('stopped', 3)); },            // result: user-stopped (yellow)
+
+    // ── Action-button popups: direct toasts ──────────────────────────────────
+    // (No "busy" popup: the 3 fill/clear buttons finish in a fraction of a second
+    //  and are simply locked out on a rapid double-click — silently, no toast.)
+    function () { showRemoveInvalidToast('No cells selected.', 'success'); },                         // Fill with nothing selected (green)
+    function () { showRemoveInvalidToast('No marks cleared (no cells selected).', 'success'); },      // Clear marks with nothing selected (green)
+
+    // ── Action-button popups: worker results (real showWorkerResult text) ─────
+    function () { showWorkerResult({ totalTargets: 0, skippedExcluded: 0, elapsedMs: 0, failures: [] }, 'invalid pencilmarks'); },                                  // nothing to remove (green)
+    function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 0, aborted: false, elapsedMs: 1230, failures: [] }, 'invalid pencilmarks'); },   // removed N (green)
+    function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 2, aborted: false, elapsedMs: 1230, failures: [] }, 'invalid pencilmarks'); },   // removed N + skipped-not-in-set (green)
+    function () { showWorkerResult({ totalTargets: 8, removed: 8, skippedExcluded: 0, aborted: false, elapsedMs: 1230, failures: [{}, {}] }, 'invalid pencilmarks'); }, // removed N + non-fatal issues (yellow)
+    function () { showWorkerResult({ totalTargets: 10, aborted: true, fullyReverted: true,  abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },   // aborted, fully reverted (yellow)
+    function () { showWorkerResult({ totalTargets: 10, aborted: true, fullyReverted: false, abortTarget: { type: 'centre', digit: '4', cellX: '160', cellY: '224' }, elapsedMs: 1230 }, 'invalid pencilmarks'); },   // aborted, revert FAILED (red)
+
+    // ── Action-button popups: Fill button ─────────────────────────────────────
+    function () { showRemoveInvalidToast('Filled 12 candidates in 4 cells, removed 3 invalid marks (1.45s).', 'success'); },                                                                                                                              // fill complete (green)
+    function () { showRemoveInvalidToast('Stopped while filling candidates — an unexpected change occurred. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning'); },                            // fill aborted, reverted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL — an unexpected change occurred while filling candidates and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error'); },                                                  // fill aborted, revert FAILED (red)
+    function () { showRemoveInvalidToast('Filled the candidates, then hit an unexpected change during the cleanup sweep at centre 4 in cell (R4,C3). All changes were reverted, including the fill: the puzzle is back to exactly how it was before you pressed the button.', 'warning'); },  // fill ok, sweep aborted, reverted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL — an unexpected change occurred during the cleanup sweep at centre 4 in cell (R4,C3) and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error'); },                      // fill ok, sweep aborted, revert FAILED (red)
+  ];
+  var fsDebugIdx = 0;
+  function fsDebugShowNext() {
+    fsClearResult();                       // clear any real sticky state + the fs-toast so the preview shows cleanly
+    var prevAction = document.getElementById('sp-remove-invalid-toast');
+    if (prevAction) prevAction.remove();   // clear a prior action-toast preview (so fs↔action cycling doesn't stack)
+    fsPreviewActive = true;
+    try { fsDebugList[fsDebugIdx](); }     // action toasts self-bump z-index + skip auto-fade while fsPreviewActive
+    finally { fsPreviewActive = false; }
+    var t = document.getElementById('sp-fs-toast');
+    if (t) t.style.zIndex = '1000000';     // above our own settings panel (the debug button lives in it)
+    fsDebugIdx = (fsDebugIdx + 1) % fsDebugList.length;
+    return fsDebugIdx + 1;                 // 1-based index of the NEXT popup (for the button label)
+  }
+
+  // Render the current sticky result toast (no running-guard — used both for the
+  // auto-popup the moment a stop condition fires AND for re-show on hover).
+  function fsRenderResult() {
+    var r = fsState.result;
+    if (!r) return;
+    var col = r.kind === 'complete' ? 'success' : (r.kind === 'broken' ? 'error' : 'warning');
+    fsRenderToast(col, r.message);
+  }
+  async function fsShowOnHover() {
+    if (fsState.running) return;                              // button reads "Stop"; no popup mid-run
+    if (fsState.buttonMode === 'undo') { fsRenderUndoExplainer(); return; }  // button reads "Undo"; explain the undo, not a run
+    if (fsState.result) { fsState.resultPinned = true; fsRenderResult(); return; } // re-show a sticky result AND re-pin it (stays until the next click-elsewhere)
+    var app = await Framework.getApp();
+    fsRenderExplainer(fsAnalyse(app));
+  }
+  // Hover popup while the button is the post-run "Undo": prefer the outcome message
+  // (it has the count + context); otherwise (the button RETURNED via native-undo, so
+  // the one-shot message is long gone) a short generic explanation.
+  function fsRenderUndoExplainer() {
+    if (fsState.result) { fsState.resultPinned = true; fsRenderResult(); return; }
+    var n = fsState.filledCount;
+    fsRenderToast('success', 'Click to undo the auto-fill — it removes the ' + n + ' digit' + (n === 1 ? '' : 's') +
+      ' it placed.\n\nStays available while the puzzle still matches the auto-filled state.');
+  }
+
+  // ── Cell observer + post-run lifecycle ─────────────────────────────────────
+  // One MutationObserver on the cell layers does double duty: (1) revoke a pending
+  // one-shot result toast the moment the player edits, and (2) drive the persistent
+  // "Undo" button — shown only while the live puzzle still matches the snapshot we
+  // took right after the run, so it disappears on any edit and RETURNS if the player
+  // native-undoes back to that state. Active whenever a result OR an armed undo exists.
+  function fsStartCellObserver() {
+    if (fsObserver) return;
+    var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
+      .map(function (s) { return document.querySelector(s); }).filter(Boolean);
+    if (!targets.length) return;
+    fsObserver = new MutationObserver(function () {
+      if (fsState.undoing) return;          // ignore our own undo-driven mutations
+      if (fsState.result) fsClearResult();  // one-shot outcome toast: gone on first edit
+      fsRefreshUndoButton();                // button: "Undo" iff state still matches the snapshot
+    });
+    targets.forEach(function (t) { fsObserver.observe(t, { childList: true, subtree: true, characterData: true }); });
+  }
+  function fsStopCellObserver() { if (fsObserver) { fsObserver.disconnect(); fsObserver = null; } }
+  function fsSyncObserver() {
+    if (fsState.result || fsState.postFillSnapshot) fsStartCellObserver();
+    else fsStopCellObserver();
+  }
+  function fsSetResult(kind, message) {
+    fsState.result = { kind: kind, message: message };
+    fsState.resultPinned = true;
+    fsSyncObserver();
+    // Respect the "Show action result notifications" setting (settings.showToasts) for
+    // the auto-pop. Exception: a 'broken' result (a cell has NO valid candidates left)
+    // is an error the player must see, so it always pops — same policy as the
+    // action-button toasts. When suppressed, the result is still stored (and re-appears
+    // on hover); we just drop the lingering "running" popup so it doesn't stay up.
+    if (settings.showToasts !== false || kind === 'broken') {
+      fsRenderResult();   // auto-show now (running may still be true here, so don't route via fsShowOnHover)
+    } else {
+      fsHideToast();      // toasts off: remove the "Auto-fill is running…" popup
+    }
+  }
+  function fsClearResult() {
+    fsState.result = null;
+    fsState.resultPinned = false;
+    fsSyncObserver();     // keep observing if an Undo is still armed
+    fsHideToast();
+  }
+
+  // The post-run Undo lives on the floating button. It is offered exactly while the
+  // live puzzle still equals fsState.postFillSnapshot — captured right after the run.
+  function fsUndoAvailable() {
+    if (!fsState.postFillSnapshot || !fsState.firstFill || !fsState.filledCount) return false;
+    return diffEmpty(diffSnapshots(fsState.postFillSnapshot, snapshotPencilmarks()));
+  }
+  function fsRefreshUndoButton() {
+    if (fsState.running) return;   // 'Stop' owns the button mid-run
+    fsSetButtonLabel(fsUndoAvailable() ? 'undo' : 'idle');
+  }
+  // Arm the post-run Undo: snapshot the auto-filled state, start watching, show "Undo".
+  function fsArmUndo() {
+    fsState.postFillSnapshot = snapshotPencilmarks();
+    fsSyncObserver();
+    fsRefreshUndoButton();
+  }
+  // Retire it: forget the snapshot, stop watching (unless a result lingers), normal label.
+  function fsDisarmUndo() {
+    fsState.postFillSnapshot = null;
+    fsSyncObserver();
+    fsRefreshUndoButton();
+  }
+
+  // Rewind exactly our run: re-click the native undo button until the FIRST cell
+  // we filled is empty again (LIFO ⇒ that undoes all our placements, candidates
+  // restored), capped at filledCount so a stuck state can't loop forever. Only
+  // reachable while the button reads "Undo" (i.e. state == snapshot), so our fills
+  // are the top of the undo stack and this undoes them and nothing else.
+  async function fsDoUndo() {
+    if (fsState.undoing || !fsState.postFillSnapshot) return;
+    var first = fsState.firstFill, max = fsState.filledCount;
+    if (!first || !max) { fsDisarmUndo(); return; }
+    fsState.undoing = true;
+    fsClearResult();   // drop any lingering outcome toast
+    var undoBtn = getModeButton('undo');
+    var i = 0;
+    while (i < max && cellHasValueOrGiven(first.col, first.row)) {
+      if (undoBtn) dispatchClickEl(undoBtn);
+      else { var app = await Framework.getApp(); app.act({ type: 'undo' }); }
+      i++;
+      await sleep(fsUndoDelay());
+    }
+    fsState.undoing = false;
+    fsDisarmUndo();    // auto-fill rewound → retire the Undo affordance
+  }
+
+  function fsSetButtonLabel(mode) {
+    fsState.buttonMode = mode;
+    var btn = document.getElementById('sp-fill-single-btn');
+    if (!btn) return;
+    if (mode === 'stop') {
+      btn.style.whiteSpace = 'nowrap';
+      btn.style.fontSize   = '15px';
+      btn.textContent      = 'Stop';
+      btn.title            = 'Stop the auto-fill';
+    } else if (mode === 'undo') {
+      btn.style.whiteSpace = 'nowrap';
+      btn.style.fontSize   = '15px';
+      btn.textContent      = 'Undo';
+      btn.title            = 'Undo the auto-fill (removes the digits it placed). Stays here until you change the puzzle.';
+    } else {
+      btn.style.whiteSpace = 'pre-line';   // honour the explicit line breaks
+      btn.style.fontSize   = '9px';        // small enough that 4 lines fit the square
+      btn.textContent      = 'Auto-fill\nany single\ncandidate\ncells';
+      btn.title            = 'Auto-fill cells that currently have a single valid (non-conflict) candidate';
+    }
+  }
+
+  async function fillSingleCandidates() {
+    if (fsState.running) { fsState.aborted = true; return; }   // 2nd press = Stop
+    if (actionInProgress) { return; }                          // another action owns the lock
+
+    var app = await Framework.getApp();
+    var cellByKey = {};
+    app.puzzle.cells.forEach(function (c) { cellByKey[c.col + ',' + c.row] = c; });
+
+    // Pre-run gate. When unmet, just (re-)show the explainer — it already states
+    // the reason; do not start. (No separate toast → no double-stacking.)
+    var a0 = fsAnalyse(app);
+    if (a0.empties.length === 0 || a0.zero.length > 0 || a0.singles.length === 0) {
+      fsClearResult();
+      fsRenderExplainer(a0);
+      return;
+    }
+
+    fsClearResult();                 // drop any prior sticky result
+    fsDisarmUndo();                  // supersede any prior armed Undo (this run replaces it)
+    fsState.running = true;
+    fsState.aborted = false;
+    fsState.filledCount = 0;
+    fsState.firstFill = null;
+    actionInProgress = true;
+    fsSetButtonLabel('stop');
+    fsRenderRunning();   // persistent "click Stop to abort" popup for the whole run (finish() replaces it with the result)
+
+    // Build the sticky result for the terminal condition we hit.
+    function finish(kind, zeroKey) {
+      var n = fsState.filledCount;
+      if (kind === 'broken') {
+        app.deselect();
+        if (cellByKey[zeroKey]) app.select([cellByKey[zeroKey]]);   // park the selection on the offending cell
+      }
+      fsSetResult(kind, fsResultMessage(kind, n, zeroKey));
+    }
+
+    try {
+      while (true) {
+        if (fsState.aborted) { finish('stopped'); break; }
+        var a = fsAnalyse(app);
+        if (a.empties.length === 0) { finish('complete'); break; }
+        if (a.zero.length > 0)      { finish('broken', a.zero[0]); break; }
+        if (a.singles.length === 0) { finish('stuck'); break; }
+        var next = a.singles[0];
+        app.deselect();
+        app.select([next.cell]);                // pre-select so the user sees it before it fills
+        await sleep(fsSelectDelay());
+        if (fsState.aborted) { finish('stopped'); break; }
+        app.act({ type: 'value', arg: next.digit });
+        if (fsState.filledCount === 0) fsState.firstFill = { col: next.cell.col, row: next.cell.row };
+        fsState.filledCount++;
+        await sleep(fsFillDelay());
+      }
+    } finally {
+      fsState.running = false;
+      actionInProgress = false;
+      // Anything placed → the button becomes "Undo" (stays while the state holds, returns
+      // if the player native-undoes back to it). Nothing placed → normal label.
+      if (fsState.filledCount > 0) fsArmUndo();
+      else fsDisarmUndo();
+    }
+  }
+
+  // Standalone floating square button styled like the Fill/Clear/Clear All action
+  // buttons (same colours/border/radius/flash), parked just above the ⚙ settings
+  // gear. zIndex 900 (below the native dialog scrim at 1000) so it dims with the
+  // rest of the page when the native settings dialog is open. Toggles to "Stop"
+  // while running; hover shows a state-aware explainer / sticky result.
+  function buildFillSingleButton() {
+    if (document.getElementById('sp-fill-single-btn')) return;
+    // Visual tokens copied from buildActionButton so it matches the trio.
+    var colorRefBtn = document.querySelector('[data-control="pen"]') ||
+                      document.querySelector('[data-control="corner"]') ||
+                      document.querySelector('[data-control="centre"]') ||
+                      document.querySelector('[data-control="normal"]');
+    var colorRefStyle = colorRefBtn ? getComputedStyle(colorRefBtn) : null;
+    var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
+                      ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
+    var textColor = 'rgb(181, 104, 228)';                                  // literal theme purple (stable; see buildActionButton)
+    var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
+    var sizePx    = (colorRefBtn && colorRefBtn.offsetWidth > 0) ? colorRefBtn.offsetWidth : 56;  // square, matches a control button
+
+    var btn = document.createElement('button');
+    btn.id    = 'sp-fill-single-btn';
+    btn.type  = 'button';
+    btn.title = 'Auto-fill cells that currently have a single valid (non-conflict) candidate';
+    Object.assign(btn.style, {
+      position:   'fixed',
+      bottom:     '56px',          // 12px gear margin + 36px gear height + 8px gap → sits above the gear
+      right:      '12px',          // right-aligned over the gear
+      width:      sizePx + 'px',   // square, like the trio
+      height:     sizePx + 'px',
+      padding:    '2px',
+      borderRadius: '8px',
+      cursor:     'pointer',
+      fontFamily: 'Roboto, Arial, sans-serif',
+      fontWeight: '700',
+      lineHeight: '1.12',
+      textAlign:  'center',
+      display:    'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex:     '900',           // below the native dialog scrim (z 1000) so it dims with the page
+      boxShadow:  '0 2px 8px rgba(0,0,0,0.4)',
+      boxSizing:  'border-box',
+    });
+    btn.style.setProperty('background-color', bgColor, 'important');
+    btn.style.setProperty('color', textColor, 'important');
+    btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    spdrFxButton(btn);          // hover-brighten + active-depress + click flash
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      // While running, a click is a Stop request (fillSingleCandidates sets aborted).
+      // Post-run, the button is "Undo" → rewind the auto-fill. Otherwise → run.
+      if (!fsState.running && fsState.buttonMode === 'undo') fsDoUndo();
+      else fillSingleCandidates();
+    });
+    btn.addEventListener('mouseenter', function () { fsShowOnHover(); });
+    btn.addEventListener('mouseleave', function () { if (!fsState.resultPinned && !fsState.running) fsHideToast(); });   // keep the running popup up regardless of mouse position
+    document.body.appendChild(btn);
+    fsSetButtonLabel('idle');   // sets the 4-line label + font/white-space — AFTER append (it looks the button up by id)
+
+    // Visibility — toggled by the Settings checkbox (controlSyncer keeps it in sync).
+    function fsApplyVisibility() { btn.style.display = settings.showFillSingleButton !== false ? 'flex' : 'none'; }
+    fsApplyVisibility();
+    controlSyncers['showFillSingleButton'] = fsApplyVisibility;
+
+    // A click anywhere outside the button + its toast unpins a sticky result
+    // (it stays available on re-hover until the puzzle is edited).
+    document.addEventListener('click', function (e) {
+      if (!fsState.resultPinned) return;
+      var toast = document.getElementById('sp-fs-toast');
+      if (btn.contains(e.target)) return;
+      if (toast && toast.contains(e.target)) return;
+      fsState.resultPinned = false;
+      fsHideToast();
+    });
+
+    // Re-measure once the control buttons' CSS has settled (offsetWidth can read
+    // 0 / a pre-CSS value at first paint), so the square ends up the right size.
+    function resize() {
+      var ref = document.querySelector('[data-control="pen"]') ||
+                document.querySelector('[data-control="corner"]') ||
+                document.querySelector('[data-control="centre"]') ||
+                document.querySelector('[data-control="normal"]');
+      if (ref && ref.offsetWidth > 0) {
+        btn.style.width  = ref.offsetWidth + 'px';
+        btn.style.height = ref.offsetWidth + 'px';
+      }
+    }
+    setTimeout(resize, 100);
+    setTimeout(resize, 500);
+  }
+
+  // Floating "Validate Constraints" button — sits above the Auto-fill button in the
+  // bottom-right cluster (gear → Auto-fill → Validate). Wider than the square trio so
+  // its label fits; the full description is the native hover tooltip. Clicking it
+  // opens a dropdown (toggleValidateMenu) to run one validator or "Run all".
+  function buildValidateButton() {
+    if (document.getElementById('sp-validate-btn')) return;
+    var colorRefBtn = document.querySelector('[data-control="pen"]') ||
+                      document.querySelector('[data-control="corner"]') ||
+                      document.querySelector('[data-control="centre"]') ||
+                      document.querySelector('[data-control="normal"]');
+    var colorRefStyle = colorRefBtn ? getComputedStyle(colorRefBtn) : null;
+    var bgColor   = (colorRefStyle && colorRefStyle.backgroundColor !== 'rgba(0, 0, 0, 0)')
+                      ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
+    var textColor = 'rgb(181, 104, 228)';                                  // literal theme purple (stable; see buildActionButton)
+    var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
+
+    var btn = document.createElement('button');
+    btn.id    = 'sp-validate-btn';
+    btn.type  = 'button';
+    btn.title = 'Validate constraints — opens a menu: run one validator (Kropki dots, cages, little killers) or "Run all" to loop them until no more candidates can be removed';
+    btn.textContent = 'Validate Constraints';
+    Object.assign(btn.style, {
+      position:   'fixed',
+      bottom:     '120px',         // above the Auto-fill button (bottom:56px, 56px tall) with an 8px gap
+      right:      '12px',          // right edge aligns with the gear / Auto-fill column
+      height:     '36px',
+      padding:    '0 12px',
+      borderRadius: '8px',
+      cursor:     'pointer',
+      fontFamily: 'Roboto, Arial, sans-serif',
+      fontWeight: '700',
+      fontSize:   '13px',
+      lineHeight: '1.2',
+      whiteSpace: 'nowrap',
+      display:    'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      zIndex:     '900',           // below the native dialog scrim (z 1000) so it dims with the page
+      boxShadow:  '0 2px 8px rgba(0,0,0,0.4)',
+      boxSizing:  'border-box',
+    });
+    btn.style.setProperty('background-color', bgColor, 'important');
+    btn.style.setProperty('color', textColor, 'important');
+    btn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    spdrFxButton(btn);          // hover-brighten + active-depress + click flash
+    btn.addEventListener('click', function (e) { e.stopPropagation(); toggleValidateMenu(); });
+    document.body.appendChild(btn);
+
+    function applyVisibility() { btn.style.display = settings.showValidateButton !== false ? 'flex' : 'none'; }
+    applyVisibility();
+    controlSyncers['showValidateButton'] = applyVisibility;
+  }
+
   function buildAllUI() {
     suppressStartDialog();
     buildVersionLabel();
+    buildFillSingleButton();
+    buildValidateButton();
+    startGapAutoScan();   // TEMP migration dev tool (see GAPSCAN_AUTO)
     buildSettingsUI();
     // Selection-border offset observer is feature-independent of DarkReader
     // (works the same in light themes), so start it here rather than gating
@@ -6060,8 +8449,27 @@
         if (buildEasyRegionShadeButton() || attempts2 > 100) clearInterval(timer2);
       }, 100);
     }
+    if (!darkenInlineToolButtons()) {
+      var attempts3 = 0;
+      var timer3 = setInterval(function () {
+        attempts3++;
+        if (darkenInlineToolButtons() || attempts3 > 100) clearInterval(timer3);
+      }, 100);
+    }
   }
   if (document.body) buildAllUI();
   else document.addEventListener('DOMContentLoaded', buildAllUI);
+
+  // Kick off the dark-fix SVG pipeline LAST. waitForDRAndSVG() can run
+  // startLabelRectPatch() synchronously (when the board is already present on a
+  // fast load), and that chain touches module state declared throughout this IIFE
+  // (e.g. _domShadedCache ~L1960, _modelRegionCache). Invoking it mid-file (its
+  // former spot ~L1798) raced var-initialization: a fast puzzle load (e.g.
+  // fetchPuzzle ~19ms on a cached puzzle) aborted the whole IIFE with "Cannot read
+  // properties of undefined (reading 'key')" in getDomShadedRegionMap — black
+  // board, no buttons, no panel. Running it here, after every declaration, removes
+  // the race. (Only surfaced with Shaded mode enabled; extraRegionRectColor
+  // early-returns otherwise.)
+  waitForDRAndSVG();
 
 })();
