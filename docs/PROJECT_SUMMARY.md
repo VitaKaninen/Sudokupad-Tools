@@ -7,7 +7,7 @@ A single-file TamperMonkey userscript that dark-themes SudokuPad: it locks DarkR
 
 - **File:** `sudokupad-native-dark-mode.user.js` — one ~8,500-line IIFE
 - **Version:** bump in **two** places every release — the `@version` header (TamperMonkey uses this) **and** the `SCRIPT_VERSION` const near the top of the IIFE (drives `window.spdrVersion` + the on-screen version label). They must match; if `window.spdrVersion` lags `@version`, `SCRIPT_VERSION` was missed.
-- **Repo:** https://github.com/VitaKaninen/Sudokupad-darkreader-fix.git (branch `main`)
+- **Repo:** https://github.com/VitaKaninen/Sudokupad-Tools.git (branch `main`)
 - **Matched URLs:** `sudokupad.app/*`, `beta.sudokupad.app/*`, `app.crackingthecryptic.com/*`, `crackingthecryptic.com/*`
 - **Tested on:** Chrome + TamperMonkey, LibreWolf + ViolentMonkey, and Brave + ViolentMonkey (DarkReader extension state irrelevant — the script locks it out of SudokuPad).
 
