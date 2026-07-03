@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SudokuPad – Native Dark Mode
 // @namespace    https://github.com/VitaKaninen
-// @version      3.64.0
+// @version      3.65.0
 // @description  Locks DarkReader out of SudokuPad and forces the site's own dark mode off, running a self-owned frozen copy of that dark theme instead — then fixes the gaps it leaves (gray objects, white labels, bright buttons) plus QoL features.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.64.0';
+  var SCRIPT_VERSION = '3.65.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5557,10 +5557,25 @@
   //   uni     — { digit:1 } membership map of the puzzle's digit set
   //   fullSet — Set<num> of that digit set (an empty/unmarked cell stands in as this)
   //   values  — cellKey → placed/given digit (a value owns its cell)
-  //   centre  — cellKey → Set<num> of the player's centre pencilmarks (numeric, in set)
+  //   centre  — cellKey → Set<num> of the player's VALID centre pencilmarks
+  //             (numeric, in set, and NOT conflict-flagged — see below)
   // Read-only w.r.t. the board: every validator works on copies of these sets and
   // returns a removal list without touching the DOM. Cell keys are "col,row"
   // 0-indexed (cellKeyFromMarkXY), matching app.puzzle.cells' c.col+','+c.row.
+  //
+  // CONFLICT (red) candidates are EXCLUDED. SudokuPad tags any pencilmark that
+  // clashes with a seen digit (same row/col/box/cage) as tspan.conflict (rendered
+  // red) — the same signal the rest of this script treats as "invalid" (auto-fill,
+  // Clear-invalid). Such a candidate cannot appear in any solution, so it must not
+  // count as a partner when a validator asks "does digit d have a legal combination
+  // here?" — otherwise an impossible red digit props up combinations that are
+  // actually dead, and the validator under-removes. It also means we never evaluate
+  // or strip the red digits themselves (the player manages those); we only ever
+  // remove VALID candidates that have no support. (Requires SudokuPad's pencilmark
+  // conflict-checking to be on — with it off, nothing is red and every mark counts,
+  // matching the pre-fix behaviour.) A cell whose marks are ALL red collapses to an
+  // empty set and is dropped → treated as an unconstrained/blank cell, the safe
+  // permissive direction (never forces a removal), same as an unmarked cell.
   function readValidatorBoardState() {
     var digitChars = (settings.digitSet || '').split('');
     if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) return null;
@@ -5579,6 +5594,7 @@
       if (values[ck] != null) return;   // a placed value owns the cell; ignore stray marks
       var s = centre[ck] || (centre[ck] = new Set());
       text.querySelectorAll('tspan').forEach(function (sp) {
+        if (sp.classList.contains('conflict')) return;   // red/invalid candidate: not a usable partner
         var dv = sp.getAttribute('data-val');
         if (/^[0-9]$/.test(dv) && uni[Number(dv)]) s.add(Number(dv));
       });
