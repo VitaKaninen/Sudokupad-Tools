@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.67.0
+// @version      3.67.1
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.67.0';
+  var SCRIPT_VERSION = '3.67.1';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6089,7 +6089,39 @@
   // the shared stem collapses to one set of edges and each branch point fans
   // out correctly. Returns [{ keys:[<col,row>… every cell], edges:[[parentKey,
   // childKey]…], root:<col,row>, leaves:[<col,row>…] }] — one entry per bulb.
-  function getThermos() {
+  // Chains (arrays of "col,row" cell keys, bulb first) sharing a bulb cell are
+  // arms of ONE physical thermometer — trie-insert every chain starting at the
+  // same bulb into a single tree, so a shared stem collapses to one edge set
+  // and each branch point fans out correctly. Shared by both the model and
+  // DOM readers below. Returns [{ keys:[<col,row>… every cell], edges:
+  // [[parentKey,childKey]…], root:<col,row>, leaves:[<col,row>…] }].
+  function buildThermoTrees(chains) {
+    var byBulb = {};
+    chains.forEach(function (c) { (byBulb[c[0]] = byBulb[c[0]] || []).push(c); });
+    var out = [];
+    Object.keys(byBulb).forEach(function (bulbKey) {
+      var childrenOf = {}, allKeys = {};
+      byBulb[bulbKey].forEach(function (chain) {
+        allKeys[chain[0]] = 1;
+        for (var i = 1; i < chain.length; i++) {
+          allKeys[chain[i]] = 1;
+          var set = childrenOf[chain[i - 1]] || (childrenOf[chain[i - 1]] = {});
+          set[chain[i]] = 1;
+        }
+      });
+      var edges = [];
+      Object.keys(childrenOf).forEach(function (p) {
+        Object.keys(childrenOf[p]).forEach(function (c) { edges.push([p, c]); });
+      });
+      var leaves = Object.keys(allKeys).filter(function (k) { return !childrenOf[k]; });
+      out.push({ keys: Object.keys(allKeys), edges: edges, root: bulbKey, leaves: leaves });
+    });
+    return out;
+  }
+
+  // Read thermo ARM CHAINS from the model (cp.thermos — SudokuPad's native
+  // constraint key). See buildThermoTrees for how arms sharing a bulb merge.
+  function getThermoChainsFromModel() {
     var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
       ? Framework.app.puzzle.currentPuzzle : null;
     if (!cp || !Array.isArray(cp.thermos) || cp.thermos.length === 0) return [];
@@ -6111,30 +6143,94 @@
       }
       if (chain && chain.length >= 2) chains.push(chain);
     });
-    if (chains.length === 0) return [];
+    return chains;
+  }
 
-    var byBulb = {};
-    chains.forEach(function (c) { (byBulb[c[0]] = byBulb[c[0]] || []).push(c); });
+  // Fallback for THERMOS DRAWN AS GENERIC COSMETICS instead of a native
+  // cp.thermos entry (imported/authored puzzles — cp.thermos is then EMPTY
+  // even though the puzzle visibly has thermos, e.g.
+  // sudokupad.app/blobz/a-long-expected-party, whose thermo is a
+  // "thermocosmetic" cell array + a plain cosmetic line). Rather than decode
+  // that undocumented per-cell encoding, read what's actually RENDERED: a
+  // near-circular, near-full-cell `#underlay rect` (the bulb) whose fill
+  // colour matches the START or END point of a plain `#arrows path`
+  // (fill:none, NO `marker-end` — that attribute is how Arrow shafts carry
+  // their arrowhead marker, so it cleanly excludes Arrow lines, which can
+  // render a same-shaped colour-matched bulb+shaft otherwise). Requiring an
+  // explicit colour-matched bulb at a path endpoint is deliberately narrow: a
+  // puzzle whose cosmetic thermo renders differently simply isn't detected
+  // (safe under-detection, never mis-detected as some other line type) — same
+  // policy as the little-killer detector.
+  function getThermoChainsFromDOM() {
+    var svg = document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return [];
+    var N = detectGridSize();
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+    function norm(hex) { return (hex || '').toUpperCase().replace(/[^0-9A-F]/g, ''); }
 
-    var out = [];
-    Object.keys(byBulb).forEach(function (bulbKey) {
-      var childrenOf = {}, allKeys = {};
-      byBulb[bulbKey].forEach(function (chain) {
-        allKeys[chain[0]] = 1;
-        for (var i = 1; i < chain.length; i++) {
-          allKeys[chain[i]] = 1;
-          var set = childrenOf[chain[i - 1]] || (childrenOf[chain[i - 1]] = {});
-          set[chain[i]] = 1;
-        }
-      });
-      var edges = [];
-      Object.keys(childrenOf).forEach(function (p) {
-        Object.keys(childrenOf[p]).forEach(function (c) { edges.push([p, c]); });
-      });
-      var leaves = Object.keys(allKeys).filter(function (k) { return !childrenOf[k]; });
-      out.push({ keys: Object.keys(allKeys), edges: edges, root: bulbKey, leaves: leaves });
+    var bulbs = [];
+    document.querySelectorAll('#underlay rect').forEach(function (r) {
+      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
+      var rx = parseFloat(r.getAttribute('rx') || 0);
+      if (w < cs * 0.55 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;   // near-full-cell only
+      if (Math.abs(rx - w / 2) > w * 0.15) return;                                // must be circular
+      var fill = norm(r.getAttribute('fill'));
+      if (!fill || fill === 'FFFFFF' || fill === '000000') return;                // not a Kropki-style dot
+      var x = parseFloat(r.getAttribute('x') || 0), y = parseFloat(r.getAttribute('y') || 0);
+      bulbs.push({ cx: x + w / 2, cy: y + h / 2, fill: fill });
     });
-    return out;
+    if (bulbs.length === 0) return [];
+
+    var arrowsLayer = document.getElementById('arrows');
+    if (!arrowsLayer) return [];
+    var tol = cs * 0.25;
+    var chains = [];
+    arrowsLayer.querySelectorAll('path').forEach(function (p) {
+      if (p.getAttribute('marker-end')) return;                    // Arrow shaft, not a thermo
+      var fill = p.getAttribute('fill');
+      if (fill && fill !== 'none') return;
+      var stroke = norm(p.getAttribute('stroke'));
+      if (!stroke) return;
+      var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+      if (!nums || nums.length < 4) return;
+      var raw = [];
+      for (var i = 0; i + 1 < nums.length; i += 2) raw.push([+nums[i], +nums[i + 1]]);
+      // Cosmetic paths compress a straight (incl. diagonal) run of cells into ONE
+      // "L" segment spanning all of them (collinear points stripped) — unlike the
+      // model's line.wayPoints, which lists every cell. Re-expand each segment
+      // into one point per grid cell so no interior cell is skipped.
+      var pts = [raw[0]];
+      for (var j = 1; j < raw.length; j++) {
+        var x1 = raw[j - 1][0], y1 = raw[j - 1][1], x2 = raw[j][0], y2 = raw[j][1];
+        var steps = Math.round(Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1)) / cs);
+        for (var s = 1; s <= steps; s++) pts.push([x1 + (x2 - x1) * s / steps, y1 + (y2 - y1) * s / steps]);
+      }
+
+      function matches(pt) {
+        return bulbs.some(function (b) { return b.fill === stroke && Math.hypot(b.cx - pt[0], b.cy - pt[1]) < tol; });
+      }
+      var startsAtBulb = matches(pts[0]), endsAtBulb = matches(pts[pts.length - 1]);
+      if (!startsAtBulb && !endsAtBulb) return;                     // no matching bulb -> not a thermo shaft
+      if (endsAtBulb && !startsAtBulb) pts.reverse();                // bulb end goes first
+
+      var chain = [], ok = true;
+      pts.forEach(function (pt) {
+        var col = Math.round(pt[0] / cs - 0.5), row = Math.round(pt[1] / cs - 0.5);
+        if (!inGrid(col, row)) { ok = false; return; }
+        chain.push(col + ',' + row);
+      });
+      if (ok && chain.length >= 2) chains.push(chain);
+    });
+    return chains;
+  }
+
+  // Thermometers, model source preferred (accurate + branch-aware for native
+  // puzzles), DOM fallback for cosmetic-only ones (see getThermoChainsFromDOM).
+  function getThermos() {
+    var chains = getThermoChainsFromModel();
+    if (chains.length === 0) chains = getThermoChainsFromDOM();
+    return chains.length ? buildThermoTrees(chains) : [];
   }
 
   // Cell-pair sets that forbid a repeat under ordinary Sudoku rules: box/jigsaw
@@ -6205,8 +6301,9 @@
     try {
       var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
         ? Framework.app.puzzle.currentPuzzle : null;
-      var blob = (((cp && cp.title) || '') + ' ' +
-        ((cp && Array.isArray(cp.rules)) ? cp.rules.join(' ') : '')).toLowerCase();
+      var rulesText = cp && Array.isArray(cp.rules) ? cp.rules.join(' ')
+        : (cp && typeof cp.rules === 'string') ? cp.rules : '';
+      var blob = (((cp && cp.title) || '') + ' ' + rulesText).toLowerCase();
       return SLOW_THERMO_PHRASES.some(function (p) { return blob.indexOf(p) !== -1; });
     } catch (e) {}
     return false;
