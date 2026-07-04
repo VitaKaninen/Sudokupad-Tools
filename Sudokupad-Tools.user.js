@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.70.0
+// @version      3.71.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.70.0';
+  var SCRIPT_VERSION = '3.71.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6340,11 +6340,17 @@
     while (changed && guard++ < 1000) {
       changed = false;
       lines.forEach(function (chain) {
-        for (var i = 0; i < chain.length; i++) {
+        // Closed loop (first cell === last): the shared endpoint is one cell with
+        // TWO neighbours, not two one-neighbour ends. Drop the duplicate and wrap
+        // neighbours around, else its pair-check (both neighbours forced to the
+        // same lone partner — e.g. 4→9, 6→1 when they share a unit) never fires.
+        var closed = chain.length > 2 && chain[0] === chain[chain.length - 1];
+        var n = closed ? chain.length - 1 : chain.length;
+        for (var i = 0; i < n; i++) {
           var C = chain[i];
           if (values[C] != null || !work[C] || !mayRemove(C)) continue;   // only alterable marked cells
-          var left = i > 0 ? chain[i - 1] : null;
-          var right = i < chain.length - 1 ? chain[i + 1] : null;
+          var left = i > 0 ? chain[i - 1] : (closed ? chain[n - 1] : null);
+          var right = i < n - 1 ? chain[i + 1] : (closed ? chain[0] : null);
           Array.from(work[C]).forEach(function (d) {           // snapshot: set mutates in loop
             if (!candidateValid(C, d, left, right)) {
               work[C].delete(d);
