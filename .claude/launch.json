@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "sudokupad-catalog",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["C:\\Users\\VitaKaninen\\Desktop\\Projects\\GitHub\\Sudokupad Catalog\\web\\serve.py"],
+      "port": 8765
+    }
+  ]
+}

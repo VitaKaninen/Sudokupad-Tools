@@ -1,5 +1,12 @@
 # Puzzle Element Catalog — Capture Spec
 
+> ⚠ **SUPERSEDED (2026-07).** This describes the old mechanical *bucket* catalog
+> (`docs/Catalog/spdr_MERGED_*`, since archived to the Sudokupad Catalog project). The
+> current catalog is the tag-based one in
+> `C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog\classify\`
+> — see "Puzzle catalog" in [`PROJECT_SUMMARY.md`](PROJECT_SUMMARY.md). Kept for reference; do not use for new work.
+> (The bulk extractor userscript this spec describes now lives in that project's `tools/extractor/`.)
+
 Purpose: across ~2,000 SudokuPad puzzles, produce a complete inventory of the
 **render elements** they contain and the **decision-relevant properties** of each, so
 the DarkReader-fix userscript can be made robust against whatever it meets in the wild.

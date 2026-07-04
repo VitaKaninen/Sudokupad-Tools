@@ -1,5 +1,12 @@
 # Catalog Audit — buckets the script may not handle
 
+> ⚠ **SUPERSEDED (2026-07).** This audit is against the old *bucket* catalog
+> (`docs/Catalog/`, since archived to the Sudokupad Catalog project). The current catalog
+> is the tag-based one in `C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog\classify\`
+> — see "Puzzle catalog" in [`PROJECT_SUMMARY.md`](PROJECT_SUMMARY.md). Kept for reference; do not use for new work.
+> NOTE: the "Confirmed bugs" + "Triage" sections below are still-live userscript findings
+> (region-inference on non-standard grids), independent of the catalog itself.
+
 Working checklist from the 2026-06-04 gap analysis: every render bucket in the 1890-puzzle
 catalog ([`Catalog/`](Catalog/)) cross-referenced against what the script actually touches
 (PROJECT_SUMMARY "What it fixes" + Code map). Each open item gets **resolved one way or the
