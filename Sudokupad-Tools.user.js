@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.71.0
+// @version      3.72.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.71.0';
+  var SCRIPT_VERSION = '3.72.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -284,6 +284,7 @@
     validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
     validateThermoEnabled:        true,   // "Validate Constraints": run the thermometer validator (future per-validator toggle)
     validateWhisperEnabled:       true,   // "Validate Constraints": run the German-whisper (green line, ≥5) validator (future per-validator toggle)
+    validateXVEnabled:            true,   // "Validate Constraints": run the XV validator (V = sum 5, X = sum 10 across a labeled edge)
     validateRunAllMode:           false,  // "Validate Constraints" menu checkbox: any validator click runs ALL detected validators to a cross-constraint fixpoint
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
@@ -5677,6 +5678,122 @@
     return { removals: removals, dotCount: dots.length, emptiedCells: emptied };
   }
 
+  // ── XV validator ──────────────────────────────────────────────────────────
+  // XV clues sit on a cell border like a Kropki dot, but the constraint is a SUM:
+  // a "V" means the two cells sum to 5, an "X" means they sum to 10. Structurally
+  // identical to the Kropki validator (arc consistency to a fixpoint) — only the
+  // partner rule differs. Independent of Kropki (own collector, own compute) so the
+  // two toggle separately. NOTE: this validates only the POSITIVE clues that are
+  // drawn; it makes no use of a "negative constraint" (all Xs/Vs given) — an absent
+  // X/V is never treated as forbidding a 5/10 sum.
+
+  // Find XV clues in the DOM (works for native SCL/fpuz renders AND cosmetic ones):
+  // both draw the clue as an #overlay/#underlay <text> of exactly "X" or "V"
+  // centred on a cell border (native XV is a BARE letter, no disc; cosmetic XV is a
+  // labeled Kropki-style circle whose letter text also lives in #overlay). We read
+  // the letter's geometric centre (getBBox — robust to text-anchor/baseline) and
+  // derive the two bordered cells with the exact geometry collectKropkiDots uses.
+  // Returns [{ type:'X'|'V', a:'col,row', b:'col,row' }] (0-indexed cell keys).
+  function collectXVDots() {
+    var svg = document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return [];
+    var N = detectGridSize();
+    var out = [];
+    var seen = {};
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+    svg.querySelectorAll('#overlay text, #underlay text').forEach(function (t) {
+      if (t.getAttribute('data-spdr-kropki-label') != null) return;   // our own injected label
+      var s = (t.textContent || '').trim().toUpperCase();
+      if (s !== 'X' && s !== 'V') return;
+      var bb; try { bb = t.getBBox(); } catch (e) { return; }
+      if (!bb || bb.width === 0 || bb.height === 0) return;            // not rendered (e.g. under fog)
+      var cx = bb.x + bb.width / 2, cy = bb.y + bb.height / 2;
+      function gridDist(v) { var m = ((v % cs) + cs) % cs; return Math.min(m, cs - m); }
+      var tol = cs * 0.15, half = cs / 2;
+      var onVert = gridDist(cx) < tol && Math.abs(gridDist(cy) - half) < tol;
+      var onHorz = gridDist(cy) < tol && Math.abs(gridDist(cx) - half) < tol;
+      if (!onVert && !onHorz) return;                                  // not centred on an interior cell border
+      var a, b;
+      if (onVert) {                              // vertical border → left | right cells
+        var bc = Math.round(cx / cs), r = Math.floor(cy / cs);
+        a = (bc - 1) + ',' + r; b = bc + ',' + r;
+      } else {                                   // horizontal border → top | bottom cells
+        var br = Math.round(cy / cs), c = Math.floor(cx / cs);
+        a = c + ',' + (br - 1); b = c + ',' + br;
+      }
+      var ap = a.split(',').map(Number), bp = b.split(',').map(Number);
+      if (!inGrid(ap[0], ap[1]) || !inGrid(bp[0], bp[1])) return;
+      var key = a + '|' + b + '|' + s;
+      if (seen[key]) return;
+      seen[key] = 1;
+      out.push({ type: s, a: a, b: b });
+    });
+    return out;
+  }
+
+  // Same arc-consistency-to-a-fixpoint machinery as computeKropkiRemovals, but the
+  // partner test is a SUM: candidate d in a cell on an XV clue survives only if the
+  // neighbour can currently hold e with d+e = 5 (V) or 10 (X). The two cells of any
+  // XV clue are orthogonally adjacent, so they always share a row or column → they
+  // can never be equal; a self-partner (d == target−d, i.e. d=2.5 for V, d=5 for X)
+  // is therefore impossible and excluded (mirrors black Kropki dropping 2d==d).
+  function computeXVRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };   // letters / empty digit set → sums undefined
+    var uni = st.uni;
+    function partners(type, d) {
+      var target = type === 'X' ? 10 : 5;
+      var e = target - d;
+      if (e === d) return [];                // same-digit partner impossible (cells share a row/col)
+      return uni[e] ? [e] : [];
+    }
+
+    var dots = collectXVDots();
+    if (unitFilter) dots = dots.filter(function (dot) { return unitFilter([dot.a, dot.b]); });
+    if (dots.length === 0) return { noXV: true };
+
+    var values = st.values, centre = st.centre, fullSet = st.fullSet;
+    function neighbourSet(key) {
+      if (values[key] != null) return new Set([values[key]]);
+      if (centre[key]) return centre[key];
+      return fullSet;
+    }
+    function hasPartner(type, d, otherSet) {
+      var ps = partners(type, d);
+      for (var i = 0; i < ps.length; i++) if (otherSet.has(ps[i])) return true;
+      return false;
+    }
+
+    var markedKeys = Object.keys(centre);
+    var removals = [], seen = {};
+    function consider(self, other, type) {
+      if (values[self] != null || !centre[self]) return;
+      var os = neighbourSet(other);
+      Array.from(centre[self]).forEach(function (d) {
+        if (!hasPartner(type, d, os)) {
+          centre[self].delete(d);
+          var k = self + '/' + d;
+          if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: self, digit: String(d) }); }
+        }
+      });
+    }
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      var before = removals.length;
+      dots.forEach(function (dot) {
+        consider(dot.a, dot.b, dot.type);
+        consider(dot.b, dot.a, dot.type);
+      });
+      changed = removals.length > before;
+    }
+
+    var emptied = 0;
+    markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
+
+    return { removals: removals, xvCount: dots.length, emptiedCells: emptied };
+  }
+
   // ── Cage validator ────────────────────────────────────────────────────────
   // Standard killer cages (a small total in a corner, no repeated digit). For
   // each cage we generate every distinct-digit combination matching its size and
@@ -6802,6 +6919,9 @@
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
       { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
         detect: whisperDetected, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
+      { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues', enabled: function () { return settings.validateXVEnabled !== false; },
+        detect: function () { return collectXVDots().length > 0; },
+        compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
     ];
   }
   function detectedValidators() {
