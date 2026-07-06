@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.78.0
+// @version      3.79.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.78.0';
+  var SCRIPT_VERSION = '3.79.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6278,8 +6278,13 @@
       case 'red':    return r >= g + 40 && r >= b + 40;
       case 'blue':   return b >= r + 40 && b >= g + 40;
       case 'green':  return g > 90 && g >= r + 40 && g >= b + 40;
-      case 'purple': case 'violet': return r >= g + 40 && b >= g + 40;
-      case 'pink': case 'magenta':  return r >= g + 40 && b >= g;
+      // Purple vs pink/magenta split on the RED-vs-BLUE lean so a legend puzzle's
+      // "purple" and "pink" lines never both match one word: purple is blue-led
+      // (b > r, e.g. lavender #bf9de0), pink/magenta is red-led-or-tied (r >= b,
+      // e.g. #f067f0). r==b (pure #800080 / #ff00ff) resolves to pink — degrades to
+      // manual-select on a pure-purple legend, never a wrong pin.
+      case 'purple': case 'violet': return b > r && r > g && b >= g + 40;
+      case 'pink': case 'magenta':  return r >= g + 40 && b >= g && r >= b;
       case 'orange': return r >= b + 60 && g >= b + 30 && r >= g;
       case 'yellow': return r >= b + 60 && g >= b + 60;
       case 'brown':  return r > g && g > b && (mx - mn) >= 25 && mx < 200;
@@ -6416,7 +6421,13 @@
   // consecutive" phrasing (verified against the catalog: ~94% of renban puzzles
   // carry exactly this). Clause trigger for the named-colour layer: renban/consecutive.
   var RENBAN_CUE_RE = /renban|consecutive\s+(?:digits?|numbers?)?[^.]*any order|set of consecutive|consecutive\s+(?:digits?|numbers?)\s+in any order/;
-  var RENBAN_CLAUSE_RE = /renban|consecutive/;
+  // Named-colour clause trigger = "renban" ONLY (not bare "consecutive"): a Nabner
+  // clause ("no two digits can be consecutive or identical") also carries
+  // "consecutive", and in a multi-colour legend it sits before the renban clause →
+  // the old /consecutive/ grabbed Nabner's colour (yellow on 3xdi7kf6ab). Same class
+  // of collision as REGIONSUM_CLAUSE_RE's bare "sum" (fixed v3.76). A renban-by-
+  // description-only legend (no "renban" word) falls to ambiguous → manual select.
+  var RENBAN_CLAUSE_RE = /renban/;
   function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE); }
   function renbanDetected() { return classifyRenbanLines().mode !== 'none'; }
   function renbanIsAmbiguous() { return classifyRenbanLines().mode === 'ambiguous'; }
@@ -6443,7 +6454,10 @@
   // colour alone can't discriminate a cosmetic line, so cue-gated like renban.
   // Clause trigger for the named-colour layer: parity / alternate / odd / even.
   var PARITY_CUE_RE = /parity\s+lines?|alternat\w*[^.]*parit|parit\w*[^.]*alternat|alternat\w*\s+(?:between\s+)?(?:odd|even)|(?:same|different|opposite)\s+parit|(?:odd|even)\s*\/\s*(?:odd|even)/;
-  var PARITY_CLAUSE_RE = /parit|alternat|odd|even/;
+  // Named-colour clause trigger = the DISTINCTIVE words only (not bare "odd"/"even",
+  // which collide with odd/even-cell clues in a multi-colour legend — same lesson
+  // as renban's "consecutive" / region-sum's "sum").
+  var PARITY_CLAUSE_RE = /parit|alternat/;
   function classifyParityLines() { return classifyCueLines(PARITY_CUE_RE, PARITY_CLAUSE_RE); }
   function parityDetected() { return classifyParityLines().mode !== 'none'; }
   function parityIsAmbiguous() { return classifyParityLines().mode === 'ambiguous'; }
