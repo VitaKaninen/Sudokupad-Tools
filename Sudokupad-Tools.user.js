@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.72.0
+// @version      3.73.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.72.0';
+  var SCRIPT_VERSION = '3.73.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -285,6 +285,7 @@
     validateThermoEnabled:        true,   // "Validate Constraints": run the thermometer validator (future per-validator toggle)
     validateWhisperEnabled:       true,   // "Validate Constraints": run the German-whisper (green line, ≥5) validator (future per-validator toggle)
     validateXVEnabled:            true,   // "Validate Constraints": run the XV validator (V = sum 5, X = sum 10 across a labeled edge)
+    validateArrowEnabled:         true,   // "Validate Constraints": run the sum-arrow validator (shaft digits sum to the circle digit)
     validateRunAllMode:           false,  // "Validate Constraints" menu checkbox: any validator click runs ALL detected validators to a cross-constraint fixpoint
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
@@ -6827,6 +6828,245 @@
     return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied };
   }
 
+  // ── Sum-arrow validator ───────────────────────────────────────────────────
+  // An arrow: the digits along the shaft (tip included — it's just the last
+  // shaft cell) sum to the digit in the circle. Digits MAY repeat along the
+  // shaft — except where ordinary Sudoku rules forbid it (two arrow cells, or
+  // an arrow cell and the circle, in the same row / column / box / uniqueness
+  // cage must differ). Same enumeration machinery as the little-killer
+  // validator, extended so the target sum is itself a candidate variable (the
+  // circle cell): a circle candidate v is kept iff SOME complete legal
+  // assignment of the shaft sums to v; a shaft candidate d is kept iff SOME
+  // such assignment (for any surviving v) places d in that cell. Multi-arm
+  // arrows are several independent units sharing the circle cell (each arm
+  // sums to the circle on its own). Two-cell pill bulbs (a two-digit total)
+  // are unsupported and skipped — safe under-detection.
+
+  // Native model source: cp.arrowSums, one entry per rendered ARM —
+  // { bulb: { center, width, height, … }, arrow: { wayPoints } }. NB the
+  // coordinates are [row+0.5, col+0.5] (RC order) — the OPPOSITE of
+  // cp.thermos' line.wayPoints — verified against the rendered shaft on
+  // test puzzle 3x3zm2co6o (bulb center [0.5,6.5] renders at r1c7).
+  // Returns [{ circle:<col,row>, shaft:[<col,row>…] }].
+  function getArrowsFromModel() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.arrowSums) || cp.arrowSums.length === 0) return [];
+    var N = detectGridSize();
+    function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
+    var out = [];
+    cp.arrowSums.forEach(function (e) {
+      if (!e || !e.bulb || !e.arrow || !Array.isArray(e.arrow.wayPoints)) return;
+      var b = e.bulb;
+      if (!Array.isArray(b.center) || b.center.length < 2) return;
+      if ((typeof b.width === 'number' && b.width > 1.2) ||
+          (typeof b.height === 'number' && b.height > 1.2)) return;   // pill bulb → skip
+      var circleKey = Math.round(b.center[1] - 0.5) + ',' + Math.round(b.center[0] - 0.5);
+      // Swap RC → CR so expandLineChain (which expects [col+0.5,row+0.5]) can
+      // re-expand compressed straight runs into one cell per grid square. The
+      // first wayPoint sits at the bulb's EDGE and the last short of the tip
+      // centre; round(p−0.5) still lands both in the right cell.
+      var wp = e.arrow.wayPoints;
+      if (wp.length < 2) return;
+      var keys = expandLineChain(wp.map(function (p) { return [p[1], p[0]]; }));
+      while (keys.length && keys[0] === circleKey) keys.shift();      // shaft starts inside the circle cell
+      if (keys.length < 1) return;
+      if (!inGrid(circleKey) || !keys.every(inGrid)) return;
+      out.push({ circle: circleKey, shaft: keys });
+    });
+    return out;
+  }
+
+  // Fallback for ARROWS DRAWN AS GENERIC COSMETICS (cp.arrowSums empty even
+  // though the puzzle visibly has one — e.g. test puzzle pbwqsppuho). Read
+  // what's rendered: the shaft is a `marker-end` #arrows path (the exact
+  // attribute the thermo detector EXCLUDES, so the two stay disjoint) whose
+  // START point is inside the grid at the edge of a near-full-cell circular
+  // rect in #overlay or #underlay (the circle — any fill: cosmetic bulbs are
+  // hollow white, tinted, anything). Requiring the in-grid bulb-edge start is
+  // what rejects little-killer shafts (they start OUTSIDE the grid) and plain
+  // decorative arrows; the cell-centred bulb test rejects quadruple circles
+  // (corner-centred). A differently-rendered arrow simply isn't detected —
+  // safe under-detection, same policy as the thermo/little-killer detectors.
+  function getArrowsFromDOM() {
+    var svg = document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return [];
+    var N = detectGridSize();
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+
+    var bulbs = [];
+    document.querySelectorAll('#overlay rect, #underlay rect').forEach(function (r) {
+      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
+      var rx = parseFloat(r.getAttribute('rx') || 0);
+      if (w < cs * 0.55 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;   // near-full-cell only
+      if (Math.abs(rx - w / 2) > w * 0.15) return;                                // must be circular
+      var cx = parseFloat(r.getAttribute('x') || 0) + w / 2;
+      var cy = parseFloat(r.getAttribute('y') || 0) + h / 2;
+      var col = Math.round(cx / cs - 0.5), row = Math.round(cy / cs - 0.5);
+      if (!inGrid(col, row)) return;
+      if (Math.abs(cx - (col + 0.5) * cs) > cs * 0.2 ||
+          Math.abs(cy - (row + 0.5) * cs) > cs * 0.2) return;   // centred on a cell (not a quadruple)
+      bulbs.push({ cx: cx, cy: cy, r: w / 2, key: col + ',' + row });
+    });
+    if (bulbs.length === 0) return [];
+
+    var arrowsLayer = document.getElementById('arrows');
+    if (!arrowsLayer) return [];
+    var out = [];
+    arrowsLayer.querySelectorAll('path').forEach(function (p) {
+      if (!p.getAttribute('marker-end')) return;                   // shafts carry the arrowhead marker
+      var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+      if (!nums || nums.length < 4) return;
+      var raw = [];
+      for (var i = 0; i + 1 < nums.length; i += 2) raw.push([+nums[i], +nums[i + 1]]);
+      if (raw[0][0] < 0 || raw[0][1] < 0 || raw[0][0] > N * cs || raw[0][1] > N * cs) return;   // start in grid
+      var bulb = null;
+      bulbs.forEach(function (b) {
+        // the shaft starts at the bulb's EDGE, ~one radius from its centre
+        if (Math.hypot(b.cx - raw[0][0], b.cy - raw[0][1]) < b.r + cs * 0.2) bulb = b;
+      });
+      if (!bulb) return;
+      // Re-expand compressed straight runs into one point per grid cell (same
+      // as the thermo DOM reader — collinear points are stripped from the d).
+      var pts = [raw[0]];
+      for (var j = 1; j < raw.length; j++) {
+        var x1 = raw[j - 1][0], y1 = raw[j - 1][1], x2 = raw[j][0], y2 = raw[j][1];
+        var steps = Math.round(Math.max(Math.abs(x2 - x1), Math.abs(y2 - y1)) / cs);
+        for (var s = 1; s <= steps; s++) pts.push([x1 + (x2 - x1) * s / steps, y1 + (y2 - y1) * s / steps]);
+      }
+      var keys = [], ok = true;
+      pts.forEach(function (pt) {
+        var col = Math.round(pt[0] / cs - 0.5), row = Math.round(pt[1] / cs - 0.5);
+        if (!inGrid(col, row)) { ok = false; return; }
+        var k = col + ',' + row;
+        if (keys[keys.length - 1] !== k) keys.push(k);
+      });
+      if (!ok) return;
+      while (keys.length && keys[0] === bulb.key) keys.shift();     // start point is in the circle cell
+      if (keys.length < 1) return;
+      out.push({ circle: bulb.key, shaft: keys });
+    });
+    return out;
+  }
+
+  // Sum arrows, model source preferred, DOM fallback for cosmetic-only ones.
+  function getSumArrows() {
+    var arrows = getArrowsFromModel();
+    if (arrows.length === 0) arrows = getArrowsFromDOM();
+    return arrows;
+  }
+
+  // Compute centre-candidate removals forced by the sum arrows, iterated to a
+  // fixpoint (a removal on one arrow can invalidate another's support — arrows
+  // may share cells, and a circle is often another arrow's shaft cell). Pure
+  // w.r.t. the board — works on copies of the candidate sets and returns the
+  // removal list.
+  function computeArrowRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var arrows = getSumArrows();
+    if (unitFilter) arrows = arrows.filter(function (a) { return unitFilter([a.circle].concat(a.shaft)); });
+    if (arrows.length === 0) return { noArrows: true };
+
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var cageSets = getUniqueCageCellSets();
+    function boxId(key) { var p = key.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
+    function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
+    function conflict(a, b) {
+      var ap = a.split(','), bp = b.split(',');
+      if (ap[0] === bp[0] || ap[1] === bp[1]) return true;          // same column / same row
+      return boxId(a) === boxId(b) || shareCage(a, b);
+    }
+
+    // Per-arrow cell list (circle at index 0) + conflict matrix (which cell
+    // pairs must differ). Unlike the little killer, arrow cells CAN share a
+    // row or column, so those checks join box/cage here.
+    var units = arrows.map(function (a) {
+      var keys = [a.circle].concat(a.shaft);
+      var conf = keys.map(function (_, i) { return keys.map(function (__, j) { return i !== j && keys[i] !== keys[j] && conflict(keys[i], keys[j]); }); });
+      return { keys: keys, conf: conf };
+    });
+
+    // Working copies of the player's centre marks (the only cells we may modify).
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                // empty cell → unconstrained, never modified
+    }
+
+    // Which (cell-index, digit) pairs the arrow can still place: for each circle
+    // candidate v, enumerate every shaft assignment summing to v with all
+    // conflicting pairs distinct (each cell drawing from its CURRENT candidate
+    // set) and union the digits used per cell — the circle included, so v itself
+    // is supported only when a complete legal fill exists. Backtracking with
+    // exact-sum suffix-bound + conflict pruning; the node cap is shared across
+    // all of the arrow's circle candidates, and if hit we bail (no removals
+    // from this arrow this pass — never over-remove).
+    function computeSupported(unit) {
+      var keys = unit.keys, n = keys.length, conf = unit.conf;
+      var sets = keys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
+      if (sets.some(function (s) { return s.length === 0; })) return { supported: null, bailed: false, empty: true };
+      var sufMin = new Array(n + 1).fill(0), sufMax = new Array(n + 1).fill(0);
+      for (var i = n - 1; i >= 1; i--) {
+        sufMin[i] = sufMin[i + 1] + sets[i][0];
+        sufMax[i] = sufMax[i + 1] + sets[i][sets[i].length - 1];
+      }
+      var supported = keys.map(function () { return new Set(); });
+      var assign = new Array(n), nodes = 0, CAP = 300000, bailed = false;
+      function dfs(idx, sum, target) {
+        if (bailed) return;
+        if (nodes++ > CAP) { bailed = true; return; }
+        if (idx === n) { if (sum === target) for (var k = 0; k < n; k++) supported[k].add(assign[k]); return; }
+        if (sum + sufMin[idx] > target || sum + sufMax[idx] < target) return;
+        var opts = sets[idx];
+        for (var oi = 0; oi < opts.length; oi++) {
+          var d = opts[oi];
+          if (sum + d + sufMin[idx + 1] > target) break;          // sorted asc → larger d only worse
+          var ok = true;
+          for (var j = 0; j < idx; j++) if (conf[idx][j] && assign[j] === d) { ok = false; break; }
+          if (!ok) continue;
+          assign[idx] = d;
+          dfs(idx + 1, sum + d, target);
+          if (bailed) return;
+        }
+      }
+      for (var vi = 0; vi < sets[0].length && !bailed; vi++) {
+        assign[0] = sets[0][vi];
+        dfs(1, 0, sets[0][vi]);
+      }
+      return { supported: supported, bailed: bailed, empty: false };
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      units.forEach(function (unit) {
+        var res = computeSupported(unit);
+        if (res.bailed || res.empty || !res.supported) return;    // give up safely on this arrow
+        unit.keys.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C]) return;           // only cells with player marks
+          Array.from(work[C]).forEach(function (d) {              // snapshot: set mutates in loop
+            if (!res.supported[i].has(d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, arrowCount: units.length, emptiedCells: emptied };
+  }
+
   // Worker: remove a specific list of centre candidates via SudokuPad's own
   // candidates op (one undo group). Mirrors _removeInvalidPencilmarksInternal but
   // takes an explicit [{cellKey,digit}] list instead of scanning .conflict marks.
@@ -6922,6 +7162,9 @@
       { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues', enabled: function () { return settings.validateXVEnabled !== false; },
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
+      { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum arrows', enabled: function () { return settings.validateArrowEnabled !== false; },
+        detect: function () { return getSumArrows().length > 0; },
+        compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
     ];
   }
   function detectedValidators() {
