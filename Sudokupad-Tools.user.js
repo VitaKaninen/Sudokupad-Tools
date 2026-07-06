@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.73.0
+// @version      3.74.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.73.0';
+  var SCRIPT_VERSION = '3.74.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6842,12 +6842,60 @@
   // sums to the circle on its own). Two-cell pill bulbs (a two-digit total)
   // are unsupported and skipped — safe under-detection.
 
+  // Resolve raw arrow ARMS into per-head units, branching-thermo style. Each
+  // arm is { bulb:<col,row>|null, cells:[<col,row>…] } (cells = the rendered
+  // polyline, first cell = where the polyline starts). An arm STARTING AT ITS
+  // BULB is a complete bulb→head path. A MULTI-HEADED arrow renders its extra
+  // heads as arms starting at a CELL CENTRE mid-stem of another arm (verified
+  // on 08yynh57ts "Super Nova") — each such branch's true path is the parent's
+  // stem prefix up to the branch cell + the branch's own cells, so every head
+  // becomes one full circle→head unit (the standard multi-head rule: each
+  // complete path sums to the circle; the shared stem cells appear in every
+  // unit, which is automatically consistent). Nested branches resolve on later
+  // passes. A branch whose branch cell yields MORE THAN ONE distinct parent
+  // prefix (crossing arrows) is DROPPED, never guessed — under-detection is
+  // safe, a wrong stem could over-remove. Model arms carry their bulb, so a
+  // model branch only attaches to arms of the SAME arrow; DOM branch arms have
+  // no bulb and attach to any resolved chain containing their start cell.
+  function resolveArrowArms(arms) {
+    var resolved = [], pending = [];
+    arms.forEach(function (a) {
+      if (!a || a.cells.length === 0) return;
+      if (a.bulb != null && a.cells[0] === a.bulb) {
+        if (a.cells.length >= 2) resolved.push({ bulb: a.bulb, chain: a.cells.slice() });
+      } else {
+        pending.push(a);
+      }
+    });
+    var progress = true, guard = 0;
+    while (progress && pending.length && guard++ < 50) {
+      progress = false;
+      for (var i = pending.length - 1; i >= 0; i--) {
+        var a = pending[i], bc = a.cells[0];
+        var prefixes = [];
+        resolved.forEach(function (r) {
+          if (a.bulb != null && r.bulb !== a.bulb) return;      // model branch: same arrow only
+          var idx = r.chain.indexOf(bc);
+          if (idx > 0) prefixes.push(r.chain.slice(0, idx + 1).join('|'));
+        });
+        if (prefixes.length === 0) continue;                    // parent may resolve on a later pass
+        var uniq = Array.from(new Set(prefixes));
+        pending.splice(i, 1);
+        if (uniq.length > 1) continue;                          // ambiguous parent → drop this head
+        var chain = uniq[0].split('|').concat(a.cells.slice(1));
+        if (chain.length >= 2) resolved.push({ bulb: chain[0], chain: chain });
+        progress = true;
+      }
+    }
+    return resolved.map(function (r) { return { circle: r.chain[0], shaft: r.chain.slice(1) }; });
+  }
+
   // Native model source: cp.arrowSums, one entry per rendered ARM —
   // { bulb: { center, width, height, … }, arrow: { wayPoints } }. NB the
   // coordinates are [row+0.5, col+0.5] (RC order) — the OPPOSITE of
   // cp.thermos' line.wayPoints — verified against the rendered shaft on
   // test puzzle 3x3zm2co6o (bulb center [0.5,6.5] renders at r1c7).
-  // Returns [{ circle:<col,row>, shaft:[<col,row>…] }].
+  // Returns raw arms for resolveArrowArms.
   function getArrowsFromModel() {
     var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
       ? Framework.app.puzzle.currentPuzzle : null;
@@ -6869,10 +6917,11 @@
       var wp = e.arrow.wayPoints;
       if (wp.length < 2) return;
       var keys = expandLineChain(wp.map(function (p) { return [p[1], p[0]]; }));
-      while (keys.length && keys[0] === circleKey) keys.shift();      // shaft starts inside the circle cell
       if (keys.length < 1) return;
       if (!inGrid(circleKey) || !keys.every(inGrid)) return;
-      out.push({ circle: circleKey, shaft: keys });
+      // An arm starting inside its bulb cell is a complete bulb→head path; one
+      // starting elsewhere is a BRANCH head for resolveArrowArms to attach.
+      out.push({ bulb: circleKey, cells: keys });
     });
     return out;
   }
@@ -6923,10 +6972,11 @@
       if (raw[0][0] < 0 || raw[0][1] < 0 || raw[0][0] > N * cs || raw[0][1] > N * cs) return;   // start in grid
       var bulb = null;
       bulbs.forEach(function (b) {
-        // the shaft starts at the bulb's EDGE, ~one radius from its centre
+        // an arm attached to the circle starts at the bulb's EDGE, ~one radius
+        // from its centre; a BRANCH head starts at a stem cell's CENTRE instead
+        // and is kept bulb-less for resolveArrowArms to attach.
         if (Math.hypot(b.cx - raw[0][0], b.cy - raw[0][1]) < b.r + cs * 0.2) bulb = b;
       });
-      if (!bulb) return;
       // Re-expand compressed straight runs into one point per grid cell (same
       // as the thermo DOM reader — collinear points are stripped from the d).
       var pts = [raw[0]];
@@ -6942,19 +6992,19 @@
         var k = col + ',' + row;
         if (keys[keys.length - 1] !== k) keys.push(k);
       });
-      if (!ok) return;
-      while (keys.length && keys[0] === bulb.key) keys.shift();     // start point is in the circle cell
-      if (keys.length < 1) return;
-      out.push({ circle: bulb.key, shaft: keys });
+      if (!ok || keys.length < 1) return;
+      out.push({ bulb: bulb ? bulb.key : null, cells: keys });
     });
     return out;
   }
 
-  // Sum arrows, model source preferred, DOM fallback for cosmetic-only ones.
+  // Sum arrows as per-head units, model source preferred, DOM fallback for
+  // cosmetic-only ones; either source's raw arms go through resolveArrowArms
+  // (multi-head branch merging).
   function getSumArrows() {
-    var arrows = getArrowsFromModel();
-    if (arrows.length === 0) arrows = getArrowsFromDOM();
-    return arrows;
+    var units = resolveArrowArms(getArrowsFromModel());
+    if (units.length === 0) units = resolveArrowArms(getArrowsFromDOM());
+    return units;
   }
 
   // Compute centre-candidate removals forced by the sum arrows, iterated to a
