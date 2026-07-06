@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.75.0
+// @version      3.76.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.75.0';
+  var SCRIPT_VERSION = '3.76.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6420,9 +6420,14 @@
 
   // Region-sum lines: box/region borders split the line into segments of EQUAL sum.
   // Cue = "region sum", "box borders divide/split", or "same/equal sum in each
-  // box/region". Clause trigger for the named-colour layer: region/box/segment/sum.
+  // box/region". Clause trigger for the named-colour layer: region/box/segment or
+  // "same/equal sum" — NOT bare "sum". Bare "sum" collides with every other summing
+  // clue (zipper "center sum", killer/arrow/sandwich sums), so in a multi-colour
+  // puzzle it can grab the wrong colour: e.g. 3xdi7kf6ab's Zipper clause ("…an
+  // equal distance from the center sum…") named purple, so the validator locked
+  // onto the purple zipper line and reported "no region-sum lines" (fixed v3.76).
   var REGIONSUM_CUE_RE = /region[- ]?sum|box\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+sum\s+(?:in|within|per)\s+each\s+(?:box|region)|each\s+(?:box|region)[^.]*(?:same|equal)\s+sum/;
-  var REGIONSUM_CLAUSE_RE = /region|box|segment|sum/;
+  var REGIONSUM_CLAUSE_RE = /region|box|segment|(?:same|equal)\s+sum/;
   function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE); }
   function regionSumDetected() { return classifyRegionSumLines().mode !== 'none'; }
   function regionSumIsAmbiguous() { return classifyRegionSumLines().mode === 'ambiguous'; }
