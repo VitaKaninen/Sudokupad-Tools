@@ -90,6 +90,14 @@ One IIFE, 120+ functions — **don't read the whole file**. Grep the function na
 - **Colour / geometry helpers:** `parseColor`/`rgbToHsl`/`hslToRgb`/`hexToRgba`, `getGridCellSize`/`detectGridSize`.
 - **Diagnostics:** `spdrGapScan()` (exposed as `window.spdrGapScan`) — native-dark-mode gap detector; flags board elements that paint but render near-invisible vs the page bg and aren't fixed by us (`!important` filter). See the Audit log in [`archive/NATIVE_MODE_MIGRATION.md`](archive/NATIVE_MODE_MIGRATION.md) (closed).
 
+### Clue-line read sites (keep in sync)
+Cosmetic **line** clues (whisper/renban/region-sum/palindrome/thermo shafts) are read from the DOM in **three** subsystems that must agree on which SVG layers and which paths count — a fix in one silently drifts from the others (the v3.83→v3.84 gap: detection learned `#overlay` lines but rendering/highlight didn't). Single source of truth = `LINE_DOM_LAYER_IDS` (the layer list) + `isLineCluePath` (the per-path gate), both defined next to `applyLineFill`. The three consumers:
+1. **Detection/validators** — `scanLineLayer` → `getCosmeticLines` (whisper/renban/region-sum/thermo all funnel here).
+2. **Rendering/colour-shading** — `fixAllLines`.
+3. **Object-shading highlight** — `objLineStrokeSources`.
+
+Add a new line layer (or change what counts as a line path) → edit `LINE_DOM_LAYER_IDS`/`isLineCluePath` **once** and all three follow. `#arrows` additionally carries filled block-arrow shapes (`isLineFill`); other layers are plain `fill:none` stroke lines, so the fill pass stays `#arrows`-only.
+
 ## Terminology
 - **Region / cage-box** — a bordered area; its boundaries are `#cell-grids path:not(.cell-grid)`.
 - **Strip / border strip** — a coloured `<rect>` we draw along a region edge.

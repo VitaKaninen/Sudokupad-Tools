@@ -21,6 +21,9 @@ The catalog lives in the **Sudokupad Catalog project**: `C:\Users\VitaKaninen\De
 - **Pull examples the easy way:** `python "C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog\classify\tools\examples.py" <tag> [<tag> …] [--n 5] [--any] [--count]` — filters the log by tag and prints example URLs+titles. `tools/lookup.py <id>` inspects one puzzle.
 - **Never read the data files into context** (`corpus.json` is 68 MB; the log/review files are MB-scale). Always query via `python` and return only the small answer. **Use Python's `json`/`csv` modules, never `awk`/`grep`-by-column.** Exact patterns + caveats: **"Puzzle catalog"** in [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md).
 
+### Fix a clue type in all its readers, not one
+Detection/validators, colour-rendering, and object-shading highlight are **parallel** subsystems that each read the same clue independently. When you fix how a clue type is detected or drawn (a new source layer, shape, or colour rule), sweep the sibling readers too — don't fix one in isolation. For **lines**, the readers share `LINE_DOM_LAYER_IDS` + `isLineCluePath` (one edit covers all three); see "Clue-line read sites" in [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md). For other clue types, grep the sibling readers and update them in the same change.
+
 ### Version bumps
 Bump `@version` in the `==UserScript==` header for every change — semver minor increments (e.g. 2.119.0 → 2.120.0). **Also bump the internal `SCRIPT_VERSION` constant (≈line 209) to match** — it drives `window.spdrVersion`, the only reliable "which build is live" signal in-browser. It silently drifted (stuck at 3.11.0 while the header advanced); keep them identical. A PostToolUse hook (`.claude/hooks/check_version_sync.py`) now blocks any edit that leaves them out of sync — so the drift can't recur silently.
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.83.0
+// @version      3.84.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.83.0';
+  var SCRIPT_VERSION = '3.84.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1413,6 +1413,36 @@
     el.style.setProperty('fill', 'rgb(' + sh.rgb[0] + ',' + sh.rgb[1] + ',' + sh.rgb[2] + ')', 'important');
     el.style.setProperty('fill-opacity', String(sh.a), 'important');
   }
+
+  // ── Clue-line DOM source: ONE layer list + ONE predicate, shared everywhere ──
+  // SudokuPad renders cosmetic *line* clues (whispers/renban/thermo shafts/…) into
+  // more than one SVG layer: the usual `lines[]` go to #arrows, but some puzzles
+  // (2hk0wen7pj "Hijinks") have no cp.lines and draw their lines as stroked,
+  // fill:none <path>s in #overlay instead (v3.83). THREE subsystems read clue
+  // lines from the DOM and MUST agree on which layers/paths count, or a fix in one
+  // drifts from the others (the exact gap v3.84 closed):
+  //   1. validators/detection — scanLineLayer → getCosmeticLines
+  //   2. rendering/colour-shading — fixAllLines
+  //   3. object-shading highlight — objLineStrokeSources
+  // All three key off the two names below. Add a new line layer HERE (one edit) and
+  // every subsystem picks it up. (#arrows additionally carries FILLED block-arrow
+  // shapes shaded via isLineFill; other layers are plain fill:none stroke lines, so
+  // the fill pass stays #arrows-only — see fixAllLines.)
+  var LINE_DOM_LAYER_IDS = ['arrows', 'overlay'];
+  // Is DOM <path> p a plain cosmetic line clue? (stroked, fill:none — so block
+  // arrows/marker shapes are excluded — not an arrow shaft, ≥2 waypoints.) The
+  // cheap structural gate shared by the validator scan and the non-#arrows render/
+  // highlight branches; scanLineLayer adds the grid-geometry refinement on top.
+  function isLineCluePath(p) {
+    if (!p || p.tagName !== 'path') return false;
+    if (p.getAttribute('marker-end')) return false;             // arrow shaft, not a line clue
+    var fill = p.getAttribute('fill');
+    if (fill && fill !== 'none') return false;                  // filled shape (block arrow / marker)
+    var stroke = lineStrokeSrc(p);
+    if (!stroke || stroke === 'none') return false;
+    var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+    return !!(nums && nums.length >= 4);                        // ≥2 waypoints
+  }
   function isLineStroke(el) {
     if (el.tagName !== 'path' || !el.closest('#arrows')) return false;
     var s = lineStrokeSrc(el);
@@ -1436,9 +1466,19 @@
     return true;
   }
   function fixAllLines(svg) {
-    svg.querySelectorAll('#arrows path').forEach(function (el) {
-      if (isLineStroke(el)) applyLineStroke(el);
-      if (isLineFill(el))   applyLineFill(el);
+    LINE_DOM_LAYER_IDS.forEach(function (id) {
+      var layer = svg.querySelector('#' + id);
+      if (!layer) return;
+      layer.querySelectorAll('path').forEach(function (el) {
+        if (id === 'arrows') {
+          // #arrows: strokes (incl. group-inherited) AND filled block-arrow shapes.
+          if (isLineStroke(el)) applyLineStroke(el);
+          if (isLineFill(el))   applyLineFill(el);
+        } else if (isLineCluePath(el)) {
+          // Other layers (#overlay Hijinks lines): plain fill:none stroke lines.
+          applyLineStroke(el);
+        }
+      });
     });
   }
 
@@ -4329,7 +4369,15 @@
   // filled arrow shapes via isLineFill). A path that is both stroked AND filled (the
   // #CFCFCF block arrows / diamonds) appears in both; harmless — the objColored/objGray
   // highlight de-dupes to cell outlines.
-  function objLineStrokeSources() { return hqa('#arrows path').filter(isLineStroke); }
+  function objLineStrokeSources() {
+    var out = hqa('#arrows path').filter(isLineStroke);
+    LINE_DOM_LAYER_IDS.forEach(function (id) {
+      if (id === 'arrows') return;                 // handled above (block-arrow strokes too)
+      out = out.concat(hqa('#' + id + ' path').filter(isLineCluePath));
+    });
+    return out;
+  }
+  // Block-arrow FILL shapes live only in #arrows; other line layers are fill:none.
   function objLineFillSources()   { return hqa('#arrows path').filter(isLineFill); }
   // The grayscale #overlay marker texts Object-shading governs — mirrors
   // fixOverlayMarkerText's gates (skip Kropki labels; original colour must be gray).
@@ -6395,25 +6443,16 @@
   // ATTRIBUTE (author's original colour; our object-shading only rewrites inline
   // style). Thermos (cp.thermos) and arrows (marker-end) are excluded.
   //
-  // DOM SOURCE = #arrows AND #overlay (v3.83). SudokuPad renders cosmetic lines
-  // to DIFFERENT layers depending on how the puzzle was authored: the usual
-  // `lines[]` go to #arrows, but some puzzles (2hk0wen7pj "Hijinks") have NO
-  // cp.lines at all and render their coloured lines as stroked, fill:none <path>s
-  // inside #overlay instead. Scanning both (a path spanning ≥2 grid cells; marker
-  // hexagons/shapes have a fill and/or collapse to one cell, so they're excluded)
-  // is the general fix — every line validator reads through here, so all of them
-  // gain the #overlay puzzles at once. De-duped by colour+cells so a line present
-  // in both layers isn't counted twice.
+  // DOM source = the shared LINE_DOM_LAYER_IDS layers (#arrows + #overlay), gated by
+  // the shared isLineCluePath predicate — see that block for why lines live in more
+  // than one layer and which subsystems must stay in sync. De-duped by colour+cells
+  // so a line present in both layers isn't counted twice.
   function scanLineLayer(layer, cs, inGrid, out, seen) {
     if (!layer) return;
     layer.querySelectorAll('path').forEach(function (p) {
-      if (p.getAttribute('marker-end')) return;                    // Arrow shaft, not a line clue
-      var fill = p.getAttribute('fill');
-      if (fill && fill !== 'none') return;
+      if (!isLineCluePath(p)) return;                              // shared clue-line gate (see isLineCluePath)
       var stroke = lineStrokeSrc(p);
-      if (!stroke || stroke === 'none') return;
       var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
-      if (!nums || nums.length < 4) return;
       var wp = [];
       for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
       var keys = expandLineChain(wp);
@@ -6441,8 +6480,9 @@
     var cs = getGridCellSize();
     if (!cs) return out;
     var seen = {};
-    scanLineLayer(document.getElementById('arrows'), cs, inGrid, out, seen);
-    scanLineLayer(document.getElementById('overlay'), cs, inGrid, out, seen);
+    LINE_DOM_LAYER_IDS.forEach(function (id) {
+      scanLineLayer(document.getElementById(id), cs, inGrid, out, seen);
+    });
     return out;
   }
 
