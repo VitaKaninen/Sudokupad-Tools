@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.82.0
+// @version      3.83.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.82.0';
+  var SCRIPT_VERSION = '3.83.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6391,9 +6391,39 @@
   }
 
   // Every cosmetic line as { color, keys } — from the MODEL (cp.lines), falling
-  // back to stroked #arrows <path>s for cosmetic-only puzzles. Reads the STROKE
+  // back to stroked <path>s in the DOM for cosmetic-only puzzles. Reads the STROKE
   // ATTRIBUTE (author's original colour; our object-shading only rewrites inline
   // style). Thermos (cp.thermos) and arrows (marker-end) are excluded.
+  //
+  // DOM SOURCE = #arrows AND #overlay (v3.83). SudokuPad renders cosmetic lines
+  // to DIFFERENT layers depending on how the puzzle was authored: the usual
+  // `lines[]` go to #arrows, but some puzzles (2hk0wen7pj "Hijinks") have NO
+  // cp.lines at all and render their coloured lines as stroked, fill:none <path>s
+  // inside #overlay instead. Scanning both (a path spanning ≥2 grid cells; marker
+  // hexagons/shapes have a fill and/or collapse to one cell, so they're excluded)
+  // is the general fix — every line validator reads through here, so all of them
+  // gain the #overlay puzzles at once. De-duped by colour+cells so a line present
+  // in both layers isn't counted twice.
+  function scanLineLayer(layer, cs, inGrid, out, seen) {
+    if (!layer) return;
+    layer.querySelectorAll('path').forEach(function (p) {
+      if (p.getAttribute('marker-end')) return;                    // Arrow shaft, not a line clue
+      var fill = p.getAttribute('fill');
+      if (fill && fill !== 'none') return;
+      var stroke = lineStrokeSrc(p);
+      if (!stroke || stroke === 'none') return;
+      var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+      if (!nums || nums.length < 4) return;
+      var wp = [];
+      for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
+      var keys = expandLineChain(wp);
+      if (keys.length < 2 || !keys.every(inGrid)) return;
+      var sig = normLineColor(stroke) + '|' + keys.join(' ');
+      if (seen[sig]) return;
+      seen[sig] = 1;
+      out.push({ color: stroke, keys: keys });
+    });
+  }
   function getCosmeticLines() {
     var N = detectGridSize();
     function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
@@ -6408,22 +6438,11 @@
       });
       if (out.length > 0) return out;
     }
-    var arrows = document.getElementById('arrows');
     var cs = getGridCellSize();
-    if (!arrows || !cs) return out;
-    arrows.querySelectorAll('path').forEach(function (p) {
-      if (p.getAttribute('marker-end')) return;                    // Arrow shaft, not a line clue
-      var fill = p.getAttribute('fill');
-      if (fill && fill !== 'none') return;
-      var stroke = lineStrokeSrc(p);
-      if (!stroke || stroke === 'none') return;
-      var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
-      if (!nums || nums.length < 4) return;
-      var wp = [];
-      for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
-      var keys = expandLineChain(wp);
-      if (keys.length >= 2 && keys.every(inGrid)) out.push({ color: stroke, keys: keys });
-    });
+    if (!cs) return out;
+    var seen = {};
+    scanLineLayer(document.getElementById('arrows'), cs, inGrid, out, seen);
+    scanLineLayer(document.getElementById('overlay'), cs, inGrid, out, seen);
     return out;
   }
 
@@ -7354,24 +7373,43 @@
     if (Object.keys(colors).length === 1) return all;
     return linesForClauseColor(all, blob, THERMO_CLAUSE_RE) || [];
   }
-  // Cell keys that carry a cell-centred marker shape (any model overlay/underlay
-  // ≥0.3 cell wide whose centre sits on a cell centre — border-riding shapes
-  // like Kropki dots are rejected by the centre test). A marker cluster (the
-  // Hijinks hexagon is several rotated rects) collapses to one key.
-  function endpointMarkerCells() {
-    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
-      ? Framework.app.puzzle.currentPuzzle : null;
-    var out = {};
-    if (!cp) return out;
-    ([]).concat(cp.overlays || [], cp.underlays || []).forEach(function (o) {
-      if (!o || !Array.isArray(o.center) || o.center.length < 2) return;
-      var w = parseFloat(o.width) || 0, h = parseFloat(o.height) || 0;
-      if (Math.max(w, h) < 0.3) return;
-      var col = Math.round(o.center[0] - 0.5), row = Math.round(o.center[1] - 0.5);
-      if (Math.abs(o.center[0] - col - 0.5) > 0.3 || Math.abs(o.center[1] - row - 0.5) > 0.3) return;
-      out[col + ',' + row] = 1;
-    });
-    return out;
+  // Marker cells grouped by NORMALISED COLOUR — filled cosmetic shapes read from
+  // the DOM (#overlay/#underlay), keyed by fill colour. Used to find a thermo
+  // line's start/position-1 marker.
+  //
+  // DOM, NOT the model (v3.83): SudokuPad's cosmetic model arrays can be stored
+  // TRANSPOSED relative to what it renders (2hk0wen7pj "Hijinks": cp.cosmetic
+  // centres are row/col-swapped vs the #overlay geometry), so a model read
+  // matches the wrong cells. The DOM is the single source of truth and shares the
+  // lines' coordinate space. COLOUR-KEYED because the position-1 hexagon is drawn
+  // in its LINE's colour — so a line finds its OWN marker and ignores white
+  // hexagon backgrounds and other lines' markers. A marker = a filled (fill≠none)
+  // rect/path/polygon roughly cell-sized (0.15–1.1 cell, excludes the lines
+  // themselves (fill:none) and big region fills) whose bbox centre lands on a
+  // cell centre; a hexagon is a CLUSTER of rects at one cell → collapses to that
+  // key. Returns { normColor: { 'c,r': 1 } }.
+  function markerCellsByColor() {
+    var cs = getGridCellSize(), N = detectGridSize();
+    var map = {};
+    if (!cs) return map;
+    function scan(layer) {
+      if (!layer) return;
+      layer.querySelectorAll('rect,path,polygon').forEach(function (e) {
+        var fill = e.getAttribute('fill');
+        if (!fill || fill === 'none') return;
+        var bb; try { bb = e.getBBox(); } catch (x) { return; }
+        var w = bb.width / cs, h = bb.height / cs;
+        if (Math.max(w, h) < 0.15 || Math.min(w, h) > 1.1) return;
+        var col = Math.round((bb.x + bb.width / 2) / cs - 0.5);
+        var row = Math.round((bb.y + bb.height / 2) / cs - 0.5);
+        if (col < 0 || col >= N || row < 0 || row >= N) return;
+        var key = normLineColor(fill);
+        (map[key] = map[key] || {})[col + ',' + row] = 1;
+      });
+    }
+    scan(document.getElementById('overlay'));
+    scan(document.getElementById('underlay'));
+    return map;
   }
 
   // Thermometers, model source preferred (accurate + branch-aware for native
@@ -7387,11 +7425,12 @@
     var bulbless = 0;
     try {
       var cand = cueThermoLines();
-      var markers = cand.length ? endpointMarkerCells() : null;
+      var markerMap = cand.length ? markerCellsByColor() : null;
       cand.forEach(function (l) {
         if (l.keys.every(function (k) { return covered[k]; })) return;   // already detected by model/DOM
-        var atStart = markers[l.keys[0]] ? 1 : 0;
-        var atEnd = markers[l.keys[l.keys.length - 1]] ? 1 : 0;
+        var set = (markerMap && markerMap[normLineColor(l.color)]) || {};
+        var atStart = set[l.keys[0]] ? 1 : 0;
+        var atEnd = set[l.keys[l.keys.length - 1]] ? 1 : 0;
         if (atStart + atEnd !== 1) { bulbless++; return; }               // no marker / both ends → unorientable
         chains.push(atStart ? l.keys.slice() : l.keys.slice().reverse());
       });
