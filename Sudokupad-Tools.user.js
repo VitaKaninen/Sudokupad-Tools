@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.80.0
+// @version      3.81.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.80.0';
+  var SCRIPT_VERSION = '3.81.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6398,12 +6398,39 @@
     return p.r + ',' + p.g + ',' + p.b;
   }
 
+  // A line whose cells all lie on ONE detected thermometer is that thermo's
+  // SHAFT, not an independent clue — green thermos exist (qpd5keiva9
+  // "Equipoise": thermos drawn as green cp.lines + bulb underlays, rules all
+  // about thermometers, no whisper anywhere), so the colour-trust layer must
+  // not claim it. Scoped to whisper layer 1 ONLY: the cue-gated layers already
+  // demand whisper language in the rules, and a cue-bearing line drawn exactly
+  // on top of a thermo (stacked clues, e.g. kszsitwn8p's modular-lines-on-
+  // thermos) must stay in the cosmetic pool for its own validator.
+  function thermoClaimedSets() {
+    try {
+      return getThermos().map(function (t) {
+        var s = {};
+        t.keys.forEach(function (k) { s[k] = 1; });
+        return s;
+      });
+    } catch (e) { return []; }
+  }
+  function lineOnThermo(keys, sets) {
+    return sets.some(function (s) {
+      return keys.every(function (k) { return s[k]; });
+    });
+  }
+
   // Classify the puzzle's cosmetic lines into whisper lines + a confidence mode.
   // Returns { mode:'confident'|'ambiguous'|'none', lines:[[keys]…], allLines:[{color,keys}] }.
   function classifyWhisperLines() {
     var all = getCosmeticLines();
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
     var green = all.filter(function (l) { return isGermanWhisperColor(l.color); });
+    if (green.length > 0) {
+      var tsets = thermoClaimedSets();
+      green = green.filter(function (l) { return !lineOnThermo(l.keys, tsets); });
+    }
     if (green.length > 0) return { mode: 'confident', lines: green.map(function (l) { return l.keys; }), allLines: all };
 
     var cue = hasWhisperRuleCue();
