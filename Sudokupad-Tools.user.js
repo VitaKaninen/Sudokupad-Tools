@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.77.0
+// @version      3.78.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.77.0';
+  var SCRIPT_VERSION = '3.78.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -288,6 +288,8 @@
     validateArrowEnabled:         true,   // "Validate Constraints": run the sum-arrow validator (shaft digits sum to the circle digit)
     validateRenbanEnabled:        true,   // "Validate Constraints": run the renban validator (line = a set of consecutive distinct digits, any order)
     validateRegionSumEnabled:     true,   // "Validate Constraints": run the region-sum-line validator (box/region borders split the line into equal-sum segments)
+    validateParityEnabled:        true,   // "Validate Constraints": run the parity-line validator (adjacent digits alternate odd/even along the line)
+    validateZipperEnabled:        true,   // "Validate Constraints": run the zipper-line validator (equidistant-from-centre pairs share one sum; odd line's centre IS that sum)
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
@@ -6433,6 +6435,31 @@
   function regionSumDetected() { return classifyRegionSumLines().mode !== 'none'; }
   function regionSumIsAmbiguous() { return classifyRegionSumLines().mode === 'ambiguous'; }
 
+  // Parity lines: adjacent digits alternate odd/even along the line. Catalog rules
+  // phrase it as "parity line(s)", "alternate between odd and even", "adjacent
+  // digits may not have the same parity", "cells alternate in parity" (35/35 real
+  // puzzles agree on this rule). Cue = the word "parity" near "line"/"alternate",
+  // or "alternate … odd/even" / "same parity" phrasing. Usual colour is red, but
+  // colour alone can't discriminate a cosmetic line, so cue-gated like renban.
+  // Clause trigger for the named-colour layer: parity / alternate / odd / even.
+  var PARITY_CUE_RE = /parity\s+lines?|alternat\w*[^.]*parit|parit\w*[^.]*alternat|alternat\w*\s+(?:between\s+)?(?:odd|even)|(?:same|different|opposite)\s+parit|(?:odd|even)\s*\/\s*(?:odd|even)/;
+  var PARITY_CLAUSE_RE = /parit|alternat|odd|even/;
+  function classifyParityLines() { return classifyCueLines(PARITY_CUE_RE, PARITY_CLAUSE_RE); }
+  function parityDetected() { return classifyParityLines().mode !== 'none'; }
+  function parityIsAmbiguous() { return classifyParityLines().mode === 'ambiguous'; }
+
+  // Zipper lines: fold the line at its centre — every pair of cells equidistant
+  // from the centre sums to one constant total S; for an odd-length line the lone
+  // centre cell IS S. Cue = "zipper", or "equal distance from the cent(re)" /
+  // "equidistant … cent(re)" phrasing. Cue-gated like renban (no native key, and
+  // its colour — often blue/purple — collides with other cosmetic lines). Clause
+  // trigger for the named-colour layer: zipper / equidistant / equal distance.
+  var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
+  var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
+  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE); }
+  function zipperDetected() { return classifyZipperLines().mode !== 'none'; }
+  function zipperIsAmbiguous() { return classifyZipperLines().mode === 'ambiguous'; }
+
   // Resolve which line chains a cue-gated validator should check + whether removals
   // are MASKED to the selection. CONFIDENT mode → the classifier's pinned lines,
   // filtered by the shared whole-clue unitFilter (selection-only + fog). AMBIGUOUS
@@ -6794,6 +6821,216 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, regionSumCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Parity-line validator ─────────────────────────────────────────────────
+  // A parity line: adjacent cells alternate odd/even, so the whole line is a
+  // 2-colouring with exactly TWO possible phases — either the even indices are
+  // odd and the odd indices even, or the reverse. Phase p (0|1) requires parity
+  // ((i + p) % 2) at index i (0 = even, 1 = odd, matching digit % 2). A phase is
+  // FEASIBLE iff every cell can supply its required parity from its current
+  // candidates; a candidate d in cell i survives iff some feasible phase wants
+  // d's parity there. CANDIDATE-ELIMINATION CONTRACT: no over-removal (a fogged /
+  // empty cell reads as the full set → supplies both parities → never constrains).
+  // A closed loop's duplicated endpoint is dropped (path model — the wrap edge is
+  // intentionally not enforced; under-constrains a loop, never over-removes).
+  // Both phases infeasible → every candidate unsupported → cells emptied → the run
+  // toast reports the red "no valid combination" contradiction (uniform signal).
+  function computeParityRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyParityLines();
+    if (cls.mode === 'none') return { noParity: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noParity: true, needSelection: true };
+    if (res.lines.length === 0) return { noParity: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Can this cell (from its readable candidates) supply a digit of parity `par`?
+    function hasParity(key, par) {
+      var found = false;
+      cellSet(key).forEach(function (d) { if ((d % 2) === par) found = true; });
+      return found;
+    }
+    var lineData = lines.map(function (keys) {
+      if (keys.length > 2 && keys[0] === keys[keys.length - 1]) return keys.slice(0, -1);
+      return keys;
+    });
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (keys) {
+        var feasible = [false, false];
+        for (var p = 0; p < 2; p++) {
+          var ok = true;
+          for (var i = 0; i < keys.length; i++) {
+            if (!hasParity(keys[i], (i + p) % 2)) { ok = false; break; }
+          }
+          feasible[p] = ok;
+        }
+        keys.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+          Array.from(work[C]).forEach(function (d) {               // snapshot: set mutates in loop
+            var par = d % 2;
+            var ok = (feasible[0] && par === (i % 2)) || (feasible[1] && par === ((i + 1) % 2));
+            if (!ok) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, parityCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Zipper-line validator ─────────────────────────────────────────────────
+  // A zipper line: fold it at the geometric centre. Each pair of cells the same
+  // distance from the centre sums to one shared total S; an odd-length line's lone
+  // centre cell IS S. S is VARIABLE (like the arrow circle / region-sum target),
+  // so — because the pairs are independent given S — enumerate per pair the set of
+  // achievable sums and, per (cell,digit), which sums it can reach; overall
+  // feasible S = the intersection across every pair (∩ the centre's candidates on
+  // an odd line). A paired candidate d survives iff some overall-feasible S is
+  // reachable with d in its cell (partner holding S−d, distinct where they share a
+  // unit); the centre candidate d survives iff d ∈ overall. Distinctness is
+  // enforced ONLY for guaranteed sudoku units (same row/col/region) — never
+  // over-removes (skipping a genuine constraint only under-constrains). Iterated
+  // to a fixpoint; no common S given the marks → all candidates emptied → the run
+  // reports the red contradiction (uniform signal, same as region-sum).
+  function computeZipperRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyZipperLines();
+    if (cls.mode === 'none') return { noZipper: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noZipper: true, needSelection: true };
+    if (res.lines.length === 0) return { noZipper: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var regionMap = getModelRegionMap();   // { "row,col" : logicalId } | null
+    function regionId(key) {
+      var p = key.split(','), col = +p[0], row = +p[1];
+      if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
+      return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);
+    }
+    // Two paired cells must differ only where an ordinary sudoku unit forbids a
+    // repeat — same row, column, or box/region (all guaranteed true → safe).
+    function mustDiffer(a, b) {
+      var ap = a.split(','), bp = b.split(',');
+      return ap[0] === bp[0] || ap[1] === bp[1] || regionId(a) === regionId(b);
+    }
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Fold structure is fixed by geometry: pairs + optional lone centre (odd line).
+    var lineData = lines.map(function (keys) {
+      var pairs = [], L = keys.length;
+      for (var i = 0; i < Math.floor(L / 2); i++) pairs.push([keys[i], keys[L - 1 - i]]);
+      var centre = (L % 2 === 1) ? keys[(L - 1) / 2] : null;
+      return { keys: keys, pairs: pairs, centre: centre };
+    }).filter(function (ld) { return ld.pairs.length > 0; });     // a 1-cell "line" carries nothing
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        // Per pair: achievable sums + per-(side-digit) the sums it participates in.
+        var pairSums = ld.pairs.map(function (pr) {
+          var A = Array.from(cellSet(pr[0])), B = Array.from(cellSet(pr[1]));
+          var diff = mustDiffer(pr[0], pr[1]);
+          var feas = new Set(), aMap = new Map(), bMap = new Map();
+          A.forEach(function (da) {
+            B.forEach(function (db) {
+              if (diff && da === db) return;
+              var s = da + db;
+              feas.add(s);
+              if (!aMap.has(da)) aMap.set(da, new Set()); aMap.get(da).add(s);
+              if (!bMap.has(db)) bMap.set(db, new Set()); bMap.get(db).add(s);
+            });
+          });
+          return { feas: feas, aMap: aMap, bMap: bMap };
+        });
+        var overall = null;                                        // ∩ of every pair's achievable sums
+        pairSums.forEach(function (ps) {
+          if (overall === null) { overall = new Set(ps.feas); return; }
+          var nx = new Set(); overall.forEach(function (s) { if (ps.feas.has(s)) nx.add(s); }); overall = nx;
+        });
+        if (ld.centre != null) {                                   // odd line: centre value must equal S
+          var cc = cellSet(ld.centre), nx = new Set();
+          overall.forEach(function (s) { if (cc.has(s)) nx.add(s); }); overall = nx;
+        }
+        // overall.size === 0 → no common S given the marks → every candidate below
+        // is unsupported → the loop empties the cells (the contradiction signal).
+        ld.pairs.forEach(function (pr, pi) {
+          var ps = pairSums[pi];
+          [[pr[0], ps.aMap], [pr[1], ps.bMap]].forEach(function (side) {
+            var C = side[0], map = side[1];
+            if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+            Array.from(work[C]).forEach(function (d) {             // snapshot: set mutates in loop
+              var sums = map.get(d), ok = false;
+              if (sums) sums.forEach(function (s) { if (overall.has(s)) ok = true; });
+              if (!ok) {
+                work[C].delete(d);
+                var k = C + '/' + d;
+                if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+                changed = true;
+              }
+            });
+          });
+        });
+        if (ld.centre != null) {
+          var Cc = ld.centre;
+          if (st.values[Cc] == null && work[Cc] && mayRemove(Cc)) {
+            Array.from(work[Cc]).forEach(function (d) {
+              if (!overall.has(d)) {
+                work[Cc].delete(d);
+                var k = Cc + '/' + d;
+                if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: Cc, digit: String(d) }); }
+                changed = true;
+              }
+            });
+          }
+        }
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, zipperCount: lineData.length, emptiedCells: emptied };
   }
 
   // ── Thermo validator ──────────────────────────────────────────────────────
@@ -7528,6 +7765,10 @@
         detect: renbanDetected, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
       { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines', enabled: function () { return settings.validateRegionSumEnabled !== false; },
         detect: regionSumDetected, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
+      { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines', enabled: function () { return settings.validateParityEnabled !== false; },
+        detect: parityDetected, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
+      { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines', enabled: function () { return settings.validateZipperEnabled !== false; },
+        detect: zipperDetected, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
     ];
   }
   function detectedValidators() {
@@ -8019,6 +8260,10 @@
           addNote('⚠ Couldn\'t identify the renban line — select its cells first, then click above. Only selected cells change.');
         if (def.name === 'region sum' && regionSumIsAmbiguous())
           addNote('⚠ Couldn\'t identify the region-sum line — select its cells first, then click above. Only selected cells change.');
+        if (def.name === 'parity' && parityIsAmbiguous())
+          addNote('⚠ Couldn\'t identify the parity line — select its cells first, then click above. Only selected cells change.');
+        if (def.name === 'zipper' && zipperIsAmbiguous())
+          addNote('⚠ Couldn\'t identify the zipper line — select its cells first, then click above. Only selected cells change.');
       });
     }
     addSep();
