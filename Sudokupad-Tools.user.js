@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.81.0
+// @version      3.82.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.81.0';
+  var SCRIPT_VERSION = '3.82.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6283,12 +6283,13 @@
   // Saturation/lightness terms handle the achromatic words (grey/black/white) and
   // brown (a dark, muted, warm hue). Canonicalises violet→purple, magenta→pink,
   // gray→grey. `rgbToHsl` returns [h,s,l] with h in [0,1); we work in degrees.
-  var COLOR_WORD_HUE = { red: 0, orange: 30, yellow: 55, green: 120, blue: 210, purple: 275, pink: 320 };
-  var COLOR_WORD_ALL = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'violet', 'pink', 'magenta', 'brown', 'grey', 'gray', 'black', 'white'];
+  var COLOR_WORD_HUE = { red: 0, orange: 30, yellow: 55, green: 120, cyan: 180, blue: 210, purple: 275, pink: 320 };
+  var COLOR_WORD_ALL = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'violet', 'pink', 'magenta', 'brown', 'grey', 'gray', 'black', 'white', 'cyan', 'turquoise', 'teal', 'aqua'];
   function canonColorWord(w) {
     if (w === 'violet') return 'purple';
     if (w === 'magenta') return 'pink';
     if (w === 'gray') return 'grey';
+    if (w === 'turquoise' || w === 'teal' || w === 'aqua') return 'cyan';
     return w;
   }
   function circularHueDeg(a, b) { var d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
@@ -6301,12 +6302,18 @@
       case 'white': return (1 - l) * 360 + s * 120;
       case 'grey':                                                  // low saturation, mid lightness
         return s * 300 + Math.max(0, 0.12 - l) * 600 + Math.max(0, l - 0.90) * 600;
-      case 'brown':                                                 // dark, muted, warm hue
-        return circularHueDeg(h, 28) + Math.max(0, l - 0.42) * 400 + Math.max(0, 0.12 - s) * 300;
+      case 'brown':                                                 // muted warm hue; light tans still
+        // read as "light brown" in rules text (2hk0wen7pj), so the lightness
+        // penalty is gentle — 400 made tan lose to PURPLE in a legend retry.
+        return circularHueDeg(h, 28) + Math.max(0, l - 0.42) * 200 + Math.max(0, 0.12 - s) * 300;
       default: {
         var hue = COLOR_WORD_HUE[word];
         if (hue == null) return Infinity;
         var d = circularHueDeg(h, hue);
+        // Setters rarely write "cyan" — teal-leaning blues ("#2ecbff", hue 195°)
+        // are called BLUE in rules; the handicap keeps them there while true
+        // turquoise (~180°) still lands on cyan.
+        if (word === 'cyan') d += 12;
         d += Math.max(0, 0.25 - s) * 600;                           // washed-out → grey, not a vivid hue
         d += Math.max(0, 0.10 - l) * 400 + Math.max(0, l - 0.95) * 400;
         if ((word === 'red' || word === 'orange' || word === 'yellow') && l < 0.42 && s > 0.2 && s < 0.85)
@@ -6333,25 +6340,54 @@
   // legend happens to name only one colour.
   function lineColorWord(l) { return nearestColorWord(parseColor(l.color), COLOR_WORD_ALL); }
   // The canonical colour word named in the first rules clause matching clauseRe.
+  // Whole-word match ONLY: "coloured" must not read as "red", "constant" as "tan".
+  function colorWordRe(w) { return new RegExp('\\b' + w + '\\b'); }
   function clauseColorWord(blob, clauseRe) {
     var clauses = blob.split(/[.\n;]/);
     for (var i = 0; i < clauses.length; i++) {
       if (!clauseRe.test(clauses[i])) continue;
       for (var j = 0; j < COLOR_WORD_ALL.length; j++)
-        if (clauses[i].indexOf(COLOR_WORD_ALL[j]) !== -1) return canonColorWord(COLOR_WORD_ALL[j]);
+        if (colorWordRe(COLOR_WORD_ALL[j]).test(clauses[i])) return canonColorWord(COLOR_WORD_ALL[j]);
     }
     return null;
+  }
+  // Every canonical colour word named ANYWHERE in the rules blob (the puzzle's
+  // colour legend). Used by the legend-retry below.
+  function blobColorWords(blob) {
+    var seen = {}, out = [];
+    COLOR_WORD_ALL.forEach(function (w) {
+      if (!colorWordRe(w).test(blob)) return;
+      var c = canonColorWord(w);
+      if (!seen[c]) { seen[c] = 1; out.push(c); }
+    });
+    return out;
   }
   // Lines whose classified colour equals the colour this clause names. Because each
   // line is classified ABSOLUTELY against the full palette, a brown line can't be
   // mistaken for the red clue (brown is a nearer palette word than red), and a
   // non-matching-colour line is never swept in. Returns matched [{color,keys}] or
   // null (clause names no colour / no line lands on it → caller falls to AMBIGUOUS).
+  //
+  // LEGEND RETRY (v3.82): the absolute test can miss a colour the setter names
+  // loosely — "light brown" lines drawn #dfc39c classify absolutely as ORANGE
+  // (2hk0wen7pj "Hijinks"), so the brown clue matched nothing. When the absolute
+  // pass finds no line AND the rules name ≥2 distinct colours (a true multi-line
+  // legend), re-classify each line against ONLY the legend's words — the rival
+  // legend words keep the match honest (purple/turquoise pull their own lines
+  // away), so tan lands on brown. The ≥2 guard keeps the v3.80 protection: with a
+  // single named colour there are no rivals, and a legend-restricted match would
+  // sweep EVERY line onto that word (the exact bug v3.80 fixed).
   function linesForClauseColor(all, blob, clauseRe) {
     var word = clauseColorWord(blob, clauseRe);
     if (!word) return null;
     var matched = all.filter(function (l) { return lineColorWord(l) === word; });
-    return matched.length > 0 ? matched : null;
+    if (matched.length > 0) return matched;
+    var legend = blobColorWords(blob);
+    if (legend.length >= 2) {
+      matched = all.filter(function (l) { return nearestColorWord(parseColor(l.color), legend) === word; });
+      if (matched.length > 0) return matched;
+    }
+    return null;
   }
 
   // Every cosmetic line as { color, keys } — from the MODEL (cp.lines), falling
@@ -6421,12 +6457,33 @@
     });
   }
 
+  // RIVAL-CUE negative evidence for the green-trust layer (v3.82): if the rules
+  // NAME green for some OTHER line rule and never say anything whisper-shaped in
+  // a green clause ("green lines are thermometers" — bulbless green thermos have
+  // no bulb for the thermo-claim filter to find), green is not a whisper here.
+  // Rules that never mention green at all keep the trust (the usual convention:
+  // green whisper lines with no colour named). \bdiffer(s|ence)?\b — plain
+  // "different" must NOT count as whisper language ("green thermometers … may
+  // sum to different totals", qpd5keiva9).
+  var WHISPERISH_RE = /whisper|\bdiffer(s|ence)?\b/;
+  function greenNamedForRival() {
+    var clauses = getPuzzleRulesBlob().split(/[.\n;]/);
+    var named = false, whispered = false;
+    clauses.forEach(function (cl) {
+      if (!/\bgreen\b/.test(cl)) return;
+      named = true;
+      if (WHISPERISH_RE.test(cl)) whispered = true;
+    });
+    return named && !whispered;
+  }
+
   // Classify the puzzle's cosmetic lines into whisper lines + a confidence mode.
   // Returns { mode:'confident'|'ambiguous'|'none', lines:[[keys]…], allLines:[{color,keys}] }.
   function classifyWhisperLines() {
     var all = getCosmeticLines();
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
     var green = all.filter(function (l) { return isGermanWhisperColor(l.color); });
+    if (green.length > 0 && greenNamedForRival()) green = [];
     if (green.length > 0) {
       var tsets = thermoClaimedSets();
       green = green.filter(function (l) { return !lineOnThermo(l.keys, tsets); });
@@ -6442,7 +6499,7 @@
     if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
 
     // Layer 3 — cue + a colour the rules name for the whisper (nearest-legend match).
-    var wmatched = linesForClauseColor(all, getPuzzleRulesBlob(), /whisper|differ|difference/);
+    var wmatched = linesForClauseColor(all, getPuzzleRulesBlob(), WHISPERISH_RE);
     if (wmatched) return { mode: 'confident', lines: wmatched.map(function (l) { return l.keys; }), allLines: all };
 
     // Layer 4 — a whisper is present but its line can't be pinned → manual select.
@@ -7271,13 +7328,77 @@
     return chains;
   }
 
+  // ── Cue-gated COSMETIC thermo layer (v3.82) ─────────────────────────────────
+  // Some puzzles draw thermos with NO bulb circle at all — the rules say which
+  // lines are thermos ("PURPLE LINES are thermos", 2hk0wen7pj "Hijinks") and a
+  // non-circular START MARKER (Hijinks: a hexagon built from rotated rect
+  // overlays) shows where the low end is. Model + DOM detection both come up
+  // empty there. This layer pins the thermo lines from the rules text exactly
+  // like the other cosmetic-line validators (thermo cue → single colour → named
+  // colour; no cue → nothing), then ORIENTS each line by finding a cell-centred
+  // overlay/underlay shape at EXACTLY one endpoint. A pinned line with no such
+  // marker (or one at both ends) is a BULBLESS thermo: the bulb could be
+  // anywhere along it, so NOTHING is checkable — it is never validated, only
+  // counted so the validator can tell the player why it was skipped.
+  // Per the standing policy, clues are always treated as TRUE for validation —
+  // liar/wrogn mechanics are the solver's problem, never detection's.
+  var THERMO_CUE_RE = /thermo/;
+  var THERMO_CLAUSE_RE = /thermo/;
+  function cueThermoLines() {
+    var blob = getPuzzleRulesBlob();
+    if (!THERMO_CUE_RE.test(blob)) return [];
+    var all = getCosmeticLines();
+    if (all.length === 0) return [];
+    var colors = {};
+    all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
+    if (Object.keys(colors).length === 1) return all;
+    return linesForClauseColor(all, blob, THERMO_CLAUSE_RE) || [];
+  }
+  // Cell keys that carry a cell-centred marker shape (any model overlay/underlay
+  // ≥0.3 cell wide whose centre sits on a cell centre — border-riding shapes
+  // like Kropki dots are rejected by the centre test). A marker cluster (the
+  // Hijinks hexagon is several rotated rects) collapses to one key.
+  function endpointMarkerCells() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    var out = {};
+    if (!cp) return out;
+    ([]).concat(cp.overlays || [], cp.underlays || []).forEach(function (o) {
+      if (!o || !Array.isArray(o.center) || o.center.length < 2) return;
+      var w = parseFloat(o.width) || 0, h = parseFloat(o.height) || 0;
+      if (Math.max(w, h) < 0.3) return;
+      var col = Math.round(o.center[0] - 0.5), row = Math.round(o.center[1] - 0.5);
+      if (Math.abs(o.center[0] - col - 0.5) > 0.3 || Math.abs(o.center[1] - row - 0.5) > 0.3) return;
+      out[col + ',' + row] = 1;
+    });
+    return out;
+  }
+
   // Thermometers, model source preferred (accurate + branch-aware for native
-  // puzzles), DOM fallback for cosmetic-only ones (see getThermoChainsFromDOM).
-  function getThermos() {
+  // puzzles), DOM fallback for cosmetic-only ones (see getThermoChainsFromDOM),
+  // plus the cue-gated cosmetic layer above. Returns { trees, bulbless } —
+  // bulbless = cue-pinned thermo lines that could not be oriented (skipped,
+  // reported to the player by the validator's toast).
+  function getThermoDetection() {
     var chains = getThermoChainsFromModel();
     if (chains.length === 0) chains = getThermoChainsFromDOM();
-    return chains.length ? buildThermoTrees(chains) : [];
+    var covered = {};
+    chains.forEach(function (ch) { ch.forEach(function (k) { covered[k] = 1; }); });
+    var bulbless = 0;
+    try {
+      var cand = cueThermoLines();
+      var markers = cand.length ? endpointMarkerCells() : null;
+      cand.forEach(function (l) {
+        if (l.keys.every(function (k) { return covered[k]; })) return;   // already detected by model/DOM
+        var atStart = markers[l.keys[0]] ? 1 : 0;
+        var atEnd = markers[l.keys[l.keys.length - 1]] ? 1 : 0;
+        if (atStart + atEnd !== 1) { bulbless++; return; }               // no marker / both ends → unorientable
+        chains.push(atStart ? l.keys.slice() : l.keys.slice().reverse());
+      });
+    } catch (e) { /* cue layer must never break the model/DOM sources */ }
+    return { trees: chains.length ? buildThermoTrees(chains) : [], bulbless: bulbless };
   }
+  function getThermos() { return getThermoDetection().trees; }
 
   // Cell-pair sets that forbid a repeat under ordinary Sudoku rules: box/jigsaw
   // regions (cp.cages type:'region', enumerated in full) plus other
@@ -7384,9 +7505,16 @@
   function computeThermoRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
-    var thermos = getThermos();
+    var det = getThermoDetection();
+    var thermos = det.trees;
+    // Bulbless thermo lines (cue-pinned, unorientable) are NEVER validated —
+    // surfaced to the player so a skipped line isn't a silent mystery.
+    var note = det.bulbless > 0
+      ? ('Note: ' + det.bulbless + ' thermo line' + (det.bulbless === 1 ? ' has' : 's have') +
+         ' no bulb marker — the bulb position is unknown, so ' + (det.bulbless === 1 ? 'it was' : 'they were') + ' not checked.')
+      : null;
     if (unitFilter) thermos = thermos.filter(function (t) { return unitFilter(t.keys); });
-    if (thermos.length === 0) return { noThermos: true };
+    if (thermos.length === 0) return { noThermos: true, note: note };
 
     var slow = effectiveThermoSlow();
     var regionCageSets = slow ? getThermoRegionCageSets() : [];
@@ -7444,7 +7572,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied };
+    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied, note: note };
   }
 
   // ── Sum-arrow validator ───────────────────────────────────────────────────
@@ -7824,7 +7952,9 @@
         detect: function () { return getLittleKillers().length > 0; },
         compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
       { name: 'thermo', unitNoun: 'thermometer', menuLabel: 'Thermometers', enabled: function () { return settings.validateThermoEnabled !== false; },
-        detect: function () { return getThermos().length > 0; },
+        // bulbless-only puzzles still list the item: clicking it explains WHY
+        // nothing can be checked (the bulbless note) instead of hiding the row.
+        detect: function () { var d = getThermoDetection(); return d.trees.length > 0 || d.bulbless > 0; },
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
       { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
         detect: whisperDetected, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
@@ -8060,17 +8190,21 @@
   async function applyOneValidator(def, unitFilter) {
     var comp = def.compute(unitFilter);
     if (comp.unsupported) return { unsupported: true };
-    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection };
+    // comp.note = an informational sentence for the result toast (e.g. the
+    // thermo validator's "N bulbless lines were not checked") — carried on
+    // every outcome so a skipped clue is never silent.
+    var note = comp.note || null;
+    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, note: note };
     var count = comp[def.countKey] || 0;
     var removals = comp.removals || [];
-    if (removals.length === 0) return { present: true, removed: 0, count: count };
+    if (removals.length === 0) return { present: true, removed: 0, count: count, note: note };
     var preSnap = snapshotPencilmarks();
     var r = await _removeCandidatesInternal(removals);
     if (r.aborted) {
       var reverted = await revertToSnapshot(preSnap, 12);
-      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted };
+      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, note: note };
     }
-    return { present: true, removed: r.removed, count: count };
+    return { present: true, removed: r.removed, count: count, note: note };
   }
 
   // Run a single validator (a menu pick): lock, compute+apply once, toast.
@@ -8081,21 +8215,24 @@
     var preSnap = snapshotPencilmarks();
     var t0 = performance.now();
     applyOneValidator(def, unitFilter).then(function (res) {
+      function withNote(msg) { return res.note ? msg + ' ' + res.note : msg; }
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (!res.present) {
         if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + (def.menuLabel || def.name) + '" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
-        showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return;
+        // A note explains WHY nothing was checkable (e.g. bulbless thermos) —
+        // that deserves the player's attention, so it warns instead of green.
+        showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), res.note ? 'warning' : 'success'); return;
       }
       if (res.aborted) { validateAbortToast(res.reverted); return; }
       // A removal made changes → offer a post-run Undo (one native-undo group).
       if (res.removed > 0) validatorArmUndo(1, preSnap);
       var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
-      if (res.removed === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
+      if (res.removed === 0) { showRemoveInvalidToast(withNote('Checked ' + checked + ' — no invalid candidates to remove.'), 'success'); return; }
       var emptied = countEmptiedSince(before);
       if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, res.removed, emptied), 'error'); return; }
       var msg = 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
                 ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
-      showRemoveInvalidToast(msg, 'success');
+      showRemoveInvalidToast(withNote(msg), 'success');
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -8114,11 +8251,13 @@
     var t0 = performance.now();
     (async function () {
       var totalRemoved = 0, undoSteps = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
+      var notes = {};   // informational notes (e.g. bulbless thermos), deduped across passes
       var changed = true, guard = 0;
       while (changed && guard++ < 50) {
         changed = false;
         for (var i = 0; i < defs.length; i++) {
           var res = await applyOneValidator(defs[i], unitFilter);
+          if (res.note) notes[res.note] = 1;
           if (res.unsupported) { unsupported = true; break; }
           if (res.aborted) { aborted = true; reverted = res.reverted; break; }
           if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
@@ -8127,25 +8266,26 @@
         passes++;
         if (unsupported || aborted) break;
       }
-      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted };
+      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, notes: Object.keys(notes) };
     })().then(function (s) {
+      function withNotes(msg) { return s.notes.length ? msg + ' ' + s.notes.join(' ') : msg; }
       if (s.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (s.aborted) { validateAbortToast(s.reverted); return; }
       if (s.totalRemoved > 0) validatorArmUndo(s.undoSteps, preSnap);
       var names = Object.keys(s.present);
       if (names.length === 0) {
         var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
-        showRemoveInvalidToast(noneFoundMsg(nouns, !!unitFilter), 'success');
+        showRemoveInvalidToast(withNotes(noneFoundMsg(nouns, !!unitFilter)), s.notes.length ? 'warning' : 'success');
         return;
       }
       var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
-      if (s.totalRemoved === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
+      if (s.totalRemoved === 0) { showRemoveInvalidToast(withNotes('Checked ' + checked + ' — no invalid candidates to remove.'), 'success'); return; }
       var emptied = countEmptiedSince(before);
       if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, s.totalRemoved, emptied), 'error'); return; }
       var msg = 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
                 ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
                 ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
-      showRemoveInvalidToast(msg, 'success');
+      showRemoveInvalidToast(withNotes(msg), 'success');
     }).finally(function () { actionInProgress = false; });
   }
 
