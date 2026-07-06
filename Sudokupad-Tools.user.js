@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Sudoku Tools
+// @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.76.0
+// @version      3.77.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.76.0';
+  var SCRIPT_VERSION = '3.77.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3448,7 +3448,8 @@
       t.closest('#sp-fill-btn-wrap') || t.closest('#sp-clear-btn-wrap') || t.closest('#sp-clearall-btn-wrap') ||
       t.closest('#sp-digit-prompt') ||
       t.closest('#sp-easy-shade-btn') || t.closest('#sp-easy-shade-card') ||
-      t.closest('#sp-validate-btn') || t.closest('#sp-validate-menu')
+      t.closest('#sp-validate-btn') || t.closest('#sp-validate-menu') ||
+      t.closest('#sp-validate-undo-btn')
     );
   }
   BLOCKED_EVENTS.forEach(function (type) {
@@ -6671,7 +6672,11 @@
   // S. Cross-segment same-row/col conflicts are deliberately NOT enforced (they'd
   // couple the segments) — that only UNDER-constrains, never over-removes (same
   // safe-caveat policy as the little killer's jigsaw boxes). Only lines with ≥2
-  // segments carry a constraint; a contradictory line (no common S) is DROPPED.
+  // segments carry a constraint; a contradictory line (no common S) has NO
+  // supported candidate anywhere, so the pass WIPES its marked cells (leaving them
+  // empty) rather than silently dropping the line — the empty cells are then
+  // surfaced to the player as an error by the run toast (the "no valid combination"
+  // path). Silent-drop gave a false all-clear on an invalid line (fixed v3.77).
   function computeRegionSumRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
@@ -6761,7 +6766,12 @@
           overall.forEach(function (s) { if (r.feasible.has(s)) nx.add(s); });
           overall = nx;
         });
-        if (!overall || overall.size === 0) return;              // no common sum → contradictory line, drop
+        if (!overall) return;                                    // defensive: ≥2 segments ⇒ overall is a Set
+        // overall.size === 0 → contradictory line (segments share NO common sum
+        // given the current candidates). Do NOT early-return: no candidate is
+        // supported, so the loop below removes them all, emptying the marked cells.
+        // That empties→error signal is how every validator reports an unsatisfiable
+        // clue — silently dropping the line here gave a false all-clear.
         ld.segs.forEach(function (segKeys, si) {
           var cd = segRes[si].cd;
           segKeys.forEach(function (C, ci) {
@@ -7626,14 +7636,105 @@
     beforeSet.forEach(function (k) { if (st.values[k] == null && !st.centre[k]) n++; });
     return n;
   }
-  function emptiedSuffix(emptied) {
-    if (emptied <= 0) return '';
-    return ' ⚠ ' + emptied + ' cell' + (emptied === 1 ? '' : 's') +
-           ' now ha' + (emptied === 1 ? 's' : 've') + ' no candidates left — check those for a mistake.';
+  // Error text shown when a validator run leaves any cell with NO candidates: the
+  // clue has no valid combination given the current marks. This REPLACES the old
+  // green/■yellow "all clear" — a validator whose job is to check a constraint must
+  // report failure, not success, when the marks can't satisfy it. Shared by every
+  // validator (single + run-all) so the signal is uniform for current AND future
+  // ones: a validator removes only unsupported candidates, so an emptied cell always
+  // means "no combination supports this cell" = a contradiction the player must see.
+  function noValidComboMsg(checked, removed, emptied) {
+    return '⛔ No valid combination found — checked ' + checked + ' and removed ' +
+           removed + ' candidate' + (removed === 1 ? '' : 's') + ', but ' + emptied +
+           ' cell' + (emptied === 1 ? '' : 's') + ' now ha' + (emptied === 1 ? 's' : 've') +
+           ' NO candidates left. The constraint can\'t be satisfied by the current ' +
+           'pencilmarks — there\'s a mistake (or the marks are incomplete). Use the Undo ' +
+           'button (or Ctrl+Z) to restore them.';
   }
   function validateAbortToast(reverted) {
     if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
     else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+  }
+
+  // ── Validator post-run Undo button ─────────────────────────────────────────
+  // Mirrors the Auto-fill Undo: after a validator run REMOVES candidates, a small
+  // "Undo" button appears just LEFT of the Validate Constraints button. It is
+  // offered only while the live board still equals the snapshot taken right after
+  // the run — so any edit hides it, and native-undoing back to that state brings it
+  // back (a MutationObserver on the cell layers drives this). Clicking it re-clicks
+  // the NATIVE undo `steps` times (steps = number of removal groups the run made —
+  // one per validator-apply, each its own groupstart/groupend). While the button is
+  // visible those groups sit on top of the undo stack, so this rewinds exactly this
+  // run and nothing else, leaving the puzzle's own undo/redo history intact.
+  var validatorUndo = { steps: 0, preSnapshot: null, postSnapshot: null, undoing: false, observer: null };
+
+  function validatorUndoAvailable() {
+    if (!validatorUndo.postSnapshot || !validatorUndo.steps) return false;
+    return diffEmpty(diffSnapshots(validatorUndo.postSnapshot, snapshotPencilmarks()));
+  }
+  function validatorPositionUndoButton() {
+    var vb = document.getElementById('sp-validate-btn');
+    var ub = document.getElementById('sp-validate-undo-btn');
+    if (!vb || !ub) return;
+    ub.style.bottom = vb.style.bottom || '120px';
+    ub.style.right  = (12 + vb.offsetWidth + 8) + 'px';   // just left of the Validate button
+  }
+  function validatorRefreshUndoButton() {
+    var ub = document.getElementById('sp-validate-undo-btn');
+    if (!ub) return;
+    var show = !validatorUndo.undoing && settings.showValidateButton !== false && validatorUndoAvailable();
+    ub.style.display = show ? 'flex' : 'none';
+    if (show) validatorPositionUndoButton();
+  }
+  function validatorStartUndoObserver() {
+    if (validatorUndo.observer) return;
+    var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
+      .map(function (s) { return document.querySelector(s); }).filter(Boolean);
+    if (!targets.length) return;
+    validatorUndo.observer = new MutationObserver(function () {
+      if (validatorUndo.undoing) return;   // ignore our own undo-driven mutations
+      validatorRefreshUndoButton();        // "Undo" iff the board still matches the post-run snapshot
+    });
+    targets.forEach(function (t) { validatorUndo.observer.observe(t, { childList: true, subtree: true, characterData: true }); });
+  }
+  function validatorStopUndoObserver() {
+    if (validatorUndo.observer) { validatorUndo.observer.disconnect(); validatorUndo.observer = null; }
+  }
+  // Arm the post-run Undo: remember how many native-undo steps rewind the run, the
+  // pre-run snapshot (stop sentinel) and the post-run snapshot (visibility gate).
+  function validatorArmUndo(steps, preSnap) {
+    validatorUndo.steps = steps;
+    validatorUndo.preSnapshot = preSnap;
+    validatorUndo.postSnapshot = snapshotPencilmarks();
+    validatorStartUndoObserver();
+    validatorRefreshUndoButton();
+  }
+  function validatorDisarmUndo() {
+    validatorUndo.steps = 0;
+    validatorUndo.preSnapshot = null;
+    validatorUndo.postSnapshot = null;
+    validatorStopUndoObserver();
+    validatorRefreshUndoButton();
+  }
+  async function validatorDoUndo() {
+    if (actionInProgress || validatorUndo.undoing || !validatorUndoAvailable()) return;
+    actionInProgress = true;
+    validatorUndo.undoing = true;
+    validatorRefreshUndoButton();   // hide while we rewind
+    try {
+      var undoBtn = getModeButton('undo');
+      var pre = validatorUndo.preSnapshot;
+      for (var i = 0; i < validatorUndo.steps; i++) {
+        if (undoBtn) dispatchClickEl(undoBtn);
+        else { var app = await Framework.getApp(); app.act({ type: 'undo' }); }
+        await sleep(fsUndoDelay());
+        if (pre && diffEmpty(diffSnapshots(pre, snapshotPencilmarks()))) break;   // reached pre-run state
+      }
+    } finally {
+      validatorUndo.undoing = false;
+      actionInProgress = false;
+      validatorDisarmUndo();
+    }
   }
 
   // Apply ONE validator against the CURRENT board (compute → apply its removals
@@ -7663,6 +7764,7 @@
     if (actionInProgress) return;
     actionInProgress = true;
     var before = markedCellKeys();
+    var preSnap = snapshotPencilmarks();
     var t0 = performance.now();
     applyOneValidator(def, unitFilter).then(function (res) {
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
@@ -7671,12 +7773,15 @@
         showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return;
       }
       if (res.aborted) { validateAbortToast(res.reverted); return; }
+      // A removal made changes → offer a post-run Undo (one native-undo group).
+      if (res.removed > 0) validatorArmUndo(1, preSnap);
       var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
       if (res.removed === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
       var emptied = countEmptiedSince(before);
+      if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, res.removed, emptied), 'error'); return; }
       var msg = 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
-                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.' + emptiedSuffix(emptied);
-      showRemoveInvalidToast(msg, emptied > 0 ? 'warning' : 'success');
+                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
+      showRemoveInvalidToast(msg, 'success');
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -7691,9 +7796,10 @@
     if (defs.length === 0) { showRemoveInvalidToast('No supported constraints were detected in this puzzle.', 'warning'); return; }
     actionInProgress = true;
     var before = markedCellKeys();
+    var preSnap = snapshotPencilmarks();
     var t0 = performance.now();
     (async function () {
-      var totalRemoved = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
+      var totalRemoved = 0, undoSteps = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
       var changed = true, guard = 0;
       while (changed && guard++ < 50) {
         changed = false;
@@ -7702,15 +7808,16 @@
           if (res.unsupported) { unsupported = true; break; }
           if (res.aborted) { aborted = true; reverted = res.reverted; break; }
           if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
-          if (res.removed > 0) { totalRemoved += res.removed; changed = true; }
+          if (res.removed > 0) { totalRemoved += res.removed; undoSteps++; changed = true; }   // each apply = 1 undo group
         }
         passes++;
         if (unsupported || aborted) break;
       }
-      return { totalRemoved: totalRemoved, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted };
+      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted };
     })().then(function (s) {
       if (s.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (s.aborted) { validateAbortToast(s.reverted); return; }
+      if (s.totalRemoved > 0) validatorArmUndo(s.undoSteps, preSnap);
       var names = Object.keys(s.present);
       if (names.length === 0) {
         var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
@@ -7720,10 +7827,11 @@
       var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
       if (s.totalRemoved === 0) { showRemoveInvalidToast('Checked ' + checked + ' — no invalid candidates to remove.', 'success'); return; }
       var emptied = countEmptiedSince(before);
+      if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, s.totalRemoved, emptied), 'error'); return; }
       var msg = 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
                 ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
-                ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').' + emptiedSuffix(emptied);
-      showRemoveInvalidToast(msg, emptied > 0 ? 'warning' : 'success');
+                ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
+      showRemoveInvalidToast(msg, 'success');
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -9997,7 +10105,32 @@
     btn.addEventListener('click', function (e) { e.stopPropagation(); toggleValidateMenu(); });
     document.body.appendChild(btn);
 
-    function applyVisibility() { btn.style.display = settings.showValidateButton !== false ? 'flex' : 'none'; }
+    // Post-run Undo button — sits just LEFT of the Validate button, hidden until a
+    // validator run removes candidates (see validatorArmUndo / validatorRefreshUndoButton).
+    var ubtn = document.createElement('button');
+    ubtn.id    = 'sp-validate-undo-btn';
+    ubtn.type  = 'button';
+    ubtn.title = 'Undo the last validator run — restores the candidates it removed. Stays here until you change the puzzle; if you Ctrl+Z back to this point it returns.';
+    ubtn.textContent = 'Undo';
+    Object.assign(ubtn.style, {
+      position: 'fixed', bottom: '120px', right: '200px',   // right is recomputed when shown
+      height: '36px', padding: '0 12px', borderRadius: '8px', cursor: 'pointer',
+      fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700', fontSize: '13px',
+      lineHeight: '1.2', whiteSpace: 'nowrap', display: 'none',
+      alignItems: 'center', justifyContent: 'center', zIndex: '900',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.4)', boxSizing: 'border-box',
+    });
+    ubtn.style.setProperty('background-color', bgColor, 'important');
+    ubtn.style.setProperty('color', textColor, 'important');
+    ubtn.style.setProperty('border', '1px solid ' + borderCol, 'important');
+    spdrFxButton(ubtn);
+    ubtn.addEventListener('click', function (e) { e.stopPropagation(); validatorDoUndo(); });
+    document.body.appendChild(ubtn);
+
+    function applyVisibility() {
+      btn.style.display = settings.showValidateButton !== false ? 'flex' : 'none';
+      validatorRefreshUndoButton();   // the Undo button follows the same setting + its arm state
+    }
     applyVisibility();
     controlSyncers['showValidateButton'] = applyVisibility;
   }
