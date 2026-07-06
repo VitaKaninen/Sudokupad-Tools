@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudoku Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.74.0
+// @version      3.75.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.74.0';
+  var SCRIPT_VERSION = '3.75.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -286,7 +286,8 @@
     validateWhisperEnabled:       true,   // "Validate Constraints": run the German-whisper (green line, ≥5) validator (future per-validator toggle)
     validateXVEnabled:            true,   // "Validate Constraints": run the XV validator (V = sum 5, X = sum 10 across a labeled edge)
     validateArrowEnabled:         true,   // "Validate Constraints": run the sum-arrow validator (shaft digits sum to the circle digit)
-    validateRunAllMode:           false,  // "Validate Constraints" menu checkbox: any validator click runs ALL detected validators to a cross-constraint fixpoint
+    validateRenbanEnabled:        true,   // "Validate Constraints": run the renban validator (line = a set of consecutive distinct digits, any order)
+    validateRegionSumEnabled:     true,   // "Validate Constraints": run the region-sum-line validator (box/region borders split the line into equal-sum segments)
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
@@ -6371,6 +6372,81 @@
   function whisperDetected() { return classifyWhisperLines().mode !== 'none'; }
   function whisperIsAmbiguous() { return classifyWhisperLines().mode === 'ambiguous'; }
 
+  // ── Cue-gated cosmetic-line detection (shared by renban + region-sum) ───────
+  // Renban and region-sum lines have NO native model key and share the cosmetic
+  // #arrows/cp.lines rendering with whispers, palindromes, betweens, nabners… and
+  // colour ALONE is not a reliable discriminator (renban's usual purple is ALSO
+  // nabner's; region-sum's usual blue is ALSO between's). So — unlike whisper,
+  // whose green shade is trusted on its own — these two require a RULES CUE, then
+  // pin the lines exactly like whisper's layers 2–4:
+  //   1. cue absent → NONE (never guess a line type from colour when it collides).
+  //   2. cue + every cosmetic line one single colour → that colour is the clue.
+  //   3. cue + the rules NAME a colour for it ("purple lines are renban") → those.
+  //   4. cue but can't pin → AMBIGUOUS (menu asks the player to select the line).
+  // Under-detect, never mis-apply — the standing validator contract.
+  function namedColorWordInClauses(clauseRe) {
+    var clauses = getPuzzleRulesBlob().split(/[.\n;]/);
+    for (var i = 0; i < clauses.length; i++) {
+      var cl = clauses[i];
+      if (!clauseRe.test(cl)) continue;
+      for (var j = 0; j < WHISPER_COLOR_WORDS.length; j++)
+        if (cl.indexOf(WHISPER_COLOR_WORDS[j]) !== -1) return WHISPER_COLOR_WORDS[j];
+    }
+    return null;
+  }
+  function classifyCueLines(cueRe, clauseRe) {
+    var all = getCosmeticLines();
+    if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
+    if (!cueRe.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: all };
+    var colors = {};
+    all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
+    if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
+    var word = namedColorWordInClauses(clauseRe);
+    if (word) {
+      var matched = all.filter(function (l) { return colorWordMatches(word, parseColor(l.color)); });
+      if (matched.length > 0) return { mode: 'confident', lines: matched.map(function (l) { return l.keys; }), allLines: all };
+    }
+    return { mode: 'ambiguous', lines: [], allLines: all };
+  }
+
+  // Renban: a rules cue = the word "renban", or "consecutive … any order" / "set of
+  // consecutive" phrasing (verified against the catalog: ~94% of renban puzzles
+  // carry exactly this). Clause trigger for the named-colour layer: renban/consecutive.
+  var RENBAN_CUE_RE = /renban|consecutive\s+(?:digits?|numbers?)?[^.]*any order|set of consecutive|consecutive\s+(?:digits?|numbers?)\s+in any order/;
+  var RENBAN_CLAUSE_RE = /renban|consecutive/;
+  function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE); }
+  function renbanDetected() { return classifyRenbanLines().mode !== 'none'; }
+  function renbanIsAmbiguous() { return classifyRenbanLines().mode === 'ambiguous'; }
+
+  // Region-sum lines: box/region borders split the line into segments of EQUAL sum.
+  // Cue = "region sum", "box borders divide/split", or "same/equal sum in each
+  // box/region". Clause trigger for the named-colour layer: region/box/segment/sum.
+  var REGIONSUM_CUE_RE = /region[- ]?sum|box\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+sum\s+(?:in|within|per)\s+each\s+(?:box|region)|each\s+(?:box|region)[^.]*(?:same|equal)\s+sum/;
+  var REGIONSUM_CLAUSE_RE = /region|box|segment|sum/;
+  function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE); }
+  function regionSumDetected() { return classifyRegionSumLines().mode !== 'none'; }
+  function regionSumIsAmbiguous() { return classifyRegionSumLines().mode === 'ambiguous'; }
+
+  // Resolve which line chains a cue-gated validator should check + whether removals
+  // are MASKED to the selection. CONFIDENT mode → the classifier's pinned lines,
+  // filtered by the shared whole-clue unitFilter (selection-only + fog). AMBIGUOUS
+  // mode → require a selection and validate every line the selection touches, only
+  // altering selected cells (the player's manual override — same policy as whisper).
+  // Returns { lines:[[keys]…], masked, selection } or { needSelection:true }.
+  function resolveCueValidatorLines(cls, unitFilter) {
+    if (cls.mode === 'ambiguous') {
+      var sel = getSelectedCells();
+      if (!sel || sel.size === 0) return { needSelection: true };
+      var ls = cls.allLines.filter(function (l) { return l.keys.some(function (k) { return sel.has(k); }); })
+                           .map(function (l) { return l.keys; });
+      if (ls.length === 0) return { needSelection: true };
+      return { lines: ls, masked: true, selection: sel };
+    }
+    var lines = cls.lines;
+    if (unitFilter) lines = lines.filter(function (keys) { return unitFilter(keys); });
+    return { lines: lines, masked: false, selection: null };
+  }
+
   // Compute centre-candidate removals forced by the German whispers, one cell at a
   // time (local neighbour check above), iterated to a fixpoint. Pure w.r.t. the
   // board. SELECTION-AWARE, unlike the other validators: it reads the selection /
@@ -6485,6 +6561,224 @@
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
 
     return { removals: removals, whisperCount: lines.length, emptiedCells: emptied };
+  }
+
+  // ── Renban validator ──────────────────────────────────────────────────────
+  // A renban line: its cells hold a SET OF CONSECUTIVE DISTINCT digits in any
+  // order (e.g. a 4-cell line is some run {d, d+1, d+2, d+3}). This is the cage
+  // validator with "combinations" = every consecutive run of the line's length
+  // instead of sum-target combos, and the run digits are always distinct → the
+  // same perfect-matching support test. CANDIDATE-ELIMINATION CONTRACT: a
+  // candidate survives only if some run containing it admits a full distinct-cell
+  // fill (each remaining cell from its current candidates). Iterated to a
+  // fixpoint; a line with zero possible runs is DROPPED, never wiped.
+  function computeRenbanRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyRenbanLines();
+    if (cls.mode === 'none') return { noRenban: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noRenban: true, needSelection: true };
+    if (res.lines.length === 0) return { noRenban: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
+    var uni = st.uni;
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;           // fogged neighbour reads as unconstrained
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                          // empty cell → unconstrained, never modified
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Every consecutive run of `L` distinct digits contained in the digit set.
+    function runsFor(L) {
+      var runs = [];
+      digitList.forEach(function (lo) {
+        var arr = [], ok = true;
+        for (var i = 0; i < L; i++) { var d = lo + i; if (!uni[d]) { ok = false; break; } arr.push(d); }
+        if (ok) runs.push({ arr: arr, set: new Set(arr) });
+      });
+      return runs;
+    }
+    var lineData = lines.map(function (keys) { return { keys: keys, runs: runsFor(keys.length) }; })
+                        .filter(function (ld) { return ld.runs.length > 0; });   // impossible line → dropped
+
+    // Does some run admit a full fill with digit d in cell C? Fix d→C, then require
+    // a perfect matching of the run's remaining digits onto the remaining cells.
+    function supports(ld, cIdx, d) {
+      var keys = ld.keys;
+      for (var ri = 0; ri < ld.runs.length; ri++) {
+        var run = ld.runs[ri];
+        if (!run.set.has(d)) continue;
+        var digits = [], used = false;
+        for (var i = 0; i < run.arr.length; i++) {
+          if (!used && run.arr[i] === d) { used = true; continue; }
+          digits.push(run.arr[i]);
+        }
+        var cells = [];
+        for (var j = 0; j < keys.length; j++) if (j !== cIdx) cells.push(cellSet(keys[j]));
+        if (hasPerfectMatching(digits.length, cells.length, function (a, b) { return cells[b].has(digits[a]); })) return true;
+      }
+      return false;
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        ld.keys.forEach(function (C, cIdx) {
+          if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+          Array.from(work[C]).forEach(function (d) {              // snapshot: set mutates in loop
+            if (!supports(ld, cIdx, d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, renbanCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Region-sum-line validator ─────────────────────────────────────────────
+  // A region-sum line: the box/region borders it crosses split it into SEGMENTS,
+  // and every segment sums to the SAME (unknown) value S. Cells within a segment
+  // share one region → all distinct; across segments (different regions) digits
+  // may repeat. The target S is variable (like the arrow circle). Approach:
+  // segments are independent GIVEN S, so per segment enumerate every distinct-cell
+  // assignment (backtracking, box-distinct), recording which sums it can hit and,
+  // per (cell,digit), the sums that place that digit there. A sum S is feasible
+  // overall iff EVERY segment can reach it; a candidate d in cell C survives iff
+  // some overall-feasible S has an assignment of C's segment with d in C summing to
+  // S. Cross-segment same-row/col conflicts are deliberately NOT enforced (they'd
+  // couple the segments) — that only UNDER-constrains, never over-removes (same
+  // safe-caveat policy as the little killer's jigsaw boxes). Only lines with ≥2
+  // segments carry a constraint; a contradictory line (no common S) is DROPPED.
+  function computeRegionSumRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyRegionSumLines();
+    if (cls.mode === 'none') return { noRegionSum: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noRegionSum: true, needSelection: true };
+    if (res.lines.length === 0) return { noRegionSum: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var regionMap = getModelRegionMap();   // { "row,col" (0-indexed, row-major) : logicalId } | null
+    function regionId(key) {
+      var p = key.split(','), col = +p[0], row = +p[1];
+      if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
+      return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);   // regular box fallback
+    }
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Split a line into maximal same-region runs; keep only lines with ≥2 segments.
+    var lineData = [];
+    lines.forEach(function (keys) {
+      var segs = [], cur = [keys[0]], curId = regionId(keys[0]);
+      for (var i = 1; i < keys.length; i++) {
+        var id = regionId(keys[i]);
+        if (id === curId) cur.push(keys[i]);
+        else { segs.push(cur); cur = [keys[i]]; curId = id; }
+      }
+      segs.push(cur);
+      if (segs.length >= 2) lineData.push({ keys: keys, segs: segs });
+    });
+    if (lineData.length === 0) return { noRegionSum: true };
+
+    // Enumerate one segment (all cells distinct — same region). Returns the set of
+    // achievable sums + per-cell { digit → Set<sum> } support, or a bail/empty flag.
+    function enumSegment(segKeys) {
+      var sets = segKeys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
+      var n = sets.length;
+      var feasible = new Set(), cd = sets.map(function () { return new Map(); });
+      if (sets.some(function (s) { return s.length === 0; })) return { feasible: feasible, cd: cd, bailed: false, empty: true };
+      var assign = new Array(n), used = new Set(), nodes = 0, CAP = 200000, bailed = false;
+      function dfs(idx, sum) {
+        if (bailed) return;
+        if (nodes++ > CAP) { bailed = true; return; }
+        if (idx === n) {
+          feasible.add(sum);
+          for (var k = 0; k < n; k++) { var m = cd[k], dd = assign[k]; if (!m.has(dd)) m.set(dd, new Set()); m.get(dd).add(sum); }
+          return;
+        }
+        var opts = sets[idx];
+        for (var oi = 0; oi < opts.length; oi++) {
+          var d = opts[oi];
+          if (used.has(d)) continue;                             // same region → distinct
+          used.add(d); assign[idx] = d;
+          dfs(idx + 1, sum + d);
+          used.delete(d);
+          if (bailed) return;
+        }
+      }
+      dfs(0, 0);
+      return { feasible: feasible, cd: cd, bailed: bailed, empty: false };
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        var segRes = ld.segs.map(enumSegment);
+        if (segRes.some(function (r) { return r.bailed || r.empty; })) return;   // give up on this line safely
+        var overall = null;                                      // ∩ of every segment's achievable sums
+        segRes.forEach(function (r) {
+          if (overall === null) { overall = new Set(r.feasible); return; }
+          var nx = new Set();
+          overall.forEach(function (s) { if (r.feasible.has(s)) nx.add(s); });
+          overall = nx;
+        });
+        if (!overall || overall.size === 0) return;              // no common sum → contradictory line, drop
+        ld.segs.forEach(function (segKeys, si) {
+          var cd = segRes[si].cd;
+          segKeys.forEach(function (C, ci) {
+            if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+            Array.from(work[C]).forEach(function (d) {           // snapshot: set mutates in loop
+              var sums = cd[ci].get(d), ok = false;
+              if (sums) sums.forEach(function (s) { if (overall.has(s)) ok = true; });
+              if (!ok) {
+                work[C].delete(d);
+                var k = C + '/' + d;
+                if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+                changed = true;
+              }
+            });
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, regionSumCount: lineData.length, emptiedCells: emptied };
   }
 
   // ── Thermo validator ──────────────────────────────────────────────────────
@@ -7215,6 +7509,10 @@
       { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum arrows', enabled: function () { return settings.validateArrowEnabled !== false; },
         detect: function () { return getSumArrows().length > 0; },
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
+      { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines', enabled: function () { return settings.validateRenbanEnabled !== false; },
+        detect: renbanDetected, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
+      { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines', enabled: function () { return settings.validateRegionSumEnabled !== false; },
+        detect: regionSumDetected, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
     ];
   }
   function detectedValidators() {
@@ -7364,7 +7662,7 @@
     applyOneValidator(def, unitFilter).then(function (res) {
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (!res.present) {
-        if (res.needSelection) { showRemoveInvalidToast('The German Whisper line couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "German whisper lines" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
+        if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + (def.menuLabel || def.name) + '" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
         showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return;
       }
       if (res.aborted) { validateAbortToast(res.reverted); return; }
@@ -7441,16 +7739,24 @@
   }
   // A validator item was clicked: resolve the selection filter (may toast + bail),
   // AND in the always-on fog gate (skips any clue with a cell still under fog),
-  // then either run just that validator or — with "Run all until stable" checked —
-  // redirect the click to the full cross-constraint fixpoint over every detected
-  // validator. The menu stays open either way.
+  // then run just that validator. (The "Run all above functions" button runs every
+  // detected validator to a cross-constraint fixpoint — see onRunAllClick.) The
+  // menu stays open either way.
   function onValidatorItemClick(def) {
     if (actionInProgress) return;
     var sf = selectionUnitFilter();
     if (!sf.ok) return;
     var filter = combineFogFilter(sf.filter);   // fog gate is always on (no-op when no fog)
-    if (settings.validateRunAllMode === true) runAllValidators(filter);
-    else runSingleValidator(def, filter);
+    runSingleValidator(def, filter);
+  }
+  // The "Run all above functions" button: same selection + fog resolution as a
+  // single item, then the cross-constraint fixpoint over every detected validator.
+  function onRunAllClick() {
+    if (actionInProgress) return;
+    var sf = selectionUnitFilter();
+    if (!sf.ok) return;
+    var filter = combineFogFilter(sf.filter);
+    runAllValidators(filter);
   }
   function openValidateMenu() {
     var btn = document.getElementById('sp-validate-btn');
@@ -7527,6 +7833,25 @@
       sep.style.setProperty('background-color', border, 'important');
       menu.appendChild(sep);
     }
+    // A prominent, filled action button (vs the plain validator items) — used for
+    // "Run all above functions".
+    function addButton(label, onClick, tip) {
+      var b = document.createElement('div');
+      b.textContent = label;
+      b.title = tip || '';
+      Object.assign(b.style, {
+        padding: '9px 12px', margin: '2px 0', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '13px', fontWeight: '700', textAlign: 'center',
+        whiteSpace: 'nowrap', userSelect: 'none',
+      });
+      b.style.setProperty('color', text, 'important');
+      b.style.setProperty('border', '1px solid ' + border, 'important');
+      b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important');
+      b.addEventListener('mouseenter', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.16)', 'important'); });
+      b.addEventListener('mouseleave', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important'); });
+      b.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
+      menu.appendChild(b);
+    }
     // The Thermo item, PLUS an inline "Slow" checkbox — auto-checked per
     // puzzle (autoDetectThermoSlow via effectiveThermoSlow), overridable by
     // the player for this puzzle/session (setThermoSlowOverride, never saved).
@@ -7573,15 +7898,20 @@
       detected.forEach(function (def) {
         if (def.name === 'thermo') { addThermoItem(def); return; }
         addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
-        // German whispers can be ambiguous (a ≥5 rule is present but which line is
-        // the whisper couldn't be pinned) → tell the player to select the line.
+        // Some cosmetic-line validators can be ambiguous (a rules cue is present but
+        // which line is the clue couldn't be pinned) → tell the player to select it.
         if (def.name === 'German whisper' && whisperIsAmbiguous())
           addNote('⚠ Couldn\'t identify the whisper line — select its cells first, then click above. Only selected cells change.');
+        if (def.name === 'renban' && renbanIsAmbiguous())
+          addNote('⚠ Couldn\'t identify the renban line — select its cells first, then click above. Only selected cells change.');
+        if (def.name === 'region sum' && regionSumIsAmbiguous())
+          addNote('⚠ Couldn\'t identify the region-sum line — select its cells first, then click above. Only selected cells change.');
       });
     }
     addSep();
-    addCheckbox('Run all until stable', 'validateRunAllMode',
-      'Clicking any validator above runs ALL of them in a loop until no more candidates can be removed (removals from one constraint feed the others)');
+    if (detected.length > 0)
+      addButton('Run all above functions', onRunAllClick,
+        'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).');
     addCheckbox('Validate selection only', 'validateSelectionOnly',
       'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped. Exception: German whisper lines DO run on a partial selection (only the selected cells change; the rest of the line is still read). Resets on page reload.');
 
