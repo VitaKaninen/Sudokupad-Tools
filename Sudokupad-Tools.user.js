@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.79.0
+// @version      3.80.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.79.0';
+  var SCRIPT_VERSION = '3.80.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6268,43 +6268,90 @@
   var WHISPER_CUE_RE = /(german\s+whisper)|(differ(?:ence)?\s*(?:by|of)?\s*(?:at least|a minimum of|minimum of|of at least)?\s*(?:5|five))|(minimum difference of (?:5|five))/;
   function hasWhisperRuleCue() { return WHISPER_CUE_RE.test(getPuzzleRulesBlob()); }
 
-  // Match a rules colour-word ("grey"/"purple"/…) to an actual line colour. Only
-  // used in layer 3; kept to the common named line colours. Grey = low saturation.
-  function colorWordMatches(word, c) {
-    if (!c) return false;
-    var r = c.r, g = c.g, b = c.b, mx = Math.max(r, g, b), mn = Math.min(r, g, b);
-    switch (word) {
-      case 'grey': case 'gray': return (mx - mn) < 40 && mx > 60 && mx < 235;
-      case 'red':    return r >= g + 40 && r >= b + 40;
-      case 'blue':   return b >= r + 40 && b >= g + 40;
-      case 'green':  return g > 90 && g >= r + 40 && g >= b + 40;
-      // Purple vs pink/magenta split on the RED-vs-BLUE lean so a legend puzzle's
-      // "purple" and "pink" lines never both match one word: purple is blue-led
-      // (b > r, e.g. lavender #bf9de0), pink/magenta is red-led-or-tied (r >= b,
-      // e.g. #f067f0). r==b (pure #800080 / #ff00ff) resolves to pink — degrades to
-      // manual-select on a pure-purple legend, never a wrong pin.
-      case 'purple': case 'violet': return b > r && r > g && b >= g + 40;
-      case 'pink': case 'magenta':  return r >= g + 40 && b >= g && r >= b;
-      case 'orange': return r >= b + 60 && g >= b + 30 && r >= g;
-      case 'yellow': return r >= b + 60 && g >= b + 60;
-      case 'brown':  return r > g && g > b && (mx - mn) >= 25 && mx < 200;
-      default: return false;
-    }
+  // ── Named-colour matching (nearest-reference, robust to legend puzzles) ─────
+  // A multi-colour "legend" puzzle ("Red line: parity. Purple line: zipper. Brown
+  // line: slow thermo…") needs each cosmetic line assigned to the ONE colour word
+  // it best matches. Independent per-word thresholds FAIL here: a "red" test also
+  // fires on a red-dominant brown line (#965429), and a light-red line (#f66f =
+  // #ff6666) sits between the red and pink buckets. Instead we score each line
+  // against every colour word NAMED IN THIS PUZZLE and take the nearest — a rival
+  // word (brown) in the same legend pulls its own line away from red, and a colour
+  // not in the legend (cyan) never competes, so #2ecbff lands on "blue".
+  //
+  // Scoring is in HSL: HUE picks the chromatic family — robust exactly where RGB
+  // distance is fragile (purple 275° vs magenta 320°; salmon-red 0° vs pink 320°).
+  // Saturation/lightness terms handle the achromatic words (grey/black/white) and
+  // brown (a dark, muted, warm hue). Canonicalises violet→purple, magenta→pink,
+  // gray→grey. `rgbToHsl` returns [h,s,l] with h in [0,1); we work in degrees.
+  var COLOR_WORD_HUE = { red: 0, orange: 30, yellow: 55, green: 120, blue: 210, purple: 275, pink: 320 };
+  var COLOR_WORD_ALL = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'violet', 'pink', 'magenta', 'brown', 'grey', 'gray', 'black', 'white'];
+  function canonColorWord(w) {
+    if (w === 'violet') return 'purple';
+    if (w === 'magenta') return 'pink';
+    if (w === 'gray') return 'grey';
+    return w;
   }
-  var WHISPER_COLOR_WORDS = ['grey', 'gray', 'purple', 'violet', 'red', 'blue', 'pink', 'magenta', 'orange', 'yellow', 'brown'];
-  // The colour word the rules tie to the whisper: scan clauses mentioning "whisper"
-  // or a ≥5 difference and return the first non-green colour word in them.
-  function whisperNamedColorWord() {
-    var blob = getPuzzleRulesBlob();
-    var clauses = blob.split(/[.\n;]/);
-    for (var i = 0; i < clauses.length; i++) {
-      var cl = clauses[i];
-      if (!/whisper|differ|difference/.test(cl)) continue;
-      for (var j = 0; j < WHISPER_COLOR_WORDS.length; j++) {
-        if (cl.indexOf(WHISPER_COLOR_WORDS[j]) !== -1) return WHISPER_COLOR_WORDS[j];
+  function circularHueDeg(a, b) { var d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+  // Lower = better fit of RGB colour `c` (a {r,g,b}) to canonical colour word `word`.
+  function colorWordScore(c, word) {
+    if (!c) return Infinity;
+    var hsl = rgbToHsl(c.r, c.g, c.b), h = hsl[0] * 360, s = hsl[1], l = hsl[2];
+    switch (word) {
+      case 'black': return l * 360 + s * 60;
+      case 'white': return (1 - l) * 360 + s * 120;
+      case 'grey':                                                  // low saturation, mid lightness
+        return s * 300 + Math.max(0, 0.12 - l) * 600 + Math.max(0, l - 0.90) * 600;
+      case 'brown':                                                 // dark, muted, warm hue
+        return circularHueDeg(h, 28) + Math.max(0, l - 0.42) * 400 + Math.max(0, 0.12 - s) * 300;
+      default: {
+        var hue = COLOR_WORD_HUE[word];
+        if (hue == null) return Infinity;
+        var d = circularHueDeg(h, hue);
+        d += Math.max(0, 0.25 - s) * 600;                           // washed-out → grey, not a vivid hue
+        d += Math.max(0, 0.10 - l) * 400 + Math.max(0, l - 0.95) * 400;
+        if ((word === 'red' || word === 'orange' || word === 'yellow') && l < 0.42 && s > 0.2 && s < 0.85)
+          d += (0.42 - l) * 300;                                    // a dark warm colour is brown, not red
+        return d;
       }
     }
+  }
+  // The canonical colour word (from `words`) that RGB colour `c` is nearest to.
+  function nearestColorWord(c, words) {
+    if (!c) return null;
+    var best = null, bd = Infinity;
+    for (var i = 0; i < words.length; i++) {
+      var cw = canonColorWord(words[i]), sc = colorWordScore(c, cw);
+      if (sc < bd) { bd = sc; best = cw; }
+    }
+    return best;
+  }
+  // Classify a line's colour to its single nearest canonical palette word (ABSOLUTE
+  // — the whole palette competes, so #2ecbff → blue, #965429 → brown, #ff6666 → red).
+  // "cyan" is deliberately absent from the palette, so teal/cyan strokes resolve to
+  // blue (the word setters actually use for them). Absolute (not legend-restricted)
+  // so a line whose colour ISN'T the clue's colour never gets swept in when the
+  // legend happens to name only one colour.
+  function lineColorWord(l) { return nearestColorWord(parseColor(l.color), COLOR_WORD_ALL); }
+  // The canonical colour word named in the first rules clause matching clauseRe.
+  function clauseColorWord(blob, clauseRe) {
+    var clauses = blob.split(/[.\n;]/);
+    for (var i = 0; i < clauses.length; i++) {
+      if (!clauseRe.test(clauses[i])) continue;
+      for (var j = 0; j < COLOR_WORD_ALL.length; j++)
+        if (clauses[i].indexOf(COLOR_WORD_ALL[j]) !== -1) return canonColorWord(COLOR_WORD_ALL[j]);
+    }
     return null;
+  }
+  // Lines whose classified colour equals the colour this clause names. Because each
+  // line is classified ABSOLUTELY against the full palette, a brown line can't be
+  // mistaken for the red clue (brown is a nearer palette word than red), and a
+  // non-matching-colour line is never swept in. Returns matched [{color,keys}] or
+  // null (clause names no colour / no line lands on it → caller falls to AMBIGUOUS).
+  function linesForClauseColor(all, blob, clauseRe) {
+    var word = clauseColorWord(blob, clauseRe);
+    if (!word) return null;
+    var matched = all.filter(function (l) { return lineColorWord(l) === word; });
+    return matched.length > 0 ? matched : null;
   }
 
   // Every cosmetic line as { color, keys } — from the MODEL (cp.lines), falling
@@ -6367,12 +6414,9 @@
     all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
     if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
 
-    // Layer 3 — cue + a colour the rules name for the whisper.
-    var word = whisperNamedColorWord();
-    if (word) {
-      var matched = all.filter(function (l) { return colorWordMatches(word, parseColor(l.color)); });
-      if (matched.length > 0) return { mode: 'confident', lines: matched.map(function (l) { return l.keys; }), allLines: all };
-    }
+    // Layer 3 — cue + a colour the rules name for the whisper (nearest-legend match).
+    var wmatched = linesForClauseColor(all, getPuzzleRulesBlob(), /whisper|differ|difference/);
+    if (wmatched) return { mode: 'confident', lines: wmatched.map(function (l) { return l.keys; }), allLines: all };
 
     // Layer 4 — a whisper is present but its line can't be pinned → manual select.
     return { mode: 'ambiguous', lines: [], allLines: all };
@@ -6392,28 +6436,16 @@
   //   3. cue + the rules NAME a colour for it ("purple lines are renban") → those.
   //   4. cue but can't pin → AMBIGUOUS (menu asks the player to select the line).
   // Under-detect, never mis-apply — the standing validator contract.
-  function namedColorWordInClauses(clauseRe) {
-    var clauses = getPuzzleRulesBlob().split(/[.\n;]/);
-    for (var i = 0; i < clauses.length; i++) {
-      var cl = clauses[i];
-      if (!clauseRe.test(cl)) continue;
-      for (var j = 0; j < WHISPER_COLOR_WORDS.length; j++)
-        if (cl.indexOf(WHISPER_COLOR_WORDS[j]) !== -1) return WHISPER_COLOR_WORDS[j];
-    }
-    return null;
-  }
   function classifyCueLines(cueRe, clauseRe) {
     var all = getCosmeticLines();
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
-    if (!cueRe.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: all };
+    var blob = getPuzzleRulesBlob();
+    if (!cueRe.test(blob)) return { mode: 'none', lines: [], allLines: all };
     var colors = {};
     all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
     if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
-    var word = namedColorWordInClauses(clauseRe);
-    if (word) {
-      var matched = all.filter(function (l) { return colorWordMatches(word, parseColor(l.color)); });
-      if (matched.length > 0) return { mode: 'confident', lines: matched.map(function (l) { return l.keys; }), allLines: all };
-    }
+    var matched = linesForClauseColor(all, blob, clauseRe);
+    if (matched) return { mode: 'confident', lines: matched.map(function (l) { return l.keys; }), allLines: all };
     return { mode: 'ambiguous', lines: [], allLines: all };
   }
 
