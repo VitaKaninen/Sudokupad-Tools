@@ -45,9 +45,32 @@ VALIDATORS = [
     ('thermo', 'THERMO_CUE_RE', None, 'thermo', None),
 ]
 
+# tag -> clause const, for the clause-blindness check below. Whisper's layer 3 uses
+# WHISPERISH_RE; thermo's cue layer is only a fallback after the model/DOM readers.
+CLAUSES = {
+    'renban': 'RENBAN_CLAUSE_RE',
+    'region_sum': 'REGIONSUM_CLAUSE_RE',
+    'parity_line': 'PARITY_CLAUSE_RE',
+    'zipper': 'ZIPPER_CLAUSE_RE',
+    'entropic_line': 'ENTROPIC_CLAUSE_RE',
+    'thermo': 'THERMO_CLAUSE_RE',
+}
+
+# enough of the script's COLOR_WORD_ALL to answer "does this clause name a colour?"
+COLOR_WORDS = ['red', 'orange', 'yellow', 'green', 'blue', 'cyan', 'purple', 'magenta',
+               'pink', 'brown', 'grey', 'gray', 'black', 'white', 'teal', 'turquoise',
+               'aqua', 'lavender', 'indigo', 'gold', 'golden', 'silver', 'peach', 'tan',
+               'beige', 'olive', 'maroon', 'violet']
+COLOR_RE = dict((w, re.compile(r'\b' + w + r'\b')) for w in COLOR_WORDS)
+
 
 def js_regexes():
-    """Pull `var NAME_RE = /body/;` out of the userscript and compile as Python."""
+    """Pull the regex definitions out of the userscript and compile them as Python.
+
+    Handles the two idioms the script uses:
+        var NAME_RE = /body/;
+        var NAME_RE = new RegExp('literal' + OTHER_RE.source);
+    """
     src = open(SCRIPT, encoding='utf-8').read()
     out = {}
     for m in re.finditer(r'var\s+(\w+_RE)\s*=\s*/(.*?)/([gimsuy]*)\s*;', src):
@@ -55,9 +78,20 @@ def js_regexes():
         # JS->Python: the cue bodies use only \s \w \b [] () | {} ? * + . -- all portable.
         # Only difference that bites: an escaped forward slash.
         body = body.replace(r'\/', '/')
-        f = re.I if 'i' in flags else 0
         try:
-            out[name] = re.compile(body, f)
+            out[name] = re.compile(body, re.I if 'i' in flags else 0)
+        except re.error as e:
+            print('  !! could not compile %s: %s' % (name, e))
+
+    # composed form, e.g. ENTROPIC_CLAUSE_RE = new RegExp('\\bentrop|' + ENTROPIC_SET_RE.source)
+    for m in re.finditer(r"var\s+(\w+_RE)\s*=\s*new RegExp\(\s*'((?:[^'\\]|\\.)*)'\s*\+\s*(\w+_RE)\.source\s*\)", src):
+        name, lit, ref = m.group(1), m.group(2), m.group(3)
+        if ref not in out:
+            print('  !! %s composes %s, which is not defined yet' % (name, ref))
+            continue
+        body = lit.replace('\\\\', '\\') + out[ref].pattern
+        try:
+            out[name] = re.compile(body)
         except re.error as e:
             print('  !! could not compile %s: %s' % (name, e))
     return out
@@ -125,13 +159,15 @@ def evaluate(tags, info, rxs):
             if alt is None or req is None:
                 print('  !! %s composite cue not found in script' % label)
 
-        miss, fp, hit = [], [], 0
+        miss, fp, hit, firedset = [], [], 0, []
         for pid, d in info.items():
             tagged = tag in tags.get(pid, ())
             fired = fires(rx, anti, d['blob'])
             if not fired and alt is not None and req is not None:
                 if not (anti is not None and anti.search(d['blob'])):
                     fired = bool(alt.search(d['blob']) and req.search(d['blob']))
+            if fired and tagged:
+                firedset.append(pid)
             if tagged and fired:
                 hit += 1
             elif tagged and not fired:
@@ -141,6 +177,7 @@ def evaluate(tags, info, rxs):
         rows.append({
             'label': label, 'tag': tag, 'cue': cue_name,
             'tagged': hit + len(miss), 'hit': hit, 'miss': miss, 'fp': fp,
+            'fired': firedset,
         })
     return rows
 
@@ -189,6 +226,55 @@ def write_report(rows, info, path, n):
     print('\nreport -> %s' % path)
 
 
+def diagnose_clause(blob, clause_rx):
+    """Port of the script's clauseColorWord, split into WHY it failed.
+
+    UNREADABLE = no clause matches clause_rx at all -> the validator CANNOT pin the
+                 line on a multi-colour puzzle. A real bug, every time.
+    NO-COLOUR  = a clause matches but names no colour -> usually fine; a
+                 single-colour puzzle is caught earlier by layer 2.
+    OK         = a colour was pinned.
+    """
+    matched = False
+    for cl in re.split(r'[.\n;]', blob):
+        if not clause_rx.search(cl):
+            continue
+        matched = True
+        for w in COLOR_WORDS:
+            if COLOR_RE[w].search(cl):
+                return 'OK'
+    return 'NO-COLOUR' if matched else 'UNREADABLE'
+
+
+def multicolour(blob):
+    """Do the rules name >=2 colours? Proxy for "layer 2 cannot save this puzzle"."""
+    return sum(1 for w in ('red', 'orange', 'yellow', 'green', 'blue', 'cyan', 'purple',
+                           'magenta', 'pink', 'brown', 'grey', 'gray', 'peach')
+               if COLOR_RE[w].search(blob)) >= 2
+
+
+def clause_report(rows, info, rxs):
+    """A cue that fires on a phrasing its CLAUSE cannot read is a guaranteed
+    'cannot detect where the line is' on any multi-colour puzzle. This is a
+    separate defect from cue recall and was the v3.89 renban bug."""
+    print('\n\nCLAUSE-BLINDNESS  (cue fired, rules name >=2 colours, so layer 2 cannot help)')
+    print('UNREADABLE = no clause matches the clause regex -> guaranteed AMBIGUOUS.\n')
+    print('%-16s %9s %11s %10s %6s' % ('validator', 'multicol', 'UNREADABLE', 'NO-COLOUR', 'OK'))
+    print('-' * 58)
+    for r in rows:
+        cname = CLAUSES.get(r['tag'])
+        rx = rxs.get(cname) if cname else None
+        if rx is None:
+            continue
+        ids = [p for p in r['fired'] if multicolour(info[p]['blob'])]
+        c = {'OK': 0, 'NO-COLOUR': 0, 'UNREADABLE': 0}
+        for p in ids:
+            c[diagnose_clause(info[p]['blob'], rx)] += 1
+        flag = '  <-- BUG' if c['UNREADABLE'] else ''
+        print('%-16s %9d %11d %10d %6d%s'
+              % (r['label'], len(ids), c['UNREADABLE'], c['NO-COLOUR'], c['OK'], flag))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--report', help='write full miss/FP lists to this markdown file')
@@ -203,6 +289,7 @@ def main():
     if a.tag:
         rows = [r for r in rows if r['tag'] == a.tag]
     print_summary(rows, info)
+    clause_report(rows, info, rxs)
     if a.report:
         write_report(rows, info, a.report, a.n)
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.88.0
+// @version      3.89.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.88.0';
+  var SCRIPT_VERSION = '3.89.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6314,7 +6314,13 @@
   // A "German whisper" ≥5 cue: the phrase itself, or a "differ/difference … 5/five"
   // phrasing. Kept in sync with the catalog analysis that showed 83% of whisper
   // puzzles carry exactly this signal (vs 40% for the bare phrase).
-  var WHISPER_CUE_RE = /(german\s+whisper)|(differ(?:ence)?\s*(?:by|of)?\s*(?:at least|a minimum of|minimum of|of at least)?\s*(?:5|five))|(minimum difference of (?:5|five))/;
+  // v3.89 — the ≥5 clause allowed NO words between "differ" and the 5, so the very
+  // common "digits differ FROM THEIR NEIGHBORS by at least 5" (`t1e8qgm0h1`) never
+  // matched. `[^.]{0,30}?` (lazy, clause-bounded) spans the intervening words.
+  // Recall 96.6% → 99.0%, and still 0 Dutch whispers ("…at least 4") — the literal
+  // 5 is what separates them. `\b(?:5|five)\b` matters: without the LEADING \b,
+  // "digits differ from the digit in r5." would match on the 5 in a cell reference.
+  var WHISPER_CUE_RE = /(german\s+whisper)|(differ(?:ence|s)?[^.]{0,30}?(?:by|of)?\s*(?:at least|a minimum of|minimum of|of at least)?\s*\b(?:5|five)\b)|(minimum difference of (?:5|five))/;
   function hasWhisperRuleCue() { return WHISPER_CUE_RE.test(getPuzzleRulesBlob()); }
 
   // ── Named-colour matching (nearest-reference, robust to legend puzzles) ─────
@@ -6638,13 +6644,23 @@
   // consecutive" phrasing (verified against the catalog: ~94% of renban puzzles
   // carry exactly this). Clause trigger for the named-colour layer: renban/consecutive.
   var RENBAN_CUE_RE = /renban|consecutive\s+(?:digits?|numbers?)?[^.]*any order|set of consecutive|consecutive\s+(?:digits?|numbers?)\s+in any order/;
-  // Named-colour clause trigger = "renban" ONLY (not bare "consecutive"): a Nabner
-  // clause ("no two digits can be consecutive or identical") also carries
-  // "consecutive", and in a multi-colour legend it sits before the renban clause →
-  // the old /consecutive/ grabbed Nabner's colour (yellow on 3xdi7kf6ab). Same class
-  // of collision as REGIONSUM_CLAUSE_RE's bare "sum" (fixed v3.76). A renban-by-
-  // description-only legend (no "renban" word) falls to ambiguous → manual select.
-  var RENBAN_CLAUSE_RE = /renban/;
+  // Named-colour clause trigger. v3.79 narrowed this to bare /renban/ because a
+  // Nabner clause ("no two digits can be consecutive or identical") also carries
+  // "consecutive", so the original /renban|consecutive/ grabbed Nabner's colour
+  // (yellow on 3xdi7kf6ab). That fix traded away FAR more than it bought and the
+  // cost was never measured: most setters DESCRIBE renban without ever writing the
+  // word, so on a multi-colour legend the cue fired, no clause matched, and the
+  // validator went AMBIGUOUS — "cannot detect where the line is" on 86 of 197
+  // multi-colour renban puzzles (`t1e8qgm0h1`: "a set of consecutive digits with no
+  // repeats (in any order)"). v3.89 restores the description WITHOUT the collision:
+  // match renban's POSITIVE phrasings only, never bare "consecutive". Nabner says
+  // "no two digits can be consecutive" / "non-consecutive, non-repeating" — it never
+  // says "set of consecutive" or "consecutive … in any order". Verified: UNREADABLE
+  // 86 → 0 (OK 103 → 194), and 0 of 17 nabner-only puzzles wrongly matched.
+  // ── THE GENERAL RULE (see LESSONS_LEARNED): a CLAUSE regex must cover every
+  // phrasing its CUE covers, minus only the terms that collide with a rival clue.
+  // A cue that fires on a phrasing its clause can't read is a GUARANTEED ambiguous.
+  var RENBAN_CLAUSE_RE = /renban|set of consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
   function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE); }
   function renbanDetected() { return classifyRenbanLines().mode !== 'none'; }
   function renbanIsAmbiguous() { return classifyRenbanLines().mode === 'ambiguous'; }
@@ -6773,10 +6789,15 @@
     if (ENTROPIC_CUE_RE.test(blob)) return true;
     return ENTROPIC_SET_RE.test(blob) && ENTROPIC_LINEISH_RE.test(blob);
   }
-  // Named-colour clause trigger = the distinctive word only (not "low"/"high"/"set",
-  // which collide with other clues in a multi-colour legend — the renban
-  // "consecutive" / region-sum "sum" lesson).
-  var ENTROPIC_CLAUSE_RE = /\bentrop/;
+  // Named-colour clause trigger. v3.88 taught the CUE to match the described
+  // 123/456/789 partition but left this clause name-only, which re-created the exact
+  // renban defect: cue fires on a described legend, no clause matches, guaranteed
+  // AMBIGUOUS (4 of 23 multi-colour entropic puzzles). v3.89 reuses ENTROPIC_SET_RE
+  // itself as the second trigger — the full three-band partition is as concept-
+  // specific as the word "entropic", so it pins the colour without the collision
+  // risk of bare "low"/"high"/"set" (the renban-"consecutive" lesson). UNREADABLE
+  // 4 → 0, OK 14 → 19. Composed from .source so the two can never drift apart.
+  var ENTROPIC_CLAUSE_RE = new RegExp('\\bentrop|' + ENTROPIC_SET_RE.source);
   function classifyEntropicLines() {
     if (!entropicBands()) return { mode: 'none', lines: [], allLines: [] };
     if (ENTROPIC_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
