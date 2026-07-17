@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.89.0
+// @version      3.90.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.89.0';
+  var SCRIPT_VERSION = '3.90.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5694,21 +5694,73 @@
       if (centre[key]) return centre[key];
       return fullSet;
     }
-    function hasPartner(type, d, otherSet) {
-      var ps = partners(type, d);
-      for (var i = 0; i < ps.length; i++) if (otherSet.has(ps[i])) return true;
-      return false;
+    // v3.90 — a dot is a PAIR clue, but checking each pair on its own is too weak
+    // when one cell carries TWO dots. Reported case (`15pllu191x`): three cells in a
+    // row joined by two white dots, all inside one box. Pairwise, 3-2-3 is fine —
+    // 3~2 consecutive, 2~3 consecutive — so nothing was removed. But the two outer
+    // cells share a box, so they cannot both be 3: the run must be strictly
+    // monotonic. The concretely removable consequence is that the MIDDLE cell can
+    // never be 1 or 9 (partners(white,1) = {2} only, so both neighbours would be
+    // forced to 2). An L-shaped triple spanning two boxes has no such restriction —
+    // there the outer cells may legitimately repeat, which is exactly why this has
+    // to key off mustDiffer and not off "is a chain".
+    //
+    // General form: for a candidate d in cell `self`, each dot-neighbour must be
+    // able to take SOME partner of d (the pairwise test), AND any set of neighbours
+    // that must pairwise differ needs a system of distinct representatives. We test
+    // Hall's condition over each mutually-must-differ CLIQUE: |union of their
+    // available partners| >= |clique|. Hall is NECESSARY for an assignment to exist,
+    // so a failure proves d impossible — this can under-remove but never over-remove.
+    // A cell has at most 4 dot-neighbours, so enumerating subsets is trivial.
+    var mustDiffer = makeMustDiffer();
+    var nbrsOf = {};                          // cell -> [{other, type}]
+    dots.forEach(function (dot) {
+      (nbrsOf[dot.a] = nbrsOf[dot.a] || []).push({ other: dot.b, type: dot.type });
+      (nbrsOf[dot.b] = nbrsOf[dot.b] || []).push({ other: dot.a, type: dot.type });
+    });
+    function availablePartners(nb, d) {       // partners of d that nb can actually still hold
+      var os = neighbourSet(nb.other), out = [];
+      partners(nb.type, d).forEach(function (p) { if (os.has(p)) out.push(p); });
+      return out;
+    }
+    // Every subset of `list` whose members pairwise mustDiffer (cliques), size >= 2.
+    function mustDifferCliques(list) {
+      var out = [];
+      for (var mask = 1; mask < (1 << list.length); mask++) {
+        var sel = [];
+        for (var i = 0; i < list.length; i++) if (mask & (1 << i)) sel.push(list[i]);
+        if (sel.length < 2) continue;
+        var clique = true;
+        for (var x = 0; x < sel.length && clique; x++)
+          for (var y = x + 1; y < sel.length && clique; y++)
+            if (!mustDiffer(sel[x].other, sel[y].other)) clique = false;
+        if (clique) out.push(sel);
+      }
+      return out;
+    }
+    function candidateSupported(self, d) {
+      var list = nbrsOf[self] || [];
+      var avail = list.map(function (nb) { return availablePartners(nb, d); });
+      for (var i = 0; i < avail.length; i++) if (avail[i].length === 0) return false;   // pairwise test
+      var cliques = mustDifferCliques(list);
+      for (var c = 0; c < cliques.length; c++) {
+        var union = new Set();
+        cliques[c].forEach(function (nb) {
+          availablePartners(nb, d).forEach(function (p) { union.add(p); });
+        });
+        if (union.size < cliques[c].length) return false;                                // Hall's condition
+      }
+      return true;
     }
 
-    // Sweep every dot (both directions), deleting unsupported candidates from the
-    // live working set so removals cascade; repeat until a pass changes nothing.
+    // Sweep every dotted cell, deleting unsupported candidates from the live working
+    // set so removals cascade; repeat until a pass changes nothing.
     var markedKeys = Object.keys(centre);   // cells that started with centre marks
     var removals = [], seen = {};
-    function consider(self, other, type) {
+    function consider(self) {
       if (values[self] != null || !centre[self]) return;   // only modifiable candidate cells
-      var os = neighbourSet(other);                         // live set for marked neighbours → cascade
-      Array.from(centre[self]).forEach(function (d) {       // snapshot: we mutate the set inside the loop
-        if (!hasPartner(type, d, os)) {
+      Array.from(centre[self]).forEach(function (d) {      // snapshot: we mutate the set inside the loop
+        if (!candidateSupported(self, d)) {
           centre[self].delete(d);
           var k = self + '/' + d;
           if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: self, digit: String(d) }); }
@@ -5718,10 +5770,7 @@
     var changed = true, guard = 0;
     while (changed && guard++ < 1000) {
       var before = removals.length;
-      dots.forEach(function (dot) {
-        consider(dot.a, dot.b, dot.type);
-        consider(dot.b, dot.a, dot.type);
-      });
+      Object.keys(nbrsOf).forEach(consider);
       changed = removals.length > before;
     }
 
@@ -6060,6 +6109,36 @@
       if (keys.length >= 2) out.push(new Set(keys));
     });
     return out;
+  }
+
+  // Two cells ordinary Sudoku forbids from holding the SAME digit: same row, same
+  // column, same region, or a shared uniqueness cage. Built once per pass (it reads
+  // the region map + cages), returns the predicate.
+  //
+  // Shared by the Kropki and whisper validators: both need "these two neighbours of
+  // mine must take DISTINCT partners", which is what turns a pairwise clue into a
+  // chain constraint. Uses the model's region map when available (so JIGSAW regions
+  // are honoured) and falls back to regular boxes — same regionId shape the
+  // region-sum validator uses; note the model map is keyed "row,col", the OPPOSITE
+  // of our "col,row" cell keys.
+  function makeMustDiffer() {
+    var N = detectGridSize();
+    var bd = regularBoxDims(N);
+    var regionMap = getModelRegionMap();
+    var cageSets = getUniqueCageCellSets();
+    function regionId(key) {
+      var p = key.split(','), col = +p[0], row = +p[1];
+      if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
+      return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);
+    }
+    return function mustDiffer(a, b) {
+      if (a === b) return false;
+      var ap = a.split(','), bp = b.split(',');
+      if (ap[0] === bp[0] || ap[1] === bp[1]) return true;          // same column / same row
+      if (regionId(a) === regionId(b)) return true;
+      for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true;
+      return false;
+    };
   }
 
   // Read the puzzle's little killers as [{ keys:[<col,row>…], sum }]. Detection is
@@ -6511,6 +6590,94 @@
       out.push({ color: stroke, keys: keys });
     });
   }
+  // ── NATIVE CONSTRAINT PAYLOAD (f-puzzles only) — the authoritative source ────
+  // Every other reader in this file infers a line's TYPE from the rules prose,
+  // because SudokuPad's model doesn't carry one: its f-puzzles importer FLATTENS
+  // native constraints into cosmetics (`cp.lines` is empty, `cp.cosmetic` entries
+  // are stripped to {type,rc,cosmetic}, and the raw payload's per-line
+  // `fromConstraint:"Entropic Line"` label is dropped). So a puzzle that DECLARES
+  // its constraint in its source was still being guessed at from words.
+  //
+  // The original payload never leaves the page: PuzzleLoader.cache[<url slug>] holds
+  // the raw "fpuz…" string and PuzzleLoader.decompressPuzzleId() unpacks it
+  // SYNCHRONOUSLY (no fetch, no lz-string of our own). It carries the real
+  // constraint arrays with exact "R3C6" cell chains — no cue, no colour, no
+  // AMBIGUOUS, no transposition risk.
+  //
+  // Scope: f-puzzles ONLY (~30% of the catalog, 1848/6260). scl/sxsm lines really
+  // are just {wayPoints,color,thickness} with the type stated only in prose, so the
+  // cue+colour stack below stays load-bearing for the other ~70%. This layer goes
+  // IN FRONT of it, never replaces it.
+  var _rawPuzzleCache = { key: null, val: undefined };
+  function getRawPuzzleJson() {
+    var id = (location.pathname || '').replace(/^\/+/, '').replace(/\/+$/, '');
+    var ck = id || '(none)';
+    if (_rawPuzzleCache.key === ck) return _rawPuzzleCache.val;
+    _rawPuzzleCache.key = ck;
+    _rawPuzzleCache.val = null;
+    try {
+      if (typeof PuzzleLoader === 'undefined' || !PuzzleLoader || !PuzzleLoader.cache) return null;
+      var raw = id && PuzzleLoader.cache[id];
+      if (typeof raw !== 'string') {                       // short links / local loads key the cache differently
+        var ks = Object.keys(PuzzleLoader.cache);
+        if (ks.length === 1) raw = PuzzleLoader.cache[ks[0]];
+      }
+      // Only f-puzzles declares constraint types. scl/ctc carry none, so there is
+      // nothing to read and the cue stack must handle them.
+      if (typeof raw !== 'string' || raw.slice(0, 4) !== 'fpuz') return null;
+      _rawPuzzleCache.val = JSON.parse(PuzzleLoader.decompressPuzzleId(raw));
+    } catch (e) {
+      _rawPuzzleCache.val = null;                          // never let this break the cue stack
+    }
+    return _rawPuzzleCache.val;
+  }
+  // Is the native payload readable? Then its constraint keys are EXHAUSTIVE — the
+  // absence of a key means the puzzle genuinely has none of that constraint.
+  function hasNativePayload() { return !!getRawPuzzleJson(); }
+  // "R3C6" → "5,2" (our 0-indexed "col,row").
+  function fpuzCellKey(s) {
+    var m = /^\s*R(\d+)C(\d+)\s*$/i.exec(String(s));
+    return m ? (+m[2] - 1) + ',' + (+m[1] - 1) : null;
+  }
+  // f-puzzles constraint key → our internal line type.
+  var FPUZ_LINE_CONSTRAINTS = {
+    whispers: 'whisper', regionsumline: 'regionsum', entropicline: 'entropic',
+    renbanline: 'renban', thermometer: 'thermo'
+  };
+  function getNativeLineClues() {
+    var d = getRawPuzzleJson();
+    if (!d) return null;
+    var N = detectGridSize();
+    function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
+    var out = {};
+    Object.keys(FPUZ_LINE_CONSTRAINTS).forEach(function (fk) {
+      var type = FPUZ_LINE_CONSTRAINTS[fk];
+      out[type] = out[type] || [];
+      if (!Array.isArray(d[fk])) return;
+      d[fk].forEach(function (entry) {                     // {lines:[[ "R3C6", … ], …]}
+        if (!entry || !Array.isArray(entry.lines)) return;
+        entry.lines.forEach(function (cells) {
+          if (!Array.isArray(cells)) return;
+          var keys = [];
+          for (var i = 0; i < cells.length; i++) {
+            var k = fpuzCellKey(cells[i]);
+            if (!k || !inGrid(k)) { keys = null; break; }   // unparseable → drop the line, never guess
+            keys.push(k);
+          }
+          if (keys && keys.length >= 2) out[type].push(keys);
+        });
+      });
+    });
+    return out;
+  }
+  // The native chains for one type, or null when there is no payload / none of that
+  // type. NOTE the difference: null from a puzzle WITH a payload means "this puzzle
+  // genuinely has none" — see hasNativePayload for why that is usable as a veto.
+  function nativeLinesFor(type) {
+    var n = getNativeLineClues();
+    return (n && n[type] && n[type].length) ? n[type] : null;
+  }
+
   function getCosmeticLines() {
     var N = detectGridSize();
     function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
@@ -6588,6 +6755,11 @@
   // Returns { mode:'confident'|'ambiguous'|'none', lines:[[keys]…], allLines:[{color,keys}] }.
   function classifyWhisperLines() {
     var all = getCosmeticLines();
+    // Layer 0 (v3.90) — the puzzle DECLARES its whispers. No colour, no cue, no
+    // thermo-claim filter (which is exactly what broke `vd0mn9xqjw` — see
+    // getThermoDetection).
+    var nat = nativeLinesFor('whisper');
+    if (nat) return { mode: 'confident', lines: nat, allLines: all };
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
     var green = all.filter(function (l) { return isGermanWhisperColor(l.color); });
     if (green.length > 0 && greenNamedForRival()) green = [];
@@ -6627,8 +6799,14 @@
   //   3. cue + the rules NAME a colour for it ("purple lines are renban") → those.
   //   4. cue but can't pin → AMBIGUOUS (menu asks the player to select the line).
   // Under-detect, never mis-apply — the standing validator contract.
-  function classifyCueLines(cueRe, clauseRe) {
+  function classifyCueLines(cueRe, clauseRe, nativeType) {
     var all = getCosmeticLines();
+    // Layer 0 (v3.90) — an f-puzzles payload states the type outright; skip the
+    // whole cue/colour ladder. Only reached for the ~30% that carry one.
+    if (nativeType) {
+      var nat = nativeLinesFor(nativeType);
+      if (nat) return { mode: 'confident', lines: nat, allLines: all };
+    }
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
     var blob = getPuzzleRulesBlob();
     if (!cueRe.test(blob)) return { mode: 'none', lines: [], allLines: all };
@@ -6661,7 +6839,7 @@
   // phrasing its CUE covers, minus only the terms that collide with a rival clue.
   // A cue that fires on a phrasing its clause can't read is a GUARANTEED ambiguous.
   var RENBAN_CLAUSE_RE = /renban|set of consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
-  function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE); }
+  function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE, 'renban'); }
   function renbanDetected() { return classifyRenbanLines().mode !== 'none'; }
   function renbanIsAmbiguous() { return classifyRenbanLines().mode === 'ambiguous'; }
 
@@ -6685,7 +6863,7 @@
   //                      `7FngrT9ftq`), plus "equal sums lines" as a named variant
   var REGIONSUM_CUE_RE = /region[- ]?sum|equal[- ]?sums?\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:box|region|zone|grid)\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+(?:sum|total|number|value)[^.]{0,40}(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone|segment)|(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+segments?[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|segments?[^.]{0,40}(?:each|every)\s+of\s+which[^.]{0,30}(?:same|equal)\s+(?:sum|total)|(?:sum|total)[^.]{0,60}same\s+(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)|(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)/;
   var REGIONSUM_CLAUSE_RE = /region|box|segment|(?:same|equal)\s+sum/;
-  function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE); }
+  function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE, 'regionsum'); }
   function regionSumDetected() { return classifyRegionSumLines().mode !== 'none'; }
   function regionSumIsAmbiguous() { return classifyRegionSumLines().mode === 'ambiguous'; }
 
@@ -6803,7 +6981,7 @@
     if (ENTROPIC_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
     // classifyCueLines only ever calls cueRe.test(blob), so a duck-typed matcher
     // lets the named cue and the described-partition cue share one code path.
-    return classifyCueLines({ test: hasEntropicCue }, ENTROPIC_CLAUSE_RE);
+    return classifyCueLines({ test: hasEntropicCue }, ENTROPIC_CLAUSE_RE, 'entropic');
   }
   function entropicDetected() { return classifyEntropicLines().mode !== 'none'; }
   function entropicIsAmbiguous() { return classifyEntropicLines().mode === 'ambiguous'; }
@@ -6860,17 +7038,12 @@
       if (masked && (!selection || selection.size === 0)) return { noWhispers: true };
     }
 
-    var N = detectGridSize();
-    var bd = regularBoxDims(N);
-    var cageSets = getUniqueCageCellSets();
-    function boxId(k) { var p = k.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
-    function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
     // Two of a cell's neighbours must take DISTINCT partners when ordinary Sudoku
-    // forbids them being equal: same row, column, box, or uniqueness cage.
-    function mustDiffer(a, b) {
-      var ap = a.split(','), bp = b.split(',');
-      return ap[0] === bp[0] || ap[1] === bp[1] || boxId(a) === boxId(b) || shareCage(a, b);
-    }
+    // forbids them being equal. v3.90: shared with the Kropki validator (the same
+    // "pairwise clue → chain constraint" step) — and the shared version honours
+    // JIGSAW regions via the model region map, where this local copy only ever knew
+    // about regular boxes.
+    var mustDiffer = makeMustDiffer();
     // May we DELETE candidates from cell C? Never from a fogged cell; when masked
     // (selection-only or ambiguous), only from cells inside the selection.
     function mayRemove(C) {
@@ -7740,8 +7913,30 @@
   // bulbless = cue-pinned thermo lines that could not be oriented (skipped,
   // reported to the player by the validator's toast).
   function getThermoDetection() {
-    var chains = getThermoChainsFromModel();
-    if (chains.length === 0) chains = getThermoChainsFromDOM();
+    // Layer 0 (v3.90) — `cp.thermos` IS NOT TRUSTWORTHY ON F-PUZZLES PUZZLES.
+    // SudokuPad's importer reuses the thermo structure as a generic "line with
+    // ordered points" store, so a puzzle with NO thermometer at all can still
+    // present a fully-populated cp.thermos. `vd0mn9xqjw` ("Snapshot") has three
+    // GERMAN WHISPER lines and zero thermos, yet cp.thermos held 10 entries — all
+    // coloured #67F067 — which (a) offered the player a bogus Thermometers
+    // validator and (b) made classifyWhisperLines' lineOnThermo filter DELETE a real
+    // whisper. Worse, those model wayPoints are TRANSPOSED vs what is rendered (the
+    // v3.83 cp.cosmetic lesson again), so the phantom chains land on the wrong
+    // cells — which is why only the DIAGONAL whisper was lost: a diagonal is the one
+    // shape invariant under transposition, so it alone matched its own phantom.
+    // When the native payload is readable its keys are exhaustive: no `thermometer`
+    // key ⇒ this puzzle has no thermometers, full stop. Believe it over the model.
+    // The veto is aimed at cp.thermos ONLY. getThermoChainsFromDOM stays in the
+    // chain because it demands a real bulb circle at exactly one shaft end — it
+    // cannot invent a thermo out of a whisper line — so it remains the right
+    // fallback for an f-puzzles puzzle whose thermo is drawn cosmetically.
+    var chains;
+    if (hasNativePayload()) {
+      chains = nativeLinesFor('thermo') || getThermoChainsFromDOM();
+    } else {
+      chains = getThermoChainsFromModel();
+      if (chains.length === 0) chains = getThermoChainsFromDOM();
+    }
     var covered = {};
     chains.forEach(function (ch) { ch.forEach(function (k) { covered[k] = 1; }); });
     var bulbless = 0;
