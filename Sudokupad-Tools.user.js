@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.94.0
+// @version      3.95.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.94.0';
+  var SCRIPT_VERSION = '3.95.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1512,9 +1512,6 @@
   // IDEMPOTENT: each pass recomputes the spread from the originals + a stable order,
   // and fixAll* re-collapses before every run, so repeated applySettings never drifts.
   var DISAMBIG_DETECT = 34;    // rendered RGB distance below which two objects "collide"
-  var DISAMBIG_STEP_H = 0.045; // hue spread per rank (~16°)
-  var DISAMBIG_STEP_L = 0.13;  // lightness spread per rank
-  var DISAMBIG_STEP_S = 0.20;  // saturation spread per rank
   function rgbDist(a, b) { var dr = a[0]-b[0], dg = a[1]-b[1], db = a[2]-b[2]; return Math.sqrt(dr*dr + dg*dg + db*db); }
   function meanHue(hs) {                          // circular mean of hues (each 0..1) → 0..1
     var x = 0, y = 0;
@@ -1571,34 +1568,45 @@
     var k = members.length;
     var oh = members.map(function (m) { return rgbToHsl(m.orig.r, m.orig.g, m.orig.b); });
     var mh = meanHue(oh.map(function (x) { return x[0]; }));
-    // Variance of the ORIGINALS on each axis (hue circular) — pick the axis they
-    // actually differ on. Hue is weighted up: a small hue delta is very visible.
-    var vH = 0, vL = 0, vS = 0, mL = 0, mS = 0;
-    oh.forEach(function (x) { mL += x[2]; mS += x[1]; }); mL /= k; mS /= k;
+    var mL = 0, mS = 0; oh.forEach(function (x) { mL += x[2]; mS += x[1]; }); mL /= k; mS /= k;
+    // Spread (variance) of the ORIGINALS on each axis (hue circular) — pick the axis
+    // the author actually differed on. Hue weighted up: a small hue delta is very
+    // visible and, unlike lightness, doesn't fight the dark theme.
+    var vH = 0, vL = 0, vS = 0;
     oh.forEach(function (x) { var dh = hueDelta(mh, x[0]); vH += dh*dh; vL += (x[2]-mL)*(x[2]-mL); vS += (x[1]-mS)*(x[1]-mS); });
     var axis = 'L', best = vL;
-    if (vH*4 > best) { axis = 'H'; best = vH*4; }
+    if (vH*9 > best) { axis = 'H'; best = vH*9; }
     if (vS > best) { axis = 'S'; best = vS; }
     if (best < 1e-4) return;                       // originals identical on every axis → no ambiguity to restore
-    // Rank members by their original value on the chosen axis (stable tie-break).
-    var order = members.map(function (m, idx) { return idx; });
-    order.sort(function (a, b) {
-      var d = axis === 'H' ? hueDelta(mh, oh[a][0]) - hueDelta(mh, oh[b][0])
-            : axis === 'L' ? oh[a][2] - oh[b][2]
-            :                oh[a][1] - oh[b][1];
-      return d !== 0 ? d : a - b;
-    });
-    // Rendered base = mean of the collapsed colours (they're ~equal post-collapse).
+    // Rendered (collapsed) base. Shading PRESERVES hue, so bH == the original hue; but
+    // it DISCARDS lightness & saturation (forced to slider-L / full-sat), which is WHY
+    // peach and orange collapse. So for the L and S axes we must re-centre the spread on
+    // the ORIGINAL mean (recovering the axis shading threw away) — NOT the collapsed
+    // value, which would push the vivid colour darker (the v3.94 bug: orange went dull,
+    // peach went vivid-orange). For the hue axis the collapsed hue already equals the
+    // original, so bH is the correct centre.
     var rh = members.map(function (m) { return rgbToHsl(m.rend[0], m.rend[1], m.rend[2]); });
     var bH = meanHue(rh.map(function (x) { return x[0]; })), bL = 0, bS = 0;
     rh.forEach(function (x) { bL += x[2]; bS += x[1]; }); bL /= k; bS /= k;
-    var step = axis === 'H' ? DISAMBIG_STEP_H : axis === 'L' ? DISAMBIG_STEP_L : DISAMBIG_STEP_S;
-    order.forEach(function (memberIdx, rank) {
-      var off = (rank - (k - 1) / 2) * step, h = bH, s = bS, l = bL;
-      if (axis === 'H') { h = ((bH + off) % 1 + 1) % 1; }
-      else if (axis === 'L') { l = Math.max(0.15, Math.min(0.9, bL + off)); }
-      else { s = Math.max(0.15, Math.min(1, bS + off)); }
-      var rgb = hslToRgb(h, s, l), m = members[memberIdx];
+    // Each member's deviation from the mean on the chosen axis (original space), scaled
+    // so the cluster spans ~2·TARGET while NEVER shrinking a real difference, centred on
+    // the recovered origin. Preserves the author's ordering automatically (deviations
+    // keep their sign): the lighter original renders lighter, the greener one greener.
+    var TARGET = axis === 'H' ? 0.06 : axis === 'L' ? 0.22 : 0.28;
+    var dev = members.map(function (m, i) {
+      return axis === 'H' ? hueDelta(mh, oh[i][0]) : axis === 'L' ? oh[i][2] - mL : oh[i][1] - mS;
+    });
+    var maxDev = Math.max.apply(null, dev.map(Math.abs)) || 1e-6;
+    var gain = Math.max(1, Math.min(4, TARGET / maxDev));
+    var center = axis === 'H' ? bH
+               : axis === 'L' ? Math.max(0.30, Math.min(0.82, mL))    // recovered from originals, kept dark-theme-safe
+               :                Math.max(0.25, Math.min(1, mS));
+    members.forEach(function (m, i) {
+      var h = bH, s = bS, l = bL, v = center + dev[i] * gain;
+      if (axis === 'H') { h = ((v % 1) + 1) % 1; }
+      else if (axis === 'L') { l = Math.max(0.15, Math.min(0.92, v)); }
+      else { s = Math.max(0.15, Math.min(1, v)); }
+      var rgb = hslToRgb(h, s, l);
       m.el.style.setProperty(m.prop, 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', 'important');
     });
   }
