@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.93.0
+// @version      3.94.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.93.0';
+  var SCRIPT_VERSION = '3.94.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -209,6 +209,11 @@
     labelBgOpacity:                1.0,
 
     underlayEnabled:               true,
+    // After object shading, nudge apart two objects OF THE SAME TYPE (two lines, or
+    // two fills) that collapsed to near-identical colours despite the author drawing
+    // them distinct — see disambiguateShadedColors. Removes ambiguity; does nothing
+    // unless a real collision exists.
+    disambiguateColors:            true,
     // Object shading splits gray vs colored because gray reads dim where colored
     // reads bright at the same value. Each side has brightness + opacity; when
     // underlaySeparateBrightnessOpacity is OFF (default) the UI shows a single
@@ -727,7 +732,7 @@
     darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); disambiguateShadedColors(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -1485,6 +1490,119 @@
     });
   }
 
+  // ── Same-type colour disambiguation (v3.94) ─────────────────────────────────
+  // Object shading (shadingTransform) maps every coloured object to PURE HUE at a
+  // fixed lightness, discarding the source lightness & saturation. Two objects the
+  // author drew in DISTINCT colours that happen to share a hue then collapse to the
+  // SAME rendered colour — `bdiaxwjnxc`'s peach entropic line #ffe5b4 and orange
+  // Dutch-whisper line #ffa600 (both hue ~37°, differ only in lightness) both become
+  // one dark orange, so the player can't tell which line is which. (Contrast
+  // `pdnc0ckv87`, whose peach #ffccaa is hue 24° — a wide enough hue gap to survive.)
+  //
+  // This pass runs AFTER shading and DOES NOTHING 99% of the time. It acts only when
+  // two objects OF THE SAME TYPE (two lines, or two fills — never a line vs a fill)
+  // render within DISAMBIG_DETECT of each other WHILE their ORIGINAL author colours
+  // were meaningfully different. It then spreads the colliding cluster apart along the
+  // axis the ORIGINALS differed on (HUE for teal-vs-cyan, LIGHTNESS for peach-vs-
+  // orange, SATURATION otherwise), preserving the author's ordering — so teal shifts
+  // greener and cyan shifts less-green, exactly enough to be distinguishable again.
+  // Purely to remove ambiguity: it never touches objects drawn the SAME colour (no
+  // ambiguity to preserve), nor GREY objects (grey carries no colour identity), nor
+  // our own palette-shaded regions (deliberately coloured, and excluded structurally).
+  // IDEMPOTENT: each pass recomputes the spread from the originals + a stable order,
+  // and fixAll* re-collapses before every run, so repeated applySettings never drifts.
+  var DISAMBIG_DETECT = 34;    // rendered RGB distance below which two objects "collide"
+  var DISAMBIG_STEP_H = 0.045; // hue spread per rank (~16°)
+  var DISAMBIG_STEP_L = 0.13;  // lightness spread per rank
+  var DISAMBIG_STEP_S = 0.20;  // saturation spread per rank
+  function rgbDist(a, b) { var dr = a[0]-b[0], dg = a[1]-b[1], db = a[2]-b[2]; return Math.sqrt(dr*dr + dg*dg + db*db); }
+  function meanHue(hs) {                          // circular mean of hues (each 0..1) → 0..1
+    var x = 0, y = 0;
+    hs.forEach(function (h) { x += Math.cos(h*2*Math.PI); y += Math.sin(h*2*Math.PI); });
+    var a = Math.atan2(y, x) / (2*Math.PI); return a < 0 ? a + 1 : a;
+  }
+  function hueDelta(a, b) { var d = b - a; while (d > 0.5) d -= 1; while (d <= -0.5) d += 1; return d; }  // signed, (-0.5,0.5]
+
+  function disambiguateShadedColors(svg) {
+    if (!svg || settings.disambiguateColors === false || !settings.underlayEnabled) return;
+    collectDisambigGroups(svg).forEach(disambiguateGroup);
+  }
+  // Two type groups: clue LINES (stroke) and author FILLS (fill). Each item carries the
+  // element, the CSS prop we own, its rendered [r,g,b] (our inline output) and the
+  // author's original colour. Only chromatic objects WE actually shaded are included;
+  // grey originals + our injected region-split group are skipped.
+  function collectDisambigGroups(svg) {
+    var lineItems = [];
+    LINE_DOM_LAYER_IDS.forEach(function (id) {
+      var layer = svg.querySelector('#' + id); if (!layer) return;
+      layer.querySelectorAll('path').forEach(function (el) {
+        if (id === 'arrows' ? !isLineStroke(el) : !isLineCluePath(el)) return;
+        var rend = parseColor(el.style.getPropertyValue('stroke')); if (!rend) return;   // only lines we shaded
+        var orig = parseColor(lineStrokeSrc(el)); if (!orig || isGrayColor(orig)) return;
+        lineItems.push({ el: el, prop: 'stroke', rend: [rend.r, rend.g, rend.b], orig: orig });
+      });
+    });
+    var fillItems = [];
+    svg.querySelectorAll('#cell-colors [fill], #cages path[fill], #overlay rect[fill], #overlay circle[fill], #overlay path[fill], #underlay circle[fill]').forEach(function (el) {
+      if (el.closest('[data-spdr-region-split]')) return;                                // never our palette regions
+      var rend = parseColor(el.style.getPropertyValue('fill')); if (!rend) return;       // only fills we shaded
+      var orig = parseColor(el.getAttribute('fill')); if (!orig || isGrayColor(orig)) return;
+      fillItems.push({ el: el, prop: 'fill', rend: [rend.r, rend.g, rend.b], orig: orig });
+    });
+    return [lineItems, fillItems];
+  }
+  function disambiguateGroup(items) {
+    if (items.length < 2) return;
+    // Connected components by rendered-colour proximity (collisions are usually pairs,
+    // occasionally a short run of same-hue lines).
+    var n = items.length, seen = new Array(n).fill(false);
+    for (var i = 0; i < n; i++) {
+      if (seen[i]) continue;
+      var cluster = [i]; seen[i] = true;
+      for (var qi = 0; qi < cluster.length; qi++) {
+        for (var j = 0; j < n; j++) {
+          if (!seen[j] && rgbDist(items[cluster[qi]].rend, items[j].rend) < DISAMBIG_DETECT) { seen[j] = true; cluster.push(j); }
+        }
+      }
+      if (cluster.length >= 2) spreadCluster(cluster.map(function (k) { return items[k]; }));
+    }
+  }
+  function spreadCluster(members) {
+    var k = members.length;
+    var oh = members.map(function (m) { return rgbToHsl(m.orig.r, m.orig.g, m.orig.b); });
+    var mh = meanHue(oh.map(function (x) { return x[0]; }));
+    // Variance of the ORIGINALS on each axis (hue circular) — pick the axis they
+    // actually differ on. Hue is weighted up: a small hue delta is very visible.
+    var vH = 0, vL = 0, vS = 0, mL = 0, mS = 0;
+    oh.forEach(function (x) { mL += x[2]; mS += x[1]; }); mL /= k; mS /= k;
+    oh.forEach(function (x) { var dh = hueDelta(mh, x[0]); vH += dh*dh; vL += (x[2]-mL)*(x[2]-mL); vS += (x[1]-mS)*(x[1]-mS); });
+    var axis = 'L', best = vL;
+    if (vH*4 > best) { axis = 'H'; best = vH*4; }
+    if (vS > best) { axis = 'S'; best = vS; }
+    if (best < 1e-4) return;                       // originals identical on every axis → no ambiguity to restore
+    // Rank members by their original value on the chosen axis (stable tie-break).
+    var order = members.map(function (m, idx) { return idx; });
+    order.sort(function (a, b) {
+      var d = axis === 'H' ? hueDelta(mh, oh[a][0]) - hueDelta(mh, oh[b][0])
+            : axis === 'L' ? oh[a][2] - oh[b][2]
+            :                oh[a][1] - oh[b][1];
+      return d !== 0 ? d : a - b;
+    });
+    // Rendered base = mean of the collapsed colours (they're ~equal post-collapse).
+    var rh = members.map(function (m) { return rgbToHsl(m.rend[0], m.rend[1], m.rend[2]); });
+    var bH = meanHue(rh.map(function (x) { return x[0]; })), bL = 0, bS = 0;
+    rh.forEach(function (x) { bL += x[2]; bS += x[1]; }); bL /= k; bS /= k;
+    var step = axis === 'H' ? DISAMBIG_STEP_H : axis === 'L' ? DISAMBIG_STEP_L : DISAMBIG_STEP_S;
+    order.forEach(function (memberIdx, rank) {
+      var off = (rank - (k - 1) / 2) * step, h = bH, s = bS, l = bL;
+      if (axis === 'H') { h = ((bH + off) % 1 + 1) % 1; }
+      else if (axis === 'L') { l = Math.max(0.15, Math.min(0.9, bL + off)); }
+      else { s = Math.max(0.15, Math.min(1, bS + off)); }
+      var rgb = hslToRgb(h, s, l), m = members[memberIdx];
+      m.el.style.setProperty(m.prop, 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', 'important');
+    });
+  }
+
   // Given digits — apply colour via inline !important fill so the native dark
   // theme can't re-tint it. Overlay texts (constraint labels, rank markers, etc.)
   // are NOT touched here; they have no cell-given class. Grayscale overlay markers
@@ -2073,6 +2191,7 @@
     fixAllKropkiDots(svg);
     fixAllKropkiClueShapes(svg);
     rebuildKropkiLabels(svg);
+    disambiguateShadedColors(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
     scheduleAutoShade();   // auto-enable Shaded mode if this puzzle has extra regions
@@ -2095,7 +2214,7 @@
           }
         }
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); scheduleAutoShade(); }
+      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); scheduleAutoShade(); }
     }).observe(svg, { childList: true, subtree: true });
   }
 
