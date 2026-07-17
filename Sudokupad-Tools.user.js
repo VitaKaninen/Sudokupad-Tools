@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.87.0
+// @version      3.88.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.87.0';
+  var SCRIPT_VERSION = '3.88.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6657,7 +6657,17 @@
   // puzzle it can grab the wrong colour: e.g. 3xdi7kf6ab's Zipper clause ("…an
   // equal distance from the center sum…") named purple, so the validator locked
   // onto the purple zipper line and reported "no region-sum lines" (fixed v3.76).
-  var REGIONSUM_CUE_RE = /region[- ]?sum|box\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+sum\s+(?:in|within|per)\s+each\s+(?:box|region)|each\s+(?:box|region)[^.]*(?:same|equal)\s+sum/;
+  // v3.88 — catalog-measured rewrite: 75.8% → 94.5% recall over 326 tagged puzzles.
+  // The old cue lost 61 real puzzles to four narrownesses, each seen in the wild:
+  //   "each 3x3 box"   — `each\s+(?:box|region)` can't span the size ("values on the
+  //                      blue line have the same sum in each 3x3 box", `bl168ah6g9`)
+  //   "every" region   — only "each" was accepted (`2ifg92eka9`, the reported puzzle)
+  //   "same TOTAL"     — only "sum" was accepted ("sum to the same total in each 3x3
+  //                      box that the line visits", `foesxbaf60`); also number/value
+  //   non-box borders  — only "box borders divide" ("zone borders … divide blue lines
+  //                      into segments", `a6zbf6jui2`; "square region borders",
+  //                      `7FngrT9ftq`), plus "equal sums lines" as a named variant
+  var REGIONSUM_CUE_RE = /region[- ]?sum|equal[- ]?sums?\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:box|region|zone|grid)\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+(?:sum|total|number|value)[^.]{0,40}(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone|segment)|(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+segments?[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|segments?[^.]{0,40}(?:each|every)\s+of\s+which[^.]{0,30}(?:same|equal)\s+(?:sum|total)|(?:sum|total)[^.]{0,60}same\s+(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)|(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)/;
   var REGIONSUM_CLAUSE_RE = /region|box|segment|(?:same|equal)\s+sum/;
   function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE); }
   function regionSumDetected() { return classifyRegionSumLines().mode !== 'none'; }
@@ -6670,7 +6680,20 @@
   // or "alternate … odd/even" / "same parity" phrasing. Usual colour is red, but
   // colour alone can't discriminate a cosmetic line, so cue-gated like renban.
   // Clause trigger for the named-colour layer: parity / alternate / odd / even.
-  var PARITY_CUE_RE = /parity\s+lines?|alternat\w*[^.]*parit|parit\w*[^.]*alternat|alternat\w*\s+(?:between\s+)?(?:odd|even)|(?:same|different|opposite)\s+parit|(?:odd|even)\s*\/\s*(?:odd|even)/;
+  // v3.88 — the old cue asked "does this puzzle mention parity?", not "is a LINE
+  // about parity?", so it fired on 100 puzzles with no parity line at all: parity
+  // DOTS/diamonds ("digits separated by a red diamond must differ in parity (even/
+  // odd)", `7fvnto2d90`), parity CIRCLES (`0d1yk3fs2d`), and odd/even as a plain
+  // global ("digits in gray circles must be odd", `82dowa2bt5`). That is the
+  // dangerous direction: cue + a single-coloured cosmetic line = layer 2 CLAIMS
+  // that line, so `82dowa2bt5`'s green GERMAN WHISPER would have been validated as
+  // parity. 68 such mis-claims removed (9 german_whisper, 7 region_sum, 6 renban,
+  // 4 thermo, 2 zipper, 2 entropic) with recall held at 95.1%.
+  // Requiring a drawn-object noun (not the bare word "line") is what keeps the
+  // recall: real parity clues live on snakes and snowflakes too — "digits along the
+  // snowflake alternate between odd and even" (`pt8z9l0wii`), "digits along the
+  // snake alternate" (`zmckmtohx1`). Same LINEISH set as REGIONSUM_CUE_RE above.
+  var PARITY_CUE_RE = /parity\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.]{0,60}parit|parit[^.]{0,60}(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.]{0,60}alternat\w*\s+(?:between\s+)?(?:odd|even)|alternat\w*\s+(?:between\s+)?(?:odd|even)[^.]{0,60}(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.]{0,50}(?:odd|even)\s*\/\s*(?:odd|even)|(?:odd|even)\s*\/\s*(?:odd|even)[^.]{0,50}(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)/;
   // Named-colour clause trigger = the DISTINCTIVE words only (not bare "odd"/"even",
   // which collide with odd/even-cell clues in a multi-colour legend — same lesson
   // as renban's "consecutive" / region-sum's "sum").
@@ -6730,6 +6753,26 @@
   // entropic lines is dropped too, which is the safe direction.
   var ENTROPIC_CUE_RE = /\bentropic\s+lines?|\bentropy\s+lines?|(?:\bentropic\b|\bentropy\b)[^.]{0,60}line|line[^.]{0,60}(?:\bentropic\b|\bentropy\b)/;
   var ENTROPIC_ANTI_RE = /biased\s+entrop|tentrop|anti[- ]?entrop|(?:exactly|either)\s+(?:one|two)\s+of/;
+  // v3.88 — the cue above only fires when the rules NAME the constraint, but a large
+  // minority of setters just DESCRIBE the 123/456/789 partition and never write
+  // "entropic" at all — `3ns1yd8hps` (the reported puzzle) says only "one high digit
+  // (789), one medium digit (456), and one low digit (123)". No word-based cue can
+  // ever reach those. ENTROPIC_SET_RE matches the partition itself, in the notations
+  // the catalog actually uses: (123) / {1,2,3} / [1 2 3] / 1/2/3, and the
+  // low/middle/high wording. Recall 75.0% → 88.9%.
+  // ⚠️ It MUST be paired with ENTROPIC_LINEISH_RE: a bare "123" matches band(1,2,3),
+  // so the triple alone hits any rules text with a 1-9 block in it — `5l6mlo349f`
+  // draws its BOX NUMBERS as "123\n456\n789" and has no line clue whatsoever.
+  // Requiring a drawn-object noun in the blob is what keeps that from over-removing.
+  // Each band tolerates the notations seen in the catalog: 123, (123), {1,2,3},
+  // [1 2 3], 1/2/3. Kept as one literal (not composed from parts) so that
+  // tools/cue_recall.py can parse it straight out of this file and score it.
+  var ENTROPIC_SET_RE = /(?:low|high)[^.]{0,40}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,40}(?:high|low)|(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*2\s*[,\/ ]?\s*3\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*7\s*[,\/ ]?\s*8\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?|(?:\{|\(|\[)?\s*7\s*[,\/ ]?\s*8\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*2\s*[,\/ ]?\s*3\s*(?:\}|\)|\])?/;
+  var ENTROPIC_LINEISH_RE = /lines?|snakes?|paths?|loops?|rings?|snowflakes?/;
+  function hasEntropicCue(blob) {
+    if (ENTROPIC_CUE_RE.test(blob)) return true;
+    return ENTROPIC_SET_RE.test(blob) && ENTROPIC_LINEISH_RE.test(blob);
+  }
   // Named-colour clause trigger = the distinctive word only (not "low"/"high"/"set",
   // which collide with other clues in a multi-colour legend — the renban
   // "consecutive" / region-sum "sum" lesson).
@@ -6737,7 +6780,9 @@
   function classifyEntropicLines() {
     if (!entropicBands()) return { mode: 'none', lines: [], allLines: [] };
     if (ENTROPIC_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
-    return classifyCueLines(ENTROPIC_CUE_RE, ENTROPIC_CLAUSE_RE);
+    // classifyCueLines only ever calls cueRe.test(blob), so a duck-typed matcher
+    // lets the named cue and the described-partition cue share one code path.
+    return classifyCueLines({ test: hasEntropicCue }, ENTROPIC_CLAUSE_RE);
   }
   function entropicDetected() { return classifyEntropicLines().mode !== 'none'; }
   function entropicIsAmbiguous() { return classifyEntropicLines().mode === 'ambiguous'; }
