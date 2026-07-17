@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.85.0
+// @version      3.86.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.85.0';
+  var SCRIPT_VERSION = '3.86.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6651,14 +6651,27 @@
   function zipperIsAmbiguous() { return classifyZipperLines().mode === 'ambiguous'; }
 
   // Entropic lines: every run of THREE consecutive cells on the line holds one LOW,
-  // one MID and one HIGH digit — equal thirds of the digit set. Only 9x9 ({1,2,3} /
-  // {4,5,6} / {7,8,9}) and 6x6 ({1,2} / {3,4} / {5,6}) split into the three equal
-  // bands the convention names, so `entropicGridOK` REFUSES every other size rather
-  // than invent a split (a real 7x7 entropic puzzle exists — `pdnc0ckv87`). Band of
-  // a digit = which third it falls in; the band count is always 3, so the period-3
-  // structure below is identical for both sizes.
-  function entropicGridOK() { var N = detectGridSize(); return N === 9 || N === 6; }
-  function entropicBandOf(d, N) { return Math.floor((d - 1) / (N / 3)); }
+  // one MID and one HIGH digit — equal thirds of the digit set.
+  //
+  // THE GATE IS THE DIGIT SET, NEVER THE GRID SIZE. "Low/medium/high" is a claim
+  // about the digit ORDER, so all that matters is that the digits in play split
+  // into three equal bands. Bands = the sorted digit set cut into thirds:
+  //   9x9, 1-9              → {1,2,3}/{4,5,6}/{7,8,9}    ✓
+  //   6x6, 1-6              → {1,2}/{3,4}/{5,6}          ✓
+  //   7x7 SQUISHDOKU, 1-9   → {1,2,3}/{4,5,6}/{7,8,9}    ✓  — `pdnc0ckv87`: a 7x7
+  //       grid whose nine 3x3 boxes OVERLAP, so it holds 1-9. Gating on grid size
+  //       wrongly refused it; the digit count comes from `detectDigitCount`.
+  //   9x9 but digits set to 1-7 → 7 % 3 ≠ 0 → REFUSED (no low/mid/high split
+  //       exists, and guessing one would invent a rule the puzzle never stated).
+  // Returns { of: {digit→band}, size } or null when the set can't split into 3.
+  function entropicBands() {
+    var ds = sanitizeDigitSet(settings.digitSet || '').split('').map(Number);
+    if (ds.length < 3 || ds.length % 3 !== 0) return null;
+    ds.sort(function (a, b) { return a - b; });
+    var third = ds.length / 3, of = {};
+    ds.forEach(function (d, i) { of[d] = Math.floor(i / third); });
+    return { of: of, size: ds.length };
+  }
   // Cue-gated like renban: entropic lines have no native model key and their usual
   // peach/orange collides with every other cosmetic line. Cue = "entropic line(s)"
   // or entropy/entropic within a clause of the word "line" (catalog: 62 puzzles).
@@ -6681,7 +6694,7 @@
   // "consecutive" / region-sum "sum" lesson).
   var ENTROPIC_CLAUSE_RE = /\bentrop/;
   function classifyEntropicLines() {
-    if (!entropicGridOK()) return { mode: 'none', lines: [], allLines: [] };
+    if (!entropicBands()) return { mode: 'none', lines: [], allLines: [] };
     if (ENTROPIC_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
     return classifyCueLines(ENTROPIC_CUE_RE, ENTROPIC_CLAUSE_RE);
   }
@@ -7263,7 +7276,7 @@
 
   // ── Entropic-line validator ───────────────────────────────────────────────
   // An entropic line: every run of 3 consecutive cells holds one low, one mid and
-  // one high digit (thirds of the digit set — see entropicBandOf).
+  // one high digit (thirds of the digit set — see entropicBands).
   //
   // THE KEY IDENTITY: "every window of 3 is all-3-bands" is EXACTLY equivalent to
   // "band(i) depends only on i mod 3, and the three residues take distinct bands".
@@ -7276,17 +7289,16 @@
   // some feasible phase wants d's band there. Complete → never over-removes.
   //
   // LOOPS (`keys[0] === keys[last]`, a line drawn back to its start — real: the
-  // 6-cell entropic loops on `bdiaxwjnxc`, and a 4-cell one on `90n1ck63vq`). Two
-  // rules, which only work TOGETHER:
+  // 6-cell entropic loops on `bdiaxwjnxc`). Two rules, which only work TOGETHER:
   //   1. DROP the duplicated endpoint, so `keys.length` is the true cycle length L
   //      (rule 2 tests it) and the start cell is not phase-tested at two indices.
   //   2. A loop's windows WRAP, so the period-3 structure must close around the
-  //      cycle: satisfiable only if 3 | L. Otherwise stepping by 3 around the cycle
+  //      cycle: possible only if 3 | L. Otherwise stepping by 3 around the cycle
   //      reaches every cell (gcd(3,L) === 1), forcing all cells into ONE band and
-  //      contradicting window distinctness. So a loop whose length isn't a multiple
-  //      of 3 is STRUCTURALLY impossible → DROP the clue (the author's problem —
-  //      never wipe the player's marks; the standing contract, same as an
-  //      unmakeable cage total).
+  //      contradicting window distinctness. An entropic loop simply CANNOT exist at
+  //      a length that isn't a multiple of 3 — so such a loop is not an entropic
+  //      line at all (whatever our colour-pinning thought) → drop it and validate
+  //      nothing. Never wipe the player's marks over it.
   // Why together: skip rule 1 and a loop presents as a path of L+1 whose start cell
   // sits at indices 0 and L. Those residues clash exactly when L % 3 !== 0, killing
   // all 6 phases and WIPING the whole line as a false contradiction (verified for
@@ -7306,12 +7318,8 @@
   function computeEntropicRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
-    var N = detectGridSize();
-    if (N !== 9 && N !== 6) return { noEntropic: true };
-    // Bands are only defined over the digits 1..N; a custom digit set (letters,
-    // 0-8, a reduced set) has no low/mid/high split → refuse rather than guess.
-    if (st.fullSet.size !== N) return { noEntropic: true };
-    for (var d = 1; d <= N; d++) if (!st.fullSet.has(d)) return { noEntropic: true };
+    var bands = entropicBands();
+    if (!bands) return { noEntropic: true };   // digit set doesn't split into 3
     var cls = classifyEntropicLines();
     if (cls.mode === 'none') return { noEntropic: true };
     var res = resolveCueValidatorLines(cls, unitFilter);
@@ -7336,8 +7344,17 @@
     // Can this cell (from its readable candidates) supply a digit of band `band`?
     function hasBand(key, band) {
       var found = false;
-      cellSet(key).forEach(function (dv) { if (entropicBandOf(dv, N) === band) found = true; });
+      cellSet(key).forEach(function (dv) { if (bands.of[dv] === band) found = true; });
       return found;
+    }
+    // A PLACED value outside the digit set has no band, so we can't reason about
+    // its line at all — drop the line rather than read it as "supplies no band"
+    // (which would fail every phase and wipe the line). Real case: a `0` revealed
+    // from under fog while the digit set is still the assumed 1-9 (see
+    // detectDigitSet — a fogged 0 is deliberately not prompted for).
+    function digitsReadable(key) {
+      var v = st.values[key];
+      return v == null || bands.of[v] !== undefined;
     }
     var PERMS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
     var lineData = lines.map(function (keys) {
@@ -7345,7 +7362,8 @@
       return { keys: loop ? keys.slice(0, -1) : keys, loop: loop };
     }).filter(function (ld) {
       if (ld.keys.length < 3) return false;                       // no window of 3 → no constraint
-      if (ld.loop && ld.keys.length % 3 !== 0) return false;      // impossible loop → drop, never wipe
+      if (ld.loop && ld.keys.length % 3 !== 0) return false;      // can't BE an entropic loop → not one
+      if (!ld.keys.every(digitsReadable)) return false;           // off-set value → can't reason
       return true;
     });
 
@@ -7361,7 +7379,7 @@
         keys.forEach(function (C, i) {
           if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
           Array.from(work[C]).forEach(function (dv) {             // snapshot: set mutates in loop
-            var band = entropicBandOf(dv, N), ok = false;
+            var band = bands.of[dv], ok = false;
             for (var p = 0; p < PERMS.length; p++) if (feasible[p] && PERMS[p][i % 3] === band) { ok = true; break; }
             if (!ok) {
               work[C].delete(dv);
@@ -8193,7 +8211,7 @@
         detect: function () { var d = getThermoDetection(); return d.trees.length > 0 || d.bulbless > 0; },
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
       { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
-        detect: whisperDetected, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
+        detect: whisperDetected, ambiguous: whisperIsAmbiguous, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
       { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues', enabled: function () { return settings.validateXVEnabled !== false; },
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
@@ -8201,15 +8219,15 @@
         detect: function () { return getSumArrows().length > 0; },
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
       { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines', enabled: function () { return settings.validateRenbanEnabled !== false; },
-        detect: renbanDetected, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
+        detect: renbanDetected, ambiguous: renbanIsAmbiguous, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
       { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines', enabled: function () { return settings.validateRegionSumEnabled !== false; },
-        detect: regionSumDetected, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
+        detect: regionSumDetected, ambiguous: regionSumIsAmbiguous, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
       { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines', enabled: function () { return settings.validateParityEnabled !== false; },
-        detect: parityDetected, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
+        detect: parityDetected, ambiguous: parityIsAmbiguous, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
       { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines', enabled: function () { return settings.validateZipperEnabled !== false; },
-        detect: zipperDetected, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
+        detect: zipperDetected, ambiguous: zipperIsAmbiguous, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
       { name: 'entropic', unitNoun: 'entropic line', menuLabel: 'Entropic lines', enabled: function () { return settings.validateEntropicEnabled !== false; },
-        detect: entropicDetected, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
+        detect: entropicDetected, ambiguous: entropicIsAmbiguous, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
     ];
   }
   function detectedValidators() {
@@ -8542,6 +8560,13 @@
     if (document.getElementById('sp-validate-menu')) closeValidateMenu();
     else openValidateMenu();
   }
+  // Re-render in place so a toggle inside the menu (selection-only) updates what it
+  // greys out immediately, instead of only on the next open.
+  function rebuildValidateMenu() {
+    if (!document.getElementById('sp-validate-menu')) return;
+    closeValidateMenu();
+    openValidateMenu();
+  }
   // A validator item was clicked: resolve the selection filter (may toast + bail),
   // AND in the always-on fog gate (skips any clue with a cell still under fog),
   // then run just that validator. (The "Run all above functions" button runs every
@@ -8583,18 +8608,28 @@
     menu.style.setProperty('background-color', bg, 'important');
     menu.style.setProperty('border', '1px solid ' + border, 'important');
 
-    function addItem(label, onClick) {
+    // opts.disabled → greyed out, not clickable, and opts.title explains WHY on
+    // hover (the tooltip is the whole point of showing a disabled item instead of
+    // hiding it: a missing row tells the player nothing).
+    function addItem(label, onClick, opts) {
+      opts = opts || {};
+      var disabled = opts.disabled === true;
       var it = document.createElement('div');
       it.textContent = label;
+      if (opts.title) it.title = opts.title;
       Object.assign(it.style, {
-        padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
+        padding: '8px 12px', borderRadius: '6px',
+        cursor: disabled ? 'default' : 'pointer',
         fontSize: '13px', fontWeight: '600',
         whiteSpace: 'nowrap', userSelect: 'none',
+        opacity: disabled ? '0.4' : '1',
       });
       it.style.setProperty('color', text, 'important');
-      it.addEventListener('mouseenter', function () { it.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
-      it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', 'transparent', 'important'); });
-      it.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
+      it.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onClick(); });
+      if (!disabled) {
+        it.addEventListener('mouseenter', function () { it.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+        it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', 'transparent', 'important'); });
+      }
       menu.appendChild(it);
     }
     function addNote(msg) {
@@ -8608,7 +8643,7 @@
       note.style.setProperty('color', text, 'important');
       menu.appendChild(note);
     }
-    function addCheckbox(label, key, tip) {
+    function addCheckbox(label, key, tip, onChange) {
       var row = document.createElement('label');
       row.title = tip;
       Object.assign(row.style, {
@@ -8625,6 +8660,7 @@
       cb.addEventListener('change', function () {
         settings[key] = cb.checked;
         saveSettings(settings);
+        if (onChange) onChange();
       });
       row.appendChild(cb);
       row.appendChild(document.createTextNode(label));
@@ -8640,21 +8676,27 @@
     }
     // A prominent, filled action button (vs the plain validator items) — used for
     // "Run all above functions".
-    function addButton(label, onClick, tip) {
+    function addButton(label, onClick, tip, opts) {
+      opts = opts || {};
+      var disabled = opts.disabled === true;
       var b = document.createElement('div');
       b.textContent = label;
       b.title = tip || '';
       Object.assign(b.style, {
-        padding: '9px 12px', margin: '2px 0', borderRadius: '6px', cursor: 'pointer',
+        padding: '9px 12px', margin: '2px 0', borderRadius: '6px',
+        cursor: disabled ? 'default' : 'pointer',
         fontSize: '13px', fontWeight: '700', textAlign: 'center',
         whiteSpace: 'nowrap', userSelect: 'none',
+        opacity: disabled ? '0.4' : '1',
       });
       b.style.setProperty('color', text, 'important');
       b.style.setProperty('border', '1px solid ' + border, 'important');
       b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important');
-      b.addEventListener('mouseenter', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.16)', 'important'); });
-      b.addEventListener('mouseleave', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important'); });
-      b.addEventListener('click', function (e) { e.stopPropagation(); onClick(); });
+      b.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onClick(); });
+      if (!disabled) {
+        b.addEventListener('mouseenter', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.16)', 'important'); });
+        b.addEventListener('mouseleave', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important'); });
+      }
       menu.appendChild(b);
     }
     // The Thermo item, PLUS an inline "Slow" checkbox — auto-checked per
@@ -8696,35 +8738,50 @@
 
     // One item per validator DETECTED in this puzzle (re-checked on every open,
     // so late model loads / SPA puzzle switches are picked up).
+    // AMBIGUOUS = the rules cue fired, but WHICH lines carry the clue couldn't be
+    // pinned — the colour collides with a rival line type, or the type is the
+    // PLAYER's own deduction (`1cwnilmrp0`: "each line is EXACTLY TWO of modular,
+    // entropic, or parity"). We never guess. Rather than hide the validator (a
+    // missing row explains nothing), it's listed GREYED OUT with a tooltip saying
+    // why. Ticking "Validate selection only" hands the choice to the player — they
+    // select the line, so the ambiguity is resolved by them — which re-enables every
+    // such item. This is the uniform policy for ALL validators, driven off each
+    // def's `ambiguous()` (no per-name special-casing).
+    var selOnly = settings.validateSelectionOnly === true;
     var detected = detectedValidators();
     if (detected.length === 0) {
       addNote('No supported constraints detected in this puzzle.');
     } else {
       detected.forEach(function (def) {
         if (def.name === 'thermo') { addThermoItem(def); return; }
-        addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); });
-        // Some cosmetic-line validators can be ambiguous (a rules cue is present but
-        // which line is the clue couldn't be pinned) → tell the player to select it.
-        if (def.name === 'German whisper' && whisperIsAmbiguous())
-          addNote('⚠ Couldn\'t identify the whisper line — select its cells first, then click above. Only selected cells change.');
-        if (def.name === 'renban' && renbanIsAmbiguous())
-          addNote('⚠ Couldn\'t identify the renban line — select its cells first, then click above. Only selected cells change.');
-        if (def.name === 'region sum' && regionSumIsAmbiguous())
-          addNote('⚠ Couldn\'t identify the region-sum line — select its cells first, then click above. Only selected cells change.');
-        if (def.name === 'parity' && parityIsAmbiguous())
-          addNote('⚠ Couldn\'t identify the parity line — select its cells first, then click above. Only selected cells change.');
-        if (def.name === 'zipper' && zipperIsAmbiguous())
-          addNote('⚠ Couldn\'t identify the zipper line — select its cells first, then click above. Only selected cells change.');
-        if (def.name === 'entropic' && entropicIsAmbiguous())
-          addNote('⚠ Couldn\'t identify the entropic line — select its cells first, then click above. Only selected cells change.');
+        var amb = false;
+        try { amb = def.ambiguous ? def.ambiguous() : false; } catch (e) { amb = false; }
+        var noun = def.unitNoun || def.name;
+        var tip = '';
+        if (amb && !selOnly)
+          tip = 'Disabled — couldn\'t work out which lines are the ' + noun + 's in this puzzle '
+              + '(their type isn\'t stated unambiguously). Tick "Validate selection only" below, '
+              + 'then select the line\'s cells to run it by hand.';
+        else if (amb)
+          tip = 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
+        addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); },
+                { disabled: amb && !selOnly, title: tip });
       });
     }
     addSep();
+    // Run-all is a WHOLE-PUZZLE fixpoint, so it's mutually exclusive with
+    // selection-only: that mode narrows every validator to the player's selection
+    // (and re-enables the ambiguous ones, which would then apply every rival line
+    // type to the same selected line). With it ticked, run validators one at a time.
     if (detected.length > 0)
       addButton('Run all above functions', onRunAllClick,
-        'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).');
+        selOnly
+          ? 'Disabled while "Validate selection only" is ticked — run the validators one at a time from the list above.'
+          : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).',
+        { disabled: selOnly });
     addCheckbox('Validate selection only', 'validateSelectionOnly',
-      'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped. Exception: German whisper lines DO run on a partial selection (only the selected cells change; the rest of the line is still read). Resets on page reload.');
+      'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped. Also re-enables any greyed-out validator whose line type couldn\'t be identified, and disables "Run all above functions". Exception: German whisper lines DO run on a partial selection (only the selected cells change; the rest of the line is still read). Resets on page reload.',
+      rebuildValidateMenu);
 
     document.body.appendChild(menu);
     positionValidateMenu(menu, btn);
@@ -8940,38 +8997,101 @@
     return result;
   }
 
+  // How many digits are in play = the size of the LARGEST no-repeat region. A
+  // no-repeat region can never hold more digits than the puzzle HAS, and a sudoku's
+  // boxes hold exactly the full set — so the biggest one IS the digit count.
+  // This is what makes SQUISHDOKU work with no special case: `pdnc0ckv87` is a 7x7
+  // grid whose nine 3x3 boxes OVERLAP, so its boxes are 9 cells and its digits are
+  // 1-9 even though the grid is only 7 wide. Its rows/cols (7 cells) are smaller
+  // and don't win. A 9x9 → 9, a 6x6 → 6, all from the same rule.
+  // Falls back to the grid size when the model isn't loaded / has no regions.
+  function cageCellCount(c) {
+    var cells = c && c.cells;
+    if (Array.isArray(cells)) return cells.length;
+    var m = String(cells || '').match(/r\d+c\d+/gi);
+    return m ? m.length : 0;
+  }
+  function detectDigitCount() {
+    var N = detectGridSize();
+    var best = 0;
+    try {
+      var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+        ? Framework.app.puzzle.currentPuzzle : null;
+      if (cp) {
+        if (Array.isArray(cp.regions)) cp.regions.forEach(function (r) {
+          if (Array.isArray(r) && r.length > best) best = r.length;
+        });
+        // Squishdoku's boxes are authored as hidden unique:true cages, not regions.
+        if (Array.isArray(cp.cages)) cp.cages.forEach(function (c) {
+          if (!c || c.unique !== true) return;
+          var n = cageCellCount(c);
+          if (n > best) best = n;
+        });
+      }
+    } catch (e) { /* model not ready → fall back to the grid */ }
+    if (best < 2 || best > 16) return N;
+    return best;
+  }
+
   // Scan the live puzzle DOM for digits in use (givens, placed values,
   // pencilmarks). Returns { anomaly, bestGuess, reasons }.
-  // anomaly is true if the puzzle is non-standard 9×9 or contains a '0'.
+  // anomaly is true if the puzzle doesn't use 9 digits, or shows a VISIBLE '0'.
   // Letter marks are NOT an anomaly — the script doesn't operate on letters,
   // so a 9×9 with letter pencilmarks still uses the default 1-9 digit set.
+  //
+  // FOG IS A SPOILER BOUNDARY. A given hidden under fog is still in the DOM, so a
+  // naive scan sees a '0' the PLAYER isn't meant to know about yet — and prompting
+  // "digit ‘0’ found in puzzle" would leak it. So a digit is only allowed to drive
+  // the prompt when it was seen in a cell that isn't fogged. A fogged-only '0' is
+  // ignored completely: not named as a reason, and not pre-filled into the guess
+  // (which would leak it just as loudly). The digit set is then assumed to be the
+  // standard 1..digitCount, which is right for the 9x9 and 7x7-Squishdoku cases.
   function detectDigitSet() {
-    var found = {};
-    function addDigit(c) { if (c && /^[0-9]$/.test(c)) found[c] = true; }
+    var isFogged = getFogTester();          // null when the puzzle has no active fog
+    var found = {};                          // digit → { visible:bool }
+    function addDigit(c, xyEl) {
+      if (!c || !/^[0-9]$/.test(c)) return;
+      if (!found[c]) found[c] = { visible: false };
+      if (found[c].visible) return;          // already proven visible somewhere
+      var fogged = false;
+      if (isFogged && xyEl) {
+        try { fogged = isFogged(cellKeyFromMarkXY(xyEl.getAttribute('x'), xyEl.getAttribute('y'))); }
+        catch (e) { fogged = false; }
+      }
+      if (!fogged) found[c].visible = true;
+    }
     document.querySelectorAll('#cell-givens text, #cell-values text').forEach(function (t) {
       var v = (t.textContent || '').trim();
-      if (v.length === 1) addDigit(v);
+      if (v.length === 1) addDigit(v, t);
     });
     document.querySelectorAll('#cell-pencilmarks text').forEach(function (t) {
-      addDigit((t.getAttribute('data-val') || '').trim());
+      addDigit((t.getAttribute('data-val') || '').trim(), t);
     });
+    // A tspan carries no x/y — its parent <text> holds the cell position.
     document.querySelectorAll('#cell-candidates tspan').forEach(function (t) {
-      addDigit((t.getAttribute('data-val') || '').trim());
+      addDigit((t.getAttribute('data-val') || '').trim(), t.parentNode);
     });
+    var digitCount = detectDigitCount();
     var gridN = detectGridSize();
+    var zeroVisible = !!(found['0'] && found['0'].visible);
     // Build best-guess preserving "1-9 then 0" order (natural sudoku order
     // where 0 is the "extra" 10th digit appended after 9, not pushed to the
     // front by numeric sort). sanitizeDigitSet preserves insertion order, so
-    // we just concatenate the right way: 1..min(gridN,9) first, then '0' if
-    // detected, then anything else from `found`.
+    // we just concatenate the right way: 1..min(digitCount,9) first, then '0' if
+    // VISIBLY present, then anything else from `found`.
     var guessStr = '';
-    for (var i = 1; i <= Math.min(gridN, 9); i++) guessStr += String(i);
-    if (found['0']) guessStr += '0';
-    Object.keys(found).forEach(function (c) { guessStr += c; });
+    for (var i = 1; i <= Math.min(digitCount, 9); i++) guessStr += String(i);
+    if (zeroVisible) guessStr += '0';
+    Object.keys(found).forEach(function (c) {
+      if (c === '0' && !zeroVisible) return;               // fogged-only 0: never leak it
+      guessStr += c;
+    });
     var bestGuess = sanitizeDigitSet(guessStr);
     var reasons = [];
-    if (gridN !== 9) reasons.push(gridN + '\xd7' + gridN + ' grid detected');
-    if (found['0']) reasons.push("digit ‘0’ found in puzzle");
+    // Keyed on the DIGIT COUNT, not the grid: a 7x7 Squishdoku uses 9 digits and is
+    // NOT anomalous, so it's applied silently with no prompt.
+    if (digitCount !== 9) reasons.push(gridN + '\xd7' + gridN + ' grid detected');
+    if (zeroVisible) reasons.push("digit ‘0’ found in puzzle");
     var anomaly = reasons.length > 0;
     return { anomaly: anomaly, bestGuess: bestGuess, reasons: reasons };
   }

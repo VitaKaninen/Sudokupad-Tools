@@ -215,7 +215,7 @@ Applies to **any line rule with a repeating period** (entropic = period 3; a fut
 - ✅ **Rule 1 — drop the duplicated endpoint** so `keys.length` is the true cycle length L.
 - ✅ **Rule 2 — a loop's windows WRAP**, so the period must close around the cycle: satisfiable only if `p | L`. Otherwise stepping by p reaches every cell (`gcd(p,L)===1`), forcing all cells into one phase and contradicting the rule. A loop with `L % p !== 0` is *structurally* impossible → **DROP the clue, never wipe** (the author's problem — the standing contract).
 - The two rules only work **together**: rule 2 is what removes the clashing loops, but only rule 1 makes rule 2 measure L instead of L+1. For the survivors (`p | L`), index L ≡ index 0 (mod p), so the plain `perm[i % p]` test enforces the wrap-around windows automatically — **a loop needs no separate code path**.
-- ⚠️ **Not every "loop" in the rules is a drawn line:** `cbbvbid2vt` ("the loop acts as an entropic line") is a **solver-drawn** loop — the puzzle has no cosmetic line at all, so detection correctly finds nothing. Don't chase it as a detection bug.
+- ⚠️ **Not every "loop" in the rules is a drawn line — and don't assume a drawn loop is the type you're looking for.** `cbbvbid2vt` ("the loop acts as an entropic line") and `90n1ck63vq` (the "Golden Bear Path") are both **solver-drawn**: the puzzle has no cosmetic entropic line at all, so detection correctly finds nothing. Don't chase either as a detection bug. `90n1ck63vq` also burned me the other way: I read its drawn **4-cell brown loop** as an entropic loop when the rules plainly say it's a **parity** loop (its blue lines are **modular**). **Read the rules text for each line's colour before citing a puzzle as evidence** — a closed loop of the wrong length is far more likely to be a different line type than a broken puzzle.
 - Precedent: the parity validator (p=2) drops the duplicate but deliberately does NOT enforce the wrap edge — safe (under-constrains), just weaker than entropic's treatment.
 
 ### A rules cue that *contains* the constraint's name can still be the wrong constraint (v3.85, entropic)
@@ -223,6 +223,18 @@ Cue-gating on `/entrop/`-ish text looks safe until the catalog is queried — 8 
 - ✅ Pair every cue regex with an explicit **ANTI regex** of the near-miss rules, and verify both against the catalog before trusting them (here: 62 true hits, all 8 traps blocked). `` anchoring alone is not enough — it happens to exclude "tentropic", but not "anti-entropy".
 - ✅ **Gate the grid size too, don't infer it:** a real 7x7 entropic puzzle exists (`pdnc0ckv87`). Only 9x9 and 6x6 split into the three equal bands the convention names, so refuse everything else rather than invent a split.
 
+
+### Digit count = the largest no-repeat region, NOT the grid size (v3.86, Squishdoku)
+Gating anything on `detectGridSize()` is a bug waiting to happen: **Squishdoku** (`pdnc0ckv87`) is a **7x7 grid that uses the digits 1-9** — its nine 3x3 boxes OVERLAP, so they're 9 cells inside a 7-wide grid. v3.85's entropic validator gated on "grid is 9x9 or 6x6" and refused it outright.
+- ✅ **The invariant to use instead:** a no-repeat region can never hold more digits than the puzzle has, and a sudoku's boxes hold exactly the full set — so **digit count = size of the largest `unique:true` region/cage** (`detectDigitCount`), falling back to the grid size. 9x9→9, 6x6→6, 7x7 Squishdoku→9, all from one rule and with no variant-specific code. Squishdoku's boxes are authored as **hidden `unique:true` cages, not `regions`** (its `regions` array is empty), and cage `cells` comes in two shapes (`[[c,r],…]` in the raw JSON, `"r1c1,…"` at runtime) — handle both.
+- ✅ **Rule-of-thumb:** if a feature asks "is this a 9x9?", it almost always really wants "how many digits are in play?". Ask that instead.
+
+### Fog is a spoiler boundary — a fogged given is still in the DOM (v3.86)
+SudokuPad renders fogged givens into the DOM and hides them visually. So anything that SCANS the grid and then TELLS the user what it found can leak a digit the player hasn't earned yet. Real case: `detectDigitSet` prompting *"digit ‘0’ found in puzzle"* for a `0` sitting under fog.
+- ⚠️ Pre-filling the guessed digit set with that `0` leaks it just as loudly as naming it — suppressing only the message is not enough.
+- ✅ Track **per-digit visibility** (hit-test the mark's cell with `getFogTester()`), and let only digits seen in an UNfogged cell drive a prompt. A fogged-only digit is ignored entirely; assume the standard set. A tspan carries no x/y — read the parent `<text>`'s.
+- ✅ Downstream consequence: assuming 1-9 while a `0` really exists means a validator can later meet a placed value with **no band/place in the digit set**. Don't let that read as "supplies nothing" (which silently wipes a line) — detect the off-set value and drop the clue (`digitsReadable` in the entropic validator).
+- General rule: **any user-visible output derived from a DOM scan must be fog-filtered**, not just the validators' removals.
 
 ---
 *Personal / non-session notes (removed-feature history, browser-environment workarounds) live in [personal-notes.md](personal-notes.md) — not loaded by default.*
