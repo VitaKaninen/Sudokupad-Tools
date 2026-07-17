@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.91.0
+// @version      3.92.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.91.0';
+  var SCRIPT_VERSION = '3.92.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4122,11 +4122,15 @@
       osvg.appendChild(poly);
       flash(osvg);
     }
-    // Outline a SET of whole grid cells (keyed "col,row", 0-indexed) in one shot —
-    // clears any prior highlight, draws one de-duplicated box per cell, flashes once
-    // and holds. Used by the validator-menu eyeballs to show exactly which cells a
-    // validator's detected clues cover (verify identification at a glance).
-    function showCells(cellKeys) {
+    // Highlight a set of clue OBJECTS (not the cells that hold them) in one shot —
+    // clears any prior highlight, draws each object's own shape, flashes once and
+    // holds. Used by the validator-menu eyeballs so a line reads as a line, a dot as
+    // a dot, a cage as its outline. Object descriptors (cell keys are "col,row",
+    // 0-indexed): {type:'dot',a,b} (marker on the shared border), {type:'line'|
+    // 'diag',keys} (polyline through cell centres), {type:'thermo',edges,root} (a
+    // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb
+    // marker + polyline), {type:'cage',keys} (merged perimeter of the cell set).
+    function showObjects(objs) {
       ensure();
       clearSvg();
       positionOverlay();
@@ -4134,24 +4138,49 @@
       var cs = getGridCellSize();
       var m; try { m = (board && board.getScreenCTM) ? board.getScreenCTM() : null; } catch (e) { m = null; }
       if (!m || !cs) { osvg.style.display = 'none'; return; }
-      function P(ux, uy) { return (m.a * ux + m.c * uy + m.e) + ',' + (m.b * ux + m.d * uy + m.f); }
-      var seen = {}, screenRects = [];
-      (cellKeys || []).forEach(function (key) {
-        if (seen[key]) return; seen[key] = 1;
-        var p = String(key).split(','), col = +p[0], row = +p[1];
-        if (!isFinite(col) || !isFinite(row)) return;
-        var x0 = col * cs, y0 = row * cs, x1 = x0 + cs, y1 = y0 + cs;
-        var poly = document.createElementNS(NS, 'polygon');
-        poly.setAttribute('points', [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)].join(' '));
-        poly.setAttribute('fill', 'none'); poly.setAttribute('stroke', STROKE);
-        poly.setAttribute('stroke-width', '2.5'); poly.setAttribute('stroke-opacity', '1');
-        poly.style.cssText = 'fill:none !important;stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
-        osvg.appendChild(poly);
-        var r = poly.getBoundingClientRect && poly.getBoundingClientRect();
-        if (r && (r.width || r.height)) screenRects.push(r);
+      function S(ux, uy) { return { x: m.a * ux + m.c * uy + m.e, y: m.b * ux + m.d * uy + m.f }; }
+      function centre(key) { var p = String(key).split(','), c = +p[0], r = +p[1]; return (isFinite(c) && isFinite(r)) ? S(c * cs + cs / 2, r * cs + cs / 2) : null; }
+      function seg(p1, p2) {
+        if (!p1 || !p2) return;
+        var ln = document.createElementNS(NS, 'line');
+        ln.setAttribute('x1', p1.x); ln.setAttribute('y1', p1.y); ln.setAttribute('x2', p2.x); ln.setAttribute('y2', p2.y);
+        ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', '4'); ln.setAttribute('stroke-opacity', '1');
+        ln.setAttribute('stroke-linecap', 'round');
+        ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+        osvg.appendChild(ln);
+      }
+      function marker(pt, rPx) {
+        if (!pt) return;
+        var c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y); c.setAttribute('r', rPx);
+        c.setAttribute('fill', 'none'); c.setAttribute('stroke', STROKE); c.setAttribute('stroke-width', '3'); c.setAttribute('stroke-opacity', '1');
+        c.style.cssText = 'fill:none !important;stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+        osvg.appendChild(c);
+      }
+      function polyline(keys) { for (var i = 1; i < keys.length; i++) seg(centre(keys[i - 1]), centre(keys[i])); }
+      function cagePerimeter(keys) {
+        var set = {}; keys.forEach(function (k) { set[k] = 1; });
+        keys.forEach(function (k) {
+          var p = String(k).split(','), cx = +p[0], cy = +p[1];
+          if (!isFinite(cx) || !isFinite(cy)) return;
+          var A = S(cx * cs, cy * cs), B = S((cx + 1) * cs, cy * cs), C = S((cx + 1) * cs, (cy + 1) * cs), D = S(cx * cs, (cy + 1) * cs);
+          if (!set[cx + ',' + (cy - 1)]) seg(A, B);   // top
+          if (!set[cx + ',' + (cy + 1)]) seg(D, C);   // bottom
+          if (!set[(cx - 1) + ',' + cy]) seg(A, D);   // left
+          if (!set[(cx + 1) + ',' + cy]) seg(B, C);   // right
+        });
+      }
+      var scale = Math.sqrt(m.a * m.a + m.b * m.b), cellPx = cs * scale;
+      (objs || []).forEach(function (o) {
+        if (!o) return;
+        if (o.type === 'line' || o.type === 'diag') polyline(o.keys || []);
+        else if (o.type === 'cage') cagePerimeter(o.keys || []);
+        else if (o.type === 'dot') { var a = centre(o.a), b = centre(o.b); if (a && b) marker({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, cellPx * 0.16); }
+        else if (o.type === 'arrow') { polyline([o.circle].concat(o.shaft || [])); marker(centre(o.circle), cellPx * 0.34); }
+        else if (o.type === 'thermo') { (o.edges || []).forEach(function (e) { seg(centre(e[0]), centre(e[1])); }); marker(centre(o.root), cellPx * 0.30); }
       });
       if (osvg.firstChild) flash(osvg); else osvg.style.display = 'none';
-      dimPanel(screenRects);
+      dimPanel([]);
     }
     // Draw a straight highlight segment between two USER-space points, mapped to
     // screen via `m` (the board root's getScreenCTM). Used to trace a clean,
@@ -4201,7 +4230,7 @@
       for (var i = 0; i < divPool.length; i++) divPool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
-    return { show: show, hide: hide, addText: addText, addLine: addLine, addCellBox: addCellBox, showCells: showCells, pulse: pulse };
+    return { show: show, hide: hide, addText: addText, addLine: addLine, addCellBox: addCellBox, showObjects: showObjects, pulse: pulse };
   })();
 
   // Tiny tooltip beside the mouse pointer — used on eyeball hover to say "nothing to
@@ -6802,6 +6831,8 @@
 
     var cue = hasWhisperRuleCue();
     if (!cue) return { mode: 'none', lines: [], allLines: all };
+    // Solver-determined type (see SELF_DEDUCTION_RE) → don't auto-claim; hand-select.
+    if (SELF_DEDUCTION_RE.test(getPuzzleRulesBlob())) return { mode: 'ambiguous', lines: [], allLines: all };
 
     // Layer 2 — cue + single line colour → that colour is the whisper.
     var colors = {};
@@ -6830,6 +6861,22 @@
   //   3. cue + the rules NAME a colour for it ("purple lines are renban") → those.
   //   4. cue but can't pin → AMBIGUOUS (menu asks the player to select the line).
   // Under-detect, never mis-apply — the standing validator contract.
+  //
+  // A rules phrasing that hands the line's TYPE to the solver ("each line is EXACTLY
+  // TWO of modular, entropic, or parity" — `1cwnilmrp0`; "each line is exactly one of
+  // the above … determined by the solver" — `3DrNDGMDnG`; or a puzzle that literally
+  // calls its lines "ambiguous"). When present, no cue validator may auto-claim a
+  // line, so every one whose cue fires goes AMBIGUOUS (see classifyCueLines / whisper).
+  //
+  // Blob is lowercased (getPuzzleRulesBlob), so this is lowercase, no /i. It is
+  // deliberately TIGHT — it must NOT fire on an "exactly/either one of" that governs
+  // some OTHER clue: `H66NhnG9mm` ("either one of these rules is true for any cage")
+  // has a legit single red whisper that must stay CONFIDENT. So the "one/two of" must
+  // sit next to the word "line(s)" (…line is exactly two of…) OR be immediately
+  // followed by a line-TYPE enumeration; the standalone "ambiguous line(s)" phrase is
+  // the third trigger. Catalog-checked: matches 1cwnilmrp0 + 3DrNDGMDnG, spares the
+  // other two line-tagged puzzles that carry the loose phrase.
+  var SELF_DEDUCTION_RE = /\bambiguous\s+lines?\b|\blines?\b[^.]{0,40}\b(?:is|are|be)\s+(?:exactly\s+)?(?:one|two)\s+of\b|(?:exactly|either)\s+(?:one|two)\s+of\b[^.]{0,80}(?:modular|entropic|parity|whisper|renban|region[- ]?sum|zipper|palindrome|nabner)/;
   function classifyCueLines(cueRe, clauseRe, nativeType) {
     var all = getCosmeticLines();
     // Layer 0 (v3.90) — an f-puzzles payload states the type outright; skip the
@@ -6841,6 +6888,14 @@
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
     var blob = getPuzzleRulesBlob();
     if (!cueRe.test(blob)) return { mode: 'none', lines: [], allLines: all };
+    // The rules say the line's type is the SOLVER'S deduction — "each line is
+    // EXACTLY TWO of modular, entropic, or parity" (`1cwnilmrp0`), or a puzzle that
+    // literally calls them "ambiguous lines". The cue for THIS type fires (so it's
+    // one of the options), but we must NOT auto-claim any line: the single-colour /
+    // named-colour layers below would wrongly grab every line. Force AMBIGUOUS so
+    // the validator only runs on a hand-selection. (Same guard the entropic
+    // ANTI-regex used to hard-code; now shared across all cue validators.)
+    if (SELF_DEDUCTION_RE.test(blob)) return { mode: 'ambiguous', lines: [], allLines: all };
     var colors = {};
     all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
     if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
@@ -6971,13 +7026,15 @@
   //                    `c3qu3xglut`) — note "\bentrop" alone already misses
   //                    "tentropic", this is belt-and-braces
   //   anti-entrop…   → orthogonal-neighbour rule, not a line       (`74j61weh89`)
-  //   "exactly two of"/"either one of" → the line's TYPE is itself the deduction
-  //                    ("each line is EXACTLY TWO of modular, entropic, or parity",
-  //                    `1cwnilmrp0`) — validating it as entropic would over-remove.
+  // The "exactly/either one/two of" case (the line's TYPE is the solver's deduction,
+  // `1cwnilmrp0`) is NO LONGER handled here — it now goes through SELF_DEDUCTION_RE
+  // in classifyCueLines, which routes it to AMBIGUOUS (a greyed, hand-selectable
+  // row) instead of NONE (a hidden row). ANTI stays for the rules that describe a
+  // DIFFERENT constraint, which must vanish entirely.
   // Under-detect, never mis-apply — a puzzle mixing a guarded rule WITH plain
   // entropic lines is dropped too, which is the safe direction.
   var ENTROPIC_CUE_RE = /\bentropic\s+lines?|\bentropy\s+lines?|(?:\bentropic\b|\bentropy\b)[^.]{0,60}line|line[^.]{0,60}(?:\bentropic\b|\bentropy\b)/;
-  var ENTROPIC_ANTI_RE = /biased\s+entrop|tentrop|anti[- ]?entrop|(?:exactly|either)\s+(?:one|two)\s+of/;
+  var ENTROPIC_ANTI_RE = /biased\s+entrop|tentrop|anti[- ]?entrop/;
   // v3.88 — the cue above only fires when the rules NAME the constraint, but a large
   // minority of setters just DESCRIBE the 123/456/789 partition and never write
   // "entropic" at all — `3ns1yd8hps` (the reported puzzle) says only "one high digit
@@ -8570,54 +8627,74 @@
     });
   }
 
-  // ── Validator-menu eyeball: preview which cells a validator's clues cover ────
-  // Hovering the 👁 beside a menu row outlines exactly the grid cells that
-  // validator has DETECTED as its clues, so the player can verify the tool is
-  // identifying things correctly before running it. Reuses the settings-panel
-  // highlight overlay (spdrHi) + "nothing here" tooltip (spdrTip).
+  // ── Validator-menu eyeball: preview the OBJECTS a click will validate ────────
+  // Hovering the 👁 beside a menu row outlines the actual clue OBJECTS this
+  // validator would act on — the dots, lines, cages, thermos, arrows themselves
+  // (NOT the cells that hold them). It draws only what CLICKING would validate: the
+  // confidently-identified clues. When a line's type is AMBIGUOUS (the puzzle hands
+  // the choice to the solver, e.g. `1cwnilmrp0`) nothing is auto-validated, so
+  // nothing is drawn and a tooltip explains that ambiguous lines are present but
+  // untouched. The eye stays live even on a greyed (ambiguous) row. Reuses the
+  // settings-panel overlay (spdrHi.showObjects) + pointer tooltip (spdrTip).
   //
   // Each getter reuses the SAME detection function the validator's compute() reads
-  // (the FOOLPROOF PRINCIPLE) — never a parallel selector that could drift. Returns
-  // a flat list of "col,row" cell keys (spdrHi.showCells de-dupes).
-  function lineClassifyCells(c) {
-    var out = [];
-    if (!c) return out;
-    if (c.mode === 'confident') (c.lines || []).forEach(function (ln) { (ln || []).forEach(function (k) { out.push(k); }); });
-    else if (c.mode === 'ambiguous') (c.allLines || []).forEach(function (l) { (l.keys || []).forEach(function (k) { out.push(k); }); });
-    return out;
+  // (the FOOLPROOF PRINCIPLE), so the preview can't drift from what runs.
+  function validatorClassify(def) {
+    switch (def.name) {
+      case 'German whisper': return classifyWhisperLines();
+      case 'renban':      return classifyRenbanLines();
+      case 'region sum':  return classifyRegionSumLines();
+      case 'parity':      return classifyParityLines();
+      case 'zipper':      return classifyZipperLines();
+      case 'entropic':    return classifyEntropicLines();
+    }
+    return null;   // non-line validators have no ambiguity concept
   }
-  function validatorFootprintCells(def) {
+  // Clue-object descriptors for spdrHi.showObjects: {type:'dot',a,b},
+  // {type:'line'|'diag',keys}, {type:'cage',keys}, {type:'arrow',circle,shaft},
+  // {type:'thermo',edges,root}.
+  function validatorClueObjects(def) {
     var out = [];
     switch (def.name) {
-      case 'Kropki':        collectKropkiDots().forEach(function (d) { out.push(d.a, d.b); }); break;
-      case 'XV':            collectXVDots().forEach(function (d) { out.push(d.a, d.b); }); break;
-      case 'cage':          getKillerCages().forEach(function (c) { out.push.apply(out, c.keys); }); break;
-      case 'little killer': getLittleKillers().forEach(function (lk) { out.push.apply(out, lk.keys); }); break;
-      case 'thermo':        getThermos().forEach(function (t) { out.push.apply(out, t.keys || []); }); break;
-      case 'sum arrow':     getSumArrows().forEach(function (a) { out.push(a.circle); out.push.apply(out, a.shaft); }); break;
-      case 'German whisper': out = lineClassifyCells(classifyWhisperLines()); break;
-      case 'renban':        out = lineClassifyCells(classifyRenbanLines()); break;
-      case 'region sum':    out = lineClassifyCells(classifyRegionSumLines()); break;
-      case 'parity':        out = lineClassifyCells(classifyParityLines()); break;
-      case 'zipper':        out = lineClassifyCells(classifyZipperLines()); break;
-      case 'entropic':      out = lineClassifyCells(classifyEntropicLines()); break;
+      case 'Kropki':        collectKropkiDots().forEach(function (d) { out.push({ type: 'dot', a: d.a, b: d.b }); }); break;
+      case 'XV':            collectXVDots().forEach(function (d) { out.push({ type: 'dot', a: d.a, b: d.b }); }); break;
+      case 'cage':          getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;
+      case 'little killer': getLittleKillers().forEach(function (lk) { out.push({ type: 'diag', keys: lk.keys }); }); break;
+      case 'thermo':        getThermos().forEach(function (t) { out.push({ type: 'thermo', edges: t.edges, root: t.root, keys: t.keys }); }); break;
+      case 'sum arrow':     getSumArrows().forEach(function (a) { out.push({ type: 'arrow', circle: a.circle, shaft: a.shaft }); }); break;
+      default:
+        // Only CONFIDENTLY-identified lines are validated on a plain click, so those
+        // are the only ones previewed. Ambiguous → nothing (a click removes nothing).
+        var cls = validatorClassify(def);
+        if (cls && cls.mode === 'confident') (cls.lines || []).forEach(function (keys) { out.push({ type: 'line', keys: keys }); });
     }
     return out;
   }
-  // The 👁 span for a validator menu row. Hover shows the footprint (or a tooltip
-  // when nothing is detectable to highlight); click pulses it. stopPropagation so a
-  // click never triggers the row's "run this validator" handler.
+  // The 👁 span for a validator menu row. Hover highlights the objects a click
+  // would validate + a tooltip when the line type is the solver's own deduction;
+  // click pulses. stopPropagation so a click never triggers the row's run handler.
   function makeValidatorEye(def) {
     var ic = document.createElement('span');
     ic.textContent = '👁';
-    ic.title = 'Hover to highlight this puzzle\'s ' + (def.unitNoun || def.name) + 's; click to pulse';
+    ic.title = 'Hover to highlight the ' + (def.unitNoun || def.name) + 's a click would validate; click to pulse';
     Object.assign(ic.style, { fontSize: '16px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', marginLeft: '10px', pointerEvents: 'auto' });
-    function cells() { try { return validatorFootprintCells(def); } catch (e) { return []; } }
     ic.addEventListener('mouseenter', function (e) {
       ic.style.opacity = '1'; ic.style.filter = 'none';
-      var cs = cells();
-      try { spdrHi.showCells(cs); } catch (e2) {}
-      if (!cs.length) spdrTip.show(e.clientX, e.clientY, 'Nothing detected here to highlight in this puzzle.');
+      var objs = []; try { objs = validatorClueObjects(def); } catch (e2) {}
+      try { spdrHi.showObjects(objs); } catch (e2) {}
+      var cls = null; try { cls = validatorClassify(def); } catch (e2) {}
+      var noun = def.unitNoun || def.name;
+      if (cls && cls.mode === 'ambiguous') {
+        // Lines of this type exist but the puzzle leaves which-is-which to the
+        // solver, so a plain click validates none of them.
+        var msg = 'This puzzle’s ' + noun + 's can’t be identified automatically (the rules leave their type to you), so none are validated on a plain click. ';
+        msg += settings.validateSelectionOnly === true
+          ? 'Select a line’s cells, then click to check it by hand.'
+          : 'Tick “Validate selection only”, then select a line to check it by hand.';
+        spdrTip.show(e.clientX, e.clientY, msg);
+      } else if (!objs.length) {
+        spdrTip.show(e.clientX, e.clientY, 'Nothing detected here to highlight in this puzzle.');
+      }
     });
     ic.addEventListener('mousemove', function (e) { spdrTip.move(e.clientX, e.clientY); });
     ic.addEventListener('mouseleave', function () {
@@ -9013,11 +9090,13 @@
         cursor: disabled ? 'default' : 'pointer',
         fontSize: '13px', fontWeight: '600',
         whiteSpace: 'nowrap', userSelect: 'none',
-        opacity: disabled ? '0.4' : '1',
       });
       var lbl = document.createElement('span');
       lbl.textContent = label;
       lbl.style.flex = '1';
+      // Dim only the LABEL when disabled, never the whole row — the 👁 eyeball must
+      // stay fully lit and usable on a greyed (ambiguous) row.
+      lbl.style.opacity = disabled ? '0.4' : '1';
       it.appendChild(lbl);
       // The 👁 opts back into pointer-events even on a disabled (ambiguous) row, so a
       // player can still preview which lines it thinks are candidates.
