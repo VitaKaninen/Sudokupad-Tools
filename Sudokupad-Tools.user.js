@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.92.0
+// @version      3.93.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.92.0';
+  var SCRIPT_VERSION = '3.93.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -284,6 +284,7 @@
     validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
     validateThermoEnabled:        true,   // "Validate Constraints": run the thermometer validator (future per-validator toggle)
     validateWhisperEnabled:       true,   // "Validate Constraints": run the German-whisper (green line, ≥5) validator (future per-validator toggle)
+    validateDutchEnabled:         true,   // "Validate Constraints": run the Dutch-whisper validator (cue-gated cosmetic line, adjacent digits differ by ≥4)
     validateXVEnabled:            true,   // "Validate Constraints": run the XV validator (V = sum 5, X = sum 10 across a labeled edge)
     validateArrowEnabled:         true,   // "Validate Constraints": run the sum-arrow validator (shaft digits sum to the circle digit)
     validateRenbanEnabled:        true,   // "Validate Constraints": run the renban validator (line = a set of consecutive distinct digits, any order)
@@ -291,6 +292,7 @@
     validateParityEnabled:        true,   // "Validate Constraints": run the parity-line validator (adjacent digits alternate odd/even along the line)
     validateZipperEnabled:        true,   // "Validate Constraints": run the zipper-line validator (equidistant-from-centre pairs share one sum; odd line's centre IS that sum)
     validateEntropicEnabled:      true,   // "Validate Constraints": run the entropic-line validator (every 3 consecutive cells = one low/mid/high digit; 9x9 + 6x6 only)
+    validateModularEnabled:       true,   // "Validate Constraints": run the modular-line validator (every 3 consecutive cells = one of each residue mod 3: {1,4,7}/{2,5,8}/{3,6,9})
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
@@ -7074,6 +7076,47 @@
   function entropicDetected() { return classifyEntropicLines().mode !== 'none'; }
   function entropicIsAmbiguous() { return classifyEntropicLines().mode === 'ambiguous'; }
 
+  // ── Modular lines ───────────────────────────────────────────────────────────
+  // A modular line: every run of THREE consecutive cells holds one digit from each
+  // residue class mod 3 — {1,4,7} / {2,5,8} / {3,6,9} for 1-9 — in one continuous
+  // order (`bdiaxwjnxc` "Modulo Line": "…alternate between the sets of {1,4,7},
+  // {2,5,8}, and {3,6,9} in the same, continuous order"). This is the ENTROPIC line
+  // with residue-mod-3 bands instead of sorted-thirds bands, so it reuses the whole
+  // computeBandLineRemovals engine. Catalog naming (2026-07-17 survey of the rules
+  // corpus): "modular line(s)" is dominant (53 puzzles) over "modulo line" (1), so
+  // the menu/toast noun is "modular line".
+  //
+  // THE GATE IS THE DIGIT SET: the digits in play must split into three EQUAL
+  // residue-mod-3 classes (1-9 → 3/3/3; 1-6 → 2/2/2). A set that doesn't (e.g. 1-7)
+  // has no clean mod-3 partition → refused, never guessed.
+  function modularBands() {
+    var ds = sanitizeDigitSet(settings.digitSet || '').split('').map(Number);
+    if (ds.length < 3 || ds.length % 3 !== 0) return null;
+    var sizes = [0, 0, 0], of = {};
+    ds.forEach(function (d) { sizes[d % 3]++; of[d] = d % 3; });   // band index = residue mod 3
+    if (sizes[0] !== sizes[1] || sizes[1] !== sizes[2]) return null;
+    return { of: of, size: ds.length };
+  }
+  // Cue-gated exactly like entropic. The WORD cue covers the 53 "modular line(s)" /
+  // "modulo line" puzzles; MODULAR_SET_RE additionally catches setters who only
+  // describe the {1,4,7}/{2,5,8}/{3,6,9} partition (paired with a drawn-object noun,
+  // so a stray 1-9 block in the rules can't over-fire — same guard as entropic).
+  var MODULAR_CUE_RE = /\bmodular\s+lines?|\bmodulo\s+lines?|(?:\bmodular\b|\bmodulo\b)[^.]{0,60}line|line[^.]{0,60}(?:\bmodular\b|\bmodulo\b)/;
+  var MODULAR_SET_RE = /(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*4\s*[,\/ ]?\s*7\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*2\s*[,\/ ]?\s*5\s*[,\/ ]?\s*8\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*3\s*[,\/ ]?\s*6\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?/;
+  function hasModularCue(blob) {
+    if (MODULAR_CUE_RE.test(blob)) return true;
+    return MODULAR_SET_RE.test(blob) && ENTROPIC_LINEISH_RE.test(blob);
+  }
+  var MODULAR_CLAUSE_RE = new RegExp('\\bmodul(?:ar|o)|' + MODULAR_SET_RE.source);
+  function classifyModularLines() {
+    if (!modularBands()) return { mode: 'none', lines: [], allLines: [] };
+    // No native f-puzzles key for modular lines (they're always cosmetic), so no
+    // layer-0 payload type — the cue/colour ladder is the only path.
+    return classifyCueLines({ test: hasModularCue }, MODULAR_CLAUSE_RE, null);
+  }
+  function modularDetected() { return classifyModularLines().mode !== 'none'; }
+  function modularIsAmbiguous() { return classifyModularLines().mode === 'ambiguous'; }
+
   // Resolve which line chains a cue-gated validator should check + whether removals
   // are MASKED to the selection. CONFIDENT mode → the classifier's pinned lines,
   // filtered by the shared whole-clue unitFilter (selection-only + fog). AMBIGUOUS
@@ -7102,11 +7145,15 @@
   // the line, but only cells inside the selection are altered. In AMBIGUOUS mode a
   // selection is REQUIRED, and every selected line is validated regardless of
   // colour (the player's manual override).
-  function computeWhisperRemovals() {
+  // Shared whisper-family engine (German ≥5 + Dutch ≥4 — same local-neighbour
+  // check, differing ONLY in the minimum-difference threshold and cue/classify).
+  // `cls` = the caller's classification, `threshold` = the required |d−e| gap,
+  // keyNames = { none, count } names the caller's result keys.
+  function computeWhisperLikeRemovals(cls, threshold, keyNames) {
+    function none(extra) { var o = {}; o[keyNames.none] = true; if (extra) o.needSelection = true; return o; }
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
-    var cls = classifyWhisperLines();
-    if (cls.mode === 'none') return { noWhispers: true };
+    if (cls.mode === 'none') return none();
 
     var selection = getSelectedCells();                 // Set<"col,row"> (may be empty)
     var isFogged = getFogTester();                      // fn|null (never remove from a fogged cell)
@@ -7115,15 +7162,15 @@
 
     var lines, masked;
     if (ambiguous) {
-      if (!selection || selection.size === 0) return { noWhispers: true, needSelection: true };
+      if (!selection || selection.size === 0) return none(true);
       lines = cls.allLines.filter(function (l) { return l.keys.some(function (k) { return selection.has(k); }); })
                           .map(function (l) { return l.keys; });
-      if (lines.length === 0) return { noWhispers: true, needSelection: true };
+      if (lines.length === 0) return none(true);
       masked = true;                                    // only alter selected cells
     } else {
       lines = cls.lines;
       masked = selectionOnly;
-      if (masked && (!selection || selection.size === 0)) return { noWhispers: true };
+      if (masked && (!selection || selection.size === 0)) return none();
     }
 
     // Two of a cell's neighbours must take DISTINCT partners when ordinary Sudoku
@@ -7152,10 +7199,11 @@
       if (work[key]) return work[key];
       return fullSet;                                  // empty cell → unconstrained, never modified
     }
-    // Digits the neighbour could still hold that are ≥5 away from d (a legal partner).
+    // Digits the neighbour could still hold that are ≥threshold away from d (a legal
+    // partner). threshold = 5 for German whispers, 4 for Dutch.
     function partners(neighbourKey, d) {
       var r = [];
-      cellSet(neighbourKey).forEach(function (e) { if (Math.abs(e - d) >= 5) r.push(e); });
+      cellSet(neighbourKey).forEach(function (e) { if (Math.abs(e - d) >= threshold) r.push(e); });
       return r;
     }
     function candidateValid(C, d, left, right) {
@@ -7202,8 +7250,38 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
 
-    return { removals: removals, whisperCount: lines.length, emptiedCells: emptied };
+    var out = { removals: removals, emptiedCells: emptied };
+    out[keyNames.count] = lines.length;
+    return out;
   }
+  function computeWhisperRemovals() {
+    return computeWhisperLikeRemovals(classifyWhisperLines(), 5, { none: 'noWhispers', count: 'whisperCount' });
+  }
+  function computeDutchWhisperRemovals() {
+    return computeWhisperLikeRemovals(classifyDutchWhisperLines(), 4, { none: 'noDutch', count: 'dutchCount' });
+  }
+
+  // ── Dutch whisper lines ─────────────────────────────────────────────────────
+  // A Dutch whisper: adjacent digits along the line differ by AT LEAST 4 (`bdiaxwjnxc`
+  // "Dutch Whisper Line: Digits along an orange line differ by at least 4"). Identical
+  // to the German whisper except the threshold is 4, so it reuses the whole
+  // computeWhisperLikeRemovals engine. UNLIKE German whispers there is no trusted
+  // convention colour (German green is trusted on its own; Dutch orange is not — orange
+  // collides with too many other line types), so this is a pure CUE-GATED classifier
+  // like renban/entropic: cue absent → NONE; single colour or a named colour → that
+  // line; cue present but unpinnable → AMBIGUOUS (hand-select).
+  //
+  // Cue mirrors WHISPER_CUE_RE but pinned to the literal 4/four — the value is exactly
+  // what separates Dutch from German (see the WHISPER_CUE_RE note "still 0 Dutch
+  // whispers"). Leading \b before 4 so a cell reference "…r4c2…" can't trip it.
+  var DUTCH_CUE_RE = /(dutch\s+whisper)|(differ(?:ence|s)?[^.]{0,30}?(?:by|of)?\s*(?:at least|a minimum of|minimum of|of at least)?\s*\b(?:4|four)\b)|(minimum difference of (?:4|four))/;
+  var DUTCH_CLAUSE_RE = /dutch|differ(?:ence|s)?[^.]{0,30}?\b(?:4|four)\b/;
+  function classifyDutchWhisperLines() {
+    // No native f-puzzles key for Dutch whispers (always cosmetic) → cue/colour only.
+    return classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null);
+  }
+  function dutchDetected() { return classifyDutchWhisperLines().mode !== 'none'; }
+  function dutchIsAmbiguous() { return classifyDutchWhisperLines().mode === 'ambiguous'; }
 
   // ── Renban validator ──────────────────────────────────────────────────────
   // A renban line: its cells hold a SET OF CONSECUTIVE DISTINCT digits in any
@@ -7683,16 +7761,22 @@
   // constrain. Both-guards: all 6 phases infeasible given the marks is a REAL
   // solver contradiction → candidates emptied → the run reports the red "no valid
   // combination" error (the uniform signal).
-  function computeEntropicRemovals(unitFilter) {
+  // Shared band-line removal core (entropic + modular — both partition the digit
+  // set into 3 bands and require every window of 3 consecutive cells to cover all
+  // three, in one continuous order). `bands` = { of:{digit→0|1|2}, size } from the
+  // caller's band function (entropicBands = sorted thirds; modularBands = residue
+  // mod 3); the band VALUES are opaque indices here, so the two validators share
+  // this whole engine and differ ONLY in which digits map to which band + their cue/
+  // classify functions. keyNames = { none, count } names the caller's result keys.
+  function computeBandLineRemovals(cls, bands, unitFilter, keyNames) {
+    function none() { var o = {}; o[keyNames.none] = true; return o; }
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
-    var bands = entropicBands();
-    if (!bands) return { noEntropic: true };   // digit set doesn't split into 3
-    var cls = classifyEntropicLines();
-    if (cls.mode === 'none') return { noEntropic: true };
+    if (!bands) return none();                 // digit set doesn't split into 3
+    if (cls.mode === 'none') return none();
     var res = resolveCueValidatorLines(cls, unitFilter);
-    if (res.needSelection) return { noEntropic: true, needSelection: true };
-    if (res.lines.length === 0) return { noEntropic: true };
+    if (res.needSelection) { var r = none(); r.needSelection = true; return r; }
+    if (res.lines.length === 0) return none();
     var lines = res.lines, masked = res.masked, selection = res.selection;
     var isFogged = getFogTester();
 
@@ -7762,7 +7846,17 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, entropicCount: lineData.length, emptiedCells: emptied };
+    var out = { removals: removals, emptiedCells: emptied };
+    out[keyNames.count] = lineData.length;
+    return out;
+  }
+  function computeEntropicRemovals(unitFilter) {
+    return computeBandLineRemovals(classifyEntropicLines(), entropicBands(), unitFilter,
+      { none: 'noEntropic', count: 'entropicCount' });
+  }
+  function computeModularRemovals(unitFilter) {
+    return computeBandLineRemovals(classifyModularLines(), modularBands(), unitFilter,
+      { none: 'noModular', count: 'modularCount' });
   }
 
   // ── Thermo validator ──────────────────────────────────────────────────────
@@ -8572,18 +8666,44 @@
     }
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  //  ADDING A VALIDATOR — the full checklist (keep this current!)
+  // ════════════════════════════════════════════════════════════════════════════
   // The validators wired into the button. Each is independent (own board read, own
-  // removal list) so a future Settings panel can toggle them individually — to add
-  // one, append an entry here. Contract per entry:
-  //   enabled()          — reads its settings flag (default on)
-  //   detect()           — CHEAP "does this puzzle contain any of these clues?"
-  //                        (menu only lists detected validators; re-run per menu open
-  //                        so late model loads / SPA navigation stay correct)
-  //   compute(unitFilter)— returns { removals, emptiedCells, <unitCount>, unsupported?,
-  //                        <none>? }. unitFilter (nullable) is fn(cellKeys[])→bool;
-  //                        the compute must DROP any clue/unit whose full cell list
-  //                        fails it BEFORE validating ("Validate selection only":
-  //                        a partially-selected clue is skipped, never half-checked).
+  // removal list) so a Settings panel could toggle them individually. Adding a new
+  // one is NOT just "append an entry here" — a validator has to opt into every
+  // cross-cutting feature the others already carry, or it silently ships half-built
+  // (e.g. no hover eyeball). When you ADD a validator, do ALL of these:
+  //   1. A `compute(unitFilter)` fn returning { removals, emptiedCells, <unitCount>,
+  //      unsupported?, <none>? }. unitFilter (nullable) is fn(cellKeys[])→bool; the
+  //      compute must DROP any clue whose full cell list fails it BEFORE validating
+  //      ("Validate selection only": a partially-selected clue is skipped, never
+  //      half-checked). Line validators: reuse resolveCueValidatorLines + one of the
+  //      shared engines (computeBandLineRemovals / computeWhisperLikeRemovals) — a
+  //      new line type is usually a near-clone of an existing one.
+  //   2. A `detect()` — CHEAP "does this puzzle contain any of these clues?" (the menu
+  //      only lists detected validators; re-run per menu open so late model loads /
+  //      SPA navigation stay correct).
+  //   3. The registry entry below (name/unitNoun/menuLabel/enabled/detect/compute/
+  //      countKey/noneKey; line types also `ambiguous`).
+  //   4. A `settings.validate<X>Enabled` default (top of DEFAULTS) so enabled() reads it.
+  //   5. THE HOVER EYEBALL (v3.91) — every menu row gets a 👁 via makeValidatorEye,
+  //      but it only draws objects if the validator is reachable from its dispatch:
+  //        • LINE validators → add a `case` to validatorClassify() returning your
+  //          classify*Lines() (the eye + ambiguity note read it; the default branch of
+  //          validatorClueObjects then draws the confident lines automatically).
+  //        • NON-line validators → add a `case` to validatorClueObjects() that reuses
+  //          your detection fn (the FOOLPROOF PRINCIPLE: preview from the SAME fn
+  //          compute() reads, so it can never drift from what runs).
+  //   6. PROJECT_SUMMARY code map — add the new validator to the "Validate Constraints"
+  //      entry with its version.
+  //
+  //  ADDING A CROSS-CUTTING FEATURE to validators (like the v3.91 eyeball): apply it
+  //  to EVERY existing validator retroactively AND extend THIS checklist so the next
+  //  validator inherits it without being asked. New shared behaviour lives in the
+  //  generic machinery (makeValidatorEye, applyOneValidator, the shared engines) so a
+  //  registry entry gets it for free — that's the design goal; keep it that way.
+  // ════════════════════════════════════════════════════════════════════════════
   function constraintValidators() {
     return [
       { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots', enabled: function () { return settings.validateKropkiEnabled !== false; },
@@ -8602,6 +8722,8 @@
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
       { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
         detect: whisperDetected, ambiguous: whisperIsAmbiguous, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
+      { name: 'Dutch whisper', unitNoun: 'Dutch whisper line', menuLabel: 'Dutch whisper lines', enabled: function () { return settings.validateDutchEnabled !== false; },
+        detect: dutchDetected, ambiguous: dutchIsAmbiguous, compute: computeDutchWhisperRemovals, countKey: 'dutchCount', noneKey: 'noDutch' },
       { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues', enabled: function () { return settings.validateXVEnabled !== false; },
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
@@ -8618,6 +8740,8 @@
         detect: zipperDetected, ambiguous: zipperIsAmbiguous, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
       { name: 'entropic', unitNoun: 'entropic line', menuLabel: 'Entropic lines', enabled: function () { return settings.validateEntropicEnabled !== false; },
         detect: entropicDetected, ambiguous: entropicIsAmbiguous, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
+      { name: 'modular', unitNoun: 'modular line', menuLabel: 'Modular lines', enabled: function () { return settings.validateModularEnabled !== false; },
+        detect: modularDetected, ambiguous: modularIsAmbiguous, compute: computeModularRemovals, countKey: 'modularCount', noneKey: 'noModular' },
     ];
   }
   function detectedValidators() {
@@ -8647,6 +8771,8 @@
       case 'parity':      return classifyParityLines();
       case 'zipper':      return classifyZipperLines();
       case 'entropic':    return classifyEntropicLines();
+      case 'modular':     return classifyModularLines();
+      case 'Dutch whisper': return classifyDutchWhisperLines();
     }
     return null;   // non-line validators have no ambiguity concept
   }
