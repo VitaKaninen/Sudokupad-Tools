@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.90.0
+// @version      3.91.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.90.0';
+  var SCRIPT_VERSION = '3.91.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4122,6 +4122,37 @@
       osvg.appendChild(poly);
       flash(osvg);
     }
+    // Outline a SET of whole grid cells (keyed "col,row", 0-indexed) in one shot —
+    // clears any prior highlight, draws one de-duplicated box per cell, flashes once
+    // and holds. Used by the validator-menu eyeballs to show exactly which cells a
+    // validator's detected clues cover (verify identification at a glance).
+    function showCells(cellKeys) {
+      ensure();
+      clearSvg();
+      positionOverlay();
+      var board = document.getElementById('svgrenderer');
+      var cs = getGridCellSize();
+      var m; try { m = (board && board.getScreenCTM) ? board.getScreenCTM() : null; } catch (e) { m = null; }
+      if (!m || !cs) { osvg.style.display = 'none'; return; }
+      function P(ux, uy) { return (m.a * ux + m.c * uy + m.e) + ',' + (m.b * ux + m.d * uy + m.f); }
+      var seen = {}, screenRects = [];
+      (cellKeys || []).forEach(function (key) {
+        if (seen[key]) return; seen[key] = 1;
+        var p = String(key).split(','), col = +p[0], row = +p[1];
+        if (!isFinite(col) || !isFinite(row)) return;
+        var x0 = col * cs, y0 = row * cs, x1 = x0 + cs, y1 = y0 + cs;
+        var poly = document.createElementNS(NS, 'polygon');
+        poly.setAttribute('points', [P(x0, y0), P(x1, y0), P(x1, y1), P(x0, y1)].join(' '));
+        poly.setAttribute('fill', 'none'); poly.setAttribute('stroke', STROKE);
+        poly.setAttribute('stroke-width', '2.5'); poly.setAttribute('stroke-opacity', '1');
+        poly.style.cssText = 'fill:none !important;stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+        osvg.appendChild(poly);
+        var r = poly.getBoundingClientRect && poly.getBoundingClientRect();
+        if (r && (r.width || r.height)) screenRects.push(r);
+      });
+      if (osvg.firstChild) flash(osvg); else osvg.style.display = 'none';
+      dimPanel(screenRects);
+    }
     // Draw a straight highlight segment between two USER-space points, mapped to
     // screen via `m` (the board root's getScreenCTM). Used to trace a clean,
     // de-duplicated region boundary (one line per edge — no doubled strips).
@@ -4170,7 +4201,7 @@
       for (var i = 0; i < divPool.length; i++) divPool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
-    return { show: show, hide: hide, addText: addText, addLine: addLine, addCellBox: addCellBox, pulse: pulse };
+    return { show: show, hide: hide, addText: addText, addLine: addLine, addCellBox: addCellBox, showCells: showCells, pulse: pulse };
   })();
 
   // Tiny tooltip beside the mouse pointer — used on eyeball hover to say "nothing to
@@ -8539,6 +8570,64 @@
     });
   }
 
+  // ── Validator-menu eyeball: preview which cells a validator's clues cover ────
+  // Hovering the 👁 beside a menu row outlines exactly the grid cells that
+  // validator has DETECTED as its clues, so the player can verify the tool is
+  // identifying things correctly before running it. Reuses the settings-panel
+  // highlight overlay (spdrHi) + "nothing here" tooltip (spdrTip).
+  //
+  // Each getter reuses the SAME detection function the validator's compute() reads
+  // (the FOOLPROOF PRINCIPLE) — never a parallel selector that could drift. Returns
+  // a flat list of "col,row" cell keys (spdrHi.showCells de-dupes).
+  function lineClassifyCells(c) {
+    var out = [];
+    if (!c) return out;
+    if (c.mode === 'confident') (c.lines || []).forEach(function (ln) { (ln || []).forEach(function (k) { out.push(k); }); });
+    else if (c.mode === 'ambiguous') (c.allLines || []).forEach(function (l) { (l.keys || []).forEach(function (k) { out.push(k); }); });
+    return out;
+  }
+  function validatorFootprintCells(def) {
+    var out = [];
+    switch (def.name) {
+      case 'Kropki':        collectKropkiDots().forEach(function (d) { out.push(d.a, d.b); }); break;
+      case 'XV':            collectXVDots().forEach(function (d) { out.push(d.a, d.b); }); break;
+      case 'cage':          getKillerCages().forEach(function (c) { out.push.apply(out, c.keys); }); break;
+      case 'little killer': getLittleKillers().forEach(function (lk) { out.push.apply(out, lk.keys); }); break;
+      case 'thermo':        getThermos().forEach(function (t) { out.push.apply(out, t.keys || []); }); break;
+      case 'sum arrow':     getSumArrows().forEach(function (a) { out.push(a.circle); out.push.apply(out, a.shaft); }); break;
+      case 'German whisper': out = lineClassifyCells(classifyWhisperLines()); break;
+      case 'renban':        out = lineClassifyCells(classifyRenbanLines()); break;
+      case 'region sum':    out = lineClassifyCells(classifyRegionSumLines()); break;
+      case 'parity':        out = lineClassifyCells(classifyParityLines()); break;
+      case 'zipper':        out = lineClassifyCells(classifyZipperLines()); break;
+      case 'entropic':      out = lineClassifyCells(classifyEntropicLines()); break;
+    }
+    return out;
+  }
+  // The 👁 span for a validator menu row. Hover shows the footprint (or a tooltip
+  // when nothing is detectable to highlight); click pulses it. stopPropagation so a
+  // click never triggers the row's "run this validator" handler.
+  function makeValidatorEye(def) {
+    var ic = document.createElement('span');
+    ic.textContent = '👁';
+    ic.title = 'Hover to highlight this puzzle\'s ' + (def.unitNoun || def.name) + 's; click to pulse';
+    Object.assign(ic.style, { fontSize: '16px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', marginLeft: '10px', pointerEvents: 'auto' });
+    function cells() { try { return validatorFootprintCells(def); } catch (e) { return []; } }
+    ic.addEventListener('mouseenter', function (e) {
+      ic.style.opacity = '1'; ic.style.filter = 'none';
+      var cs = cells();
+      try { spdrHi.showCells(cs); } catch (e2) {}
+      if (!cs.length) spdrTip.show(e.clientX, e.clientY, 'Nothing detected here to highlight in this puzzle.');
+    });
+    ic.addEventListener('mousemove', function (e) { spdrTip.move(e.clientX, e.clientY); });
+    ic.addEventListener('mouseleave', function () {
+      ic.style.opacity = '0.55'; ic.style.filter = 'grayscale(1)';
+      spdrHi.hide(); spdrTip.hide();
+    });
+    ic.addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); spdrHi.pulse(); });
+    return ic;
+  }
+
   // ── "Validate Constraints" button: menu + runners ─────────────────────────
   // The button TOGGLES a popup menu (toggleValidateMenu) that stays open across
   // runs — only the button (or a window resize) closes it. The menu lists one
@@ -8917,15 +9006,22 @@
       opts = opts || {};
       var disabled = opts.disabled === true;
       var it = document.createElement('div');
-      it.textContent = label;
       if (opts.title) it.title = opts.title;
       Object.assign(it.style, {
+        display: 'flex', alignItems: 'center', gap: '8px',
         padding: '8px 12px', borderRadius: '6px',
         cursor: disabled ? 'default' : 'pointer',
         fontSize: '13px', fontWeight: '600',
         whiteSpace: 'nowrap', userSelect: 'none',
         opacity: disabled ? '0.4' : '1',
       });
+      var lbl = document.createElement('span');
+      lbl.textContent = label;
+      lbl.style.flex = '1';
+      it.appendChild(lbl);
+      // The 👁 opts back into pointer-events even on a disabled (ambiguous) row, so a
+      // player can still preview which lines it thinks are candidates.
+      if (opts.eyeDef) it.appendChild(makeValidatorEye(opts.eyeDef));
       it.style.setProperty('color', text, 'important');
       it.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onClick(); });
       if (!disabled) {
@@ -9017,6 +9113,7 @@
       row.style.setProperty('color', text, 'important');
       var lbl = document.createElement('span');
       lbl.textContent = def.menuLabel || def.name;
+      lbl.style.flex = '1';
       row.appendChild(lbl);
 
       var slowLbl = document.createElement('label');
@@ -9031,6 +9128,7 @@
       slowLbl.appendChild(cb);
       slowLbl.appendChild(document.createTextNode('Slow'));
       row.appendChild(slowLbl);
+      row.appendChild(makeValidatorEye(def));
 
       row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
       row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
@@ -9067,7 +9165,7 @@
         else if (amb)
           tip = 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
         addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); },
-                { disabled: amb && !selOnly, title: tip });
+                { disabled: amb && !selOnly, title: tip, eyeDef: def });
       });
     }
     addSep();
