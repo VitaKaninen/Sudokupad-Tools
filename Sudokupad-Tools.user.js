@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.84.0
+// @version      3.85.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.84.0';
+  var SCRIPT_VERSION = '3.85.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -290,6 +290,7 @@
     validateRegionSumEnabled:     true,   // "Validate Constraints": run the region-sum-line validator (box/region borders split the line into equal-sum segments)
     validateParityEnabled:        true,   // "Validate Constraints": run the parity-line validator (adjacent digits alternate odd/even along the line)
     validateZipperEnabled:        true,   // "Validate Constraints": run the zipper-line validator (equidistant-from-centre pairs share one sum; odd line's centre IS that sum)
+    validateEntropicEnabled:      true,   // "Validate Constraints": run the entropic-line validator (every 3 consecutive cells = one low/mid/high digit; 9x9 + 6x6 only)
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
@@ -6649,6 +6650,44 @@
   function zipperDetected() { return classifyZipperLines().mode !== 'none'; }
   function zipperIsAmbiguous() { return classifyZipperLines().mode === 'ambiguous'; }
 
+  // Entropic lines: every run of THREE consecutive cells on the line holds one LOW,
+  // one MID and one HIGH digit — equal thirds of the digit set. Only 9x9 ({1,2,3} /
+  // {4,5,6} / {7,8,9}) and 6x6 ({1,2} / {3,4} / {5,6}) split into the three equal
+  // bands the convention names, so `entropicGridOK` REFUSES every other size rather
+  // than invent a split (a real 7x7 entropic puzzle exists — `pdnc0ckv87`). Band of
+  // a digit = which third it falls in; the band count is always 3, so the period-3
+  // structure below is identical for both sizes.
+  function entropicGridOK() { var N = detectGridSize(); return N === 9 || N === 6; }
+  function entropicBandOf(d, N) { return Math.floor((d - 1) / (N / 3)); }
+  // Cue-gated like renban: entropic lines have no native model key and their usual
+  // peach/orange collides with every other cosmetic line. Cue = "entropic line(s)"
+  // or entropy/entropic within a clause of the word "line" (catalog: 62 puzzles).
+  // The ANTI guard blocks the near-miss rules that also say "entrop…line" but are
+  // NOT this constraint — each one verified against a real catalog puzzle:
+  //   biased entrop… → unequal bands {1,2}/{3,4,5}/{6,7,8,9}   (`ho51fykiy7`)
+  //   tentrop…       → runs of FOUR over X-pairs {19}{28}{37}{46} (`3gkoee7rau`,
+  //                    `c3qu3xglut`) — note "\bentrop" alone already misses
+  //                    "tentropic", this is belt-and-braces
+  //   anti-entrop…   → orthogonal-neighbour rule, not a line       (`74j61weh89`)
+  //   "exactly two of"/"either one of" → the line's TYPE is itself the deduction
+  //                    ("each line is EXACTLY TWO of modular, entropic, or parity",
+  //                    `1cwnilmrp0`) — validating it as entropic would over-remove.
+  // Under-detect, never mis-apply — a puzzle mixing a guarded rule WITH plain
+  // entropic lines is dropped too, which is the safe direction.
+  var ENTROPIC_CUE_RE = /\bentropic\s+lines?|\bentropy\s+lines?|(?:\bentropic\b|\bentropy\b)[^.]{0,60}line|line[^.]{0,60}(?:\bentropic\b|\bentropy\b)/;
+  var ENTROPIC_ANTI_RE = /biased\s+entrop|tentrop|anti[- ]?entrop|(?:exactly|either)\s+(?:one|two)\s+of/;
+  // Named-colour clause trigger = the distinctive word only (not "low"/"high"/"set",
+  // which collide with other clues in a multi-colour legend — the renban
+  // "consecutive" / region-sum "sum" lesson).
+  var ENTROPIC_CLAUSE_RE = /\bentrop/;
+  function classifyEntropicLines() {
+    if (!entropicGridOK()) return { mode: 'none', lines: [], allLines: [] };
+    if (ENTROPIC_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
+    return classifyCueLines(ENTROPIC_CUE_RE, ENTROPIC_CLAUSE_RE);
+  }
+  function entropicDetected() { return classifyEntropicLines().mode !== 'none'; }
+  function entropicIsAmbiguous() { return classifyEntropicLines().mode === 'ambiguous'; }
+
   // Resolve which line chains a cue-gated validator should check + whether removals
   // are MASKED to the selection. CONFIDENT mode → the classifier's pinned lines,
   // filtered by the shared whole-clue unitFilter (selection-only + fog). AMBIGUOUS
@@ -7220,6 +7259,124 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, zipperCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Entropic-line validator ───────────────────────────────────────────────
+  // An entropic line: every run of 3 consecutive cells holds one low, one mid and
+  // one high digit (thirds of the digit set — see entropicBandOf).
+  //
+  // THE KEY IDENTITY: "every window of 3 is all-3-bands" is EXACTLY equivalent to
+  // "band(i) depends only on i mod 3, and the three residues take distinct bands".
+  // Proof: windows i and i+1 are each all-distinct and share cells i+1,i+2, so
+  // band(i) = band(i+3); induction gives period 3, and the first window's
+  // distinctness makes the three residues distinct. So the whole line is one of
+  // just SIX phases — the 6 permutations of the bands over residues 0,1,2 (the
+  // parity validator's 2-phase argument, one dimension up). A phase is FEASIBLE iff
+  // every cell can supply its required band; candidate d at index i survives iff
+  // some feasible phase wants d's band there. Complete → never over-removes.
+  //
+  // LOOPS (`keys[0] === keys[last]`, a line drawn back to its start — real: the
+  // 6-cell entropic loops on `bdiaxwjnxc`, and a 4-cell one on `90n1ck63vq`). Two
+  // rules, which only work TOGETHER:
+  //   1. DROP the duplicated endpoint, so `keys.length` is the true cycle length L
+  //      (rule 2 tests it) and the start cell is not phase-tested at two indices.
+  //   2. A loop's windows WRAP, so the period-3 structure must close around the
+  //      cycle: satisfiable only if 3 | L. Otherwise stepping by 3 around the cycle
+  //      reaches every cell (gcd(3,L) === 1), forcing all cells into ONE band and
+  //      contradicting window distinctness. So a loop whose length isn't a multiple
+  //      of 3 is STRUCTURALLY impossible → DROP the clue (the author's problem —
+  //      never wipe the player's marks; the standing contract, same as an
+  //      unmakeable cage total).
+  // Why together: skip rule 1 and a loop presents as a path of L+1 whose start cell
+  // sits at indices 0 and L. Those residues clash exactly when L % 3 !== 0, killing
+  // all 6 phases and WIPING the whole line as a false contradiction (verified for
+  // L=4,5,7,8). Rule 2 drops precisely those loops, and for the survivors (3 | L)
+  // index L ≡ index 0 (mod 3), so the duplicate is harmless — but only rule 1 makes
+  // rule 2 measure L instead of L+1.
+  // When 3 | L, index-mod-3 is consistent with wrap-around (L ≡ 0 mod 3), so the
+  // SAME `perm[i % 3]` test enforces the wrap windows automatically — a loop needs
+  // no separate code path beyond the two rules above.
+  //
+  // Lines shorter than 3 cells carry no window at all → dropped (no constraint).
+  // A cell visited twice at different residues intersects the two demands, which is
+  // sound. Fogged/empty cells read as the full set → supply every band → never
+  // constrain. Both-guards: all 6 phases infeasible given the marks is a REAL
+  // solver contradiction → candidates emptied → the run reports the red "no valid
+  // combination" error (the uniform signal).
+  function computeEntropicRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var N = detectGridSize();
+    if (N !== 9 && N !== 6) return { noEntropic: true };
+    // Bands are only defined over the digits 1..N; a custom digit set (letters,
+    // 0-8, a reduced set) has no low/mid/high split → refuse rather than guess.
+    if (st.fullSet.size !== N) return { noEntropic: true };
+    for (var d = 1; d <= N; d++) if (!st.fullSet.has(d)) return { noEntropic: true };
+    var cls = classifyEntropicLines();
+    if (cls.mode === 'none') return { noEntropic: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noEntropic: true, needSelection: true };
+    if (res.lines.length === 0) return { noEntropic: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Can this cell (from its readable candidates) supply a digit of band `band`?
+    function hasBand(key, band) {
+      var found = false;
+      cellSet(key).forEach(function (dv) { if (entropicBandOf(dv, N) === band) found = true; });
+      return found;
+    }
+    var PERMS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    var lineData = lines.map(function (keys) {
+      var loop = keys.length > 3 && keys[0] === keys[keys.length - 1];
+      return { keys: loop ? keys.slice(0, -1) : keys, loop: loop };
+    }).filter(function (ld) {
+      if (ld.keys.length < 3) return false;                       // no window of 3 → no constraint
+      if (ld.loop && ld.keys.length % 3 !== 0) return false;      // impossible loop → drop, never wipe
+      return true;
+    });
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        var keys = ld.keys;
+        var feasible = PERMS.map(function (perm) {
+          for (var i = 0; i < keys.length; i++) if (!hasBand(keys[i], perm[i % 3])) return false;
+          return true;
+        });
+        keys.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+          Array.from(work[C]).forEach(function (dv) {             // snapshot: set mutates in loop
+            var band = entropicBandOf(dv, N), ok = false;
+            for (var p = 0; p < PERMS.length; p++) if (feasible[p] && PERMS[p][i % 3] === band) { ok = true; break; }
+            if (!ok) {
+              work[C].delete(dv);
+              var k = C + '/' + dv;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(dv) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, entropicCount: lineData.length, emptiedCells: emptied };
   }
 
   // ── Thermo validator ──────────────────────────────────────────────────────
@@ -8051,6 +8208,8 @@
         detect: parityDetected, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
       { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines', enabled: function () { return settings.validateZipperEnabled !== false; },
         detect: zipperDetected, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
+      { name: 'entropic', unitNoun: 'entropic line', menuLabel: 'Entropic lines', enabled: function () { return settings.validateEntropicEnabled !== false; },
+        detect: entropicDetected, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
     ];
   }
   function detectedValidators() {
@@ -8556,6 +8715,8 @@
           addNote('⚠ Couldn\'t identify the parity line — select its cells first, then click above. Only selected cells change.');
         if (def.name === 'zipper' && zipperIsAmbiguous())
           addNote('⚠ Couldn\'t identify the zipper line — select its cells first, then click above. Only selected cells change.');
+        if (def.name === 'entropic' && entropicIsAmbiguous())
+          addNote('⚠ Couldn\'t identify the entropic line — select its cells first, then click above. Only selected cells change.');
       });
     }
     addSep();
