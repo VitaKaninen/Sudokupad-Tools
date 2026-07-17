@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.86.0
+// @version      3.87.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.86.0';
+  var SCRIPT_VERSION = '3.87.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6332,12 +6332,42 @@
   // Saturation/lightness terms handle the achromatic words (grey/black/white) and
   // brown (a dark, muted, warm hue). Canonicalises violet→purple, magenta→pink,
   // gray→grey. `rgbToHsl` returns [h,s,l] with h in [0,1); we work in degrees.
+  //
+  // A WORD MISSING HERE IS A SILENT AMBIGUOUS. `clauseColorWord` can only see words
+  // in this list, so a clue named in a word we don't know resolves to NO colour and
+  // the validator gives up before it ever looks at a line (v3.87: "peach" was absent,
+  // which alone cost 11 of the catalog's 20 readable entropic puzzles — peach is
+  // close to a CONVENTION for entropic lines, 14 of the 30 puzzles that say it).
+  // New words were picked from the catalog by how often they sit next to "line", and
+  // each one is either an ALIAS or its OWN word by one test: does it ever co-occur
+  // with its target in the same rules? An alias that co-occurs would let one clause
+  // claim both lines — a mis-apply, which is worse than the ambiguous it replaces.
+  //   peach   → OWN WORD. Co-occurs with orange in 6 puzzles and yellow in 2, so it
+  //             cannot alias either; #ffccaa/#ffe5b4 vs orange #ffa600 differ only in
+  //             LIGHTNESS, hence the peach case + light-warm penalty below.
+  //   lavender→ purple. NEVER co-occurs with purple/violet, and lavender lines already
+  //             score purple, so the alias is a pure gain. It must NOT be its own
+  //             lightness-keyed word: setters often draw lavender as a vivid purple at
+  //             low ALPHA (`sde0yq3oj3` = #851fe663), and we score the opaque value —
+  //             a "light purple" test would miss exactly those.
+  //   gold/golden → yellow. Gold lines already score yellow; the 2 puzzles naming gold
+  //             AND yellow are false alarms (one shades CELLS gold, the other's gold
+  //             is a Nabner line no clause confuses with its yellow).
+  //   indigo  → purple, silver → grey. Small but free: no co-occurrence, and their
+  //             lines already score to the target.
+  // DELIBERATELY OMITTED: lime/mint (co-occur with green 4× and 3×) and navy — an
+  // alias there would mis-apply. beige is omitted too: its 3 puzzles disagree on the
+  // colour (#ffccaa in one, #e1d7b3 in another), so there's nothing to key on.
+  // ORDER MATTERS: clauseColorWord returns the first match IN THIS ARRAY, not the
+  // first in the clause, so new words go at the END — an existing word keeps priority
+  // when a clause names two.
   var COLOR_WORD_HUE = { red: 0, orange: 30, yellow: 55, green: 120, cyan: 180, blue: 210, purple: 275, pink: 320 };
-  var COLOR_WORD_ALL = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'violet', 'pink', 'magenta', 'brown', 'grey', 'gray', 'black', 'white', 'cyan', 'turquoise', 'teal', 'aqua'];
+  var COLOR_WORD_ALL = ['red', 'orange', 'yellow', 'green', 'blue', 'purple', 'violet', 'pink', 'magenta', 'brown', 'grey', 'gray', 'black', 'white', 'cyan', 'turquoise', 'teal', 'aqua', 'peach', 'lavender', 'gold', 'golden', 'indigo', 'silver'];
   function canonColorWord(w) {
-    if (w === 'violet') return 'purple';
+    if (w === 'violet' || w === 'lavender' || w === 'indigo') return 'purple';
     if (w === 'magenta') return 'pink';
-    if (w === 'gray') return 'grey';
+    if (w === 'gray' || w === 'silver') return 'grey';
+    if (w === 'gold' || w === 'golden') return 'yellow';
     if (w === 'turquoise' || w === 'teal' || w === 'aqua') return 'cyan';
     return w;
   }
@@ -6355,6 +6385,15 @@
         // read as "light brown" in rules text (2hk0wen7pj), so the lightness
         // penalty is gentle — 400 made tan lose to PURPLE in a legend retry.
         return circularHueDeg(h, 28) + Math.max(0, l - 0.42) * 200 + Math.max(0, 0.12 - s) * 300;
+      case 'peach':                                                 // a LIGHT, saturated warm hue
+        // Peach and orange share a hue (#ffccaa 24°, #ffe5b4 35°, #ffa600 39°), so
+        // lightness is the whole discriminator: peach lands at l≈0.83-0.88 where
+        // orange sits at 0.50. The hue term is weighted 1.5 so a light RED/PINK
+        // (#ffc0cb, 350°) can't drift here on lightness alone; the saturation floor
+        // keeps white (s=0) out. Deliberately NOT gentle like brown's: it must leave
+        // the "light brown" tan #dfc39c (l=0.74) on orange, or the v3.82 legend
+        // retry for 2hk0wen7pj regresses.
+        return circularHueDeg(h, 28) * 1.5 + Math.max(0, 0.78 - l) * 500 + Math.max(0, 0.35 - s) * 400;
       default: {
         var hue = COLOR_WORD_HUE[word];
         if (hue == null) return Infinity;
@@ -6367,6 +6406,8 @@
         d += Math.max(0, 0.10 - l) * 400 + Math.max(0, l - 0.95) * 400;
         if ((word === 'red' || word === 'orange' || word === 'yellow') && l < 0.42 && s > 0.2 && s < 0.85)
           d += (0.42 - l) * 300;                                    // a dark warm colour is brown, not red
+        if ((word === 'red' || word === 'orange' || word === 'yellow') && l > 0.78 && s > 0.35)
+          d += (l - 0.78) * 300;                                    // …and a LIGHT warm colour is peach
         return d;
       }
     }
@@ -6383,8 +6424,8 @@
   }
   // Classify a line's colour to its single nearest canonical palette word (ABSOLUTE
   // — the whole palette competes, so #2ecbff → blue, #965429 → brown, #ff6666 → red).
-  // "cyan" is deliberately absent from the palette, so teal/cyan strokes resolve to
-  // blue (the word setters actually use for them). Absolute (not legend-restricted)
+  // "cyan" carries a hue handicap (see colorWordScore), so teal-leaning BLUES resolve
+  // to blue (the word setters actually use for them). Absolute (not legend-restricted)
   // so a line whose colour ISN'T the clue's colour never gets swept in when the
   // legend happens to name only one colour.
   function lineColorWord(l) { return nearestColorWord(parseColor(l.color), COLOR_WORD_ALL); }
