@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.100.0
+// @version      3.101.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.100.0';
+  var SCRIPT_VERSION = '3.101.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9378,44 +9378,26 @@
   // it never reach SudokuPad (isInOurUI blocks mousedown/up), so opening it or picking
   // an item never clears the player's cell selection.
   //
-  // While it's open we shift the SudokuPad app LEFT — but ONLY if the menu would
-  // otherwise overlap the number pad, and ONLY by the overlap amount (not a fixed
-  // gutter). We translate `.app` (a plain `translateX`): it moves the board + number
-  // pad together by the EXACT amount with NO vertical change (`.app` sits at y:0, so
-  // becoming the board's containing block doesn't re-anchor it — translating `.game`
-  // at y:40 DID shift the board down), and SudokuPad's board-matrix resize logic leaves
-  // it untouched. So the puzzle keeps its size + position and nothing moves when there
-  // was already room. Cleared on close.
-  function updatePuzzleShift() {
-    var app = document.querySelector('.app');
-    if (!app) return;
-    var menu = document.getElementById('sp-validate-menu');
-    if (!menu) { app.style.transform = ''; return; }
-    app.style.transform = '';   // measure the UNSHIFTED geometry (synchronous; never painted)
-    var inset = 12, buffer = 10;
-    var ctrl = document.querySelector('#controls');
-    var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
-    var gridEl = document.querySelector('.grid') || ctrl;
-    var gridLeft = gridEl ? gridEl.getBoundingClientRect().left : 0;
-    var menuLeft = window.innerWidth - inset - menu.offsetWidth;
-    var overlap = (controlsRight + buffer) - menuLeft;
-    // Cap the shift so the grid never slides off the left edge (keep ≥6px visible).
-    var shift = Math.max(0, Math.min(overlap, Math.max(0, gridLeft - 6)));
-    if (shift > 0) app.style.transform = 'translateX(-' + Math.round(shift) + 'px)';
-  }
+  // Room for the menu + toasts is reserved IN ADVANCE (see applyValidateGutter): we set
+  // a fixed right-hand gutter (body padding-right) so SudokuPad's OWN responsive layout
+  // treats the window as that much narrower. Its native fit-scaling then shrinks the
+  // whole puzzle to make room ONLY when it's needed — i.e. only when the puzzle is
+  // width-bound (wide control panel / narrow window). When the puzzle is height-bound
+  // (there's already horizontal slack), the gutter is absorbed and nothing moves. So
+  // opening the menu never causes a sudden shift, and puzzles that already have room are
+  // left untouched — exactly SudokuPad's built-in "shrink to fit a side panel" behaviour.
+  //
   // Reposition (not close) the open menu + toast stack when the window resizes.
   function onValidateResize() {
     var m = document.getElementById('sp-validate-menu');
     var btn = document.getElementById('sp-validate-btn');
     if (m && btn) positionValidateMenu(m, btn);
-    updatePuzzleShift();
     positionToastStack();
   }
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
     window.removeEventListener('resize', onValidateResize);
-    updatePuzzleShift();    // menu gone → clears any shift, puzzle returns to place
     positionToastStack();   // toasts fall back to sitting above the button row
   }
   function toggleValidateMenu() {
@@ -9462,7 +9444,7 @@
     menu.id = 'sp-validate-menu';
     Object.assign(menu.style, {
       position: 'fixed', zIndex: '901',
-      minWidth: '166px', maxWidth: '210px',
+      minWidth: '166px', maxWidth: '196px',
       borderRadius: '8px', padding: '3px', boxSizing: 'border-box',
       fontFamily: 'Roboto, Arial, sans-serif',
       boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
@@ -9659,9 +9641,8 @@
 
     document.body.appendChild(menu);
     positionValidateMenu(menu, btn);
-    // Shift the puzzle left ONLY if the (now-measured) menu would overlap the number
-    // pad, and only by the overlap — no puzzle movement when there was already room.
-    updatePuzzleShift();
+    // No shift on open — the right gutter is already reserved (applyValidateGutter), so
+    // the menu just drops into the space SudokuPad's layout already made for it.
     positionToastStack();
     window.addEventListener('resize', onValidateResize);
   }
@@ -11747,6 +11728,30 @@
     setTimeout(resize, 500);
   }
 
+  // Fixed right-hand gutter reserved for the Validate menu + toasts. Wide enough for the
+  // menu (maxWidth 196) at right:12 plus a small margin. Reserved via body padding-right
+  // (box-sizing:border-box) so SudokuPad's ResizeHandler lays the puzzle out into the
+  // narrower area — its native fit-scaling shrinks the puzzle only when it's width-bound,
+  // and leaves it alone when there's already horizontal slack. Only reserved while the
+  // Validate button is visible (default); released if the user hides it.
+  var VALIDATE_GUTTER_PX = 220;
+  var _gutterBodyPrev = null;
+  function applyValidateGutter() {
+    var b = document.body;
+    if (!b) return;
+    var want = settings.showValidateButton !== false;
+    if (want) {
+      if (_gutterBodyPrev === null) _gutterBodyPrev = { pr: b.style.paddingRight, bs: b.style.boxSizing };
+      b.style.boxSizing = 'border-box';
+      b.style.paddingRight = VALIDATE_GUTTER_PX + 'px';
+    } else if (_gutterBodyPrev !== null) {
+      b.style.paddingRight = _gutterBodyPrev.pr;
+      b.style.boxSizing = _gutterBodyPrev.bs;
+      _gutterBodyPrev = null;
+    }
+    window.dispatchEvent(new Event('resize'));   // prompt SudokuPad's ResizeHandler to re-fit into the new width
+  }
+
   // Floating "Validate Constraints" button — a SQUARE button (matching the Fill/Clear
   // trio + the Auto-fill button) parked in the bottom-right cluster to the LEFT of the
   // Auto-fill button (gear at bottom, then Validate + Auto-fill side by side above it).
@@ -11841,9 +11846,14 @@
     function applyVisibility() {
       btn.style.display = settings.showValidateButton !== false ? 'flex' : 'none';
       validatorRefreshUndoButton();   // the Undo button follows the same setting + its arm state
+      applyValidateGutter();          // reserve/release the right gutter in step with the button
     }
     applyVisibility();
     controlSyncers['showValidateButton'] = applyVisibility;
+    // Re-assert the gutter after SudokuPad's own layout has settled (its ResizeHandler
+    // may attach/relayout after our DOMContentLoaded init), so the reserved width sticks.
+    setTimeout(applyValidateGutter, 300);
+    setTimeout(applyValidateGutter, 1000);
   }
 
   function buildAllUI() {
