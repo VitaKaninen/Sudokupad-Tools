@@ -2,6 +2,11 @@
 
 *Flat list of what's confirmed to work, what's confirmed NOT to work, and why. The point of this file: never re-fight a solved battle. When a session confirms a new fix or a dead end, add a line. Record the conclusion, not the journey.*
 
+## Reflowing SudokuPad's app aside for our right-hand UI (v3.98)
+
+- ✅ **To push the whole SudokuPad puzzle LEFT and open an empty gutter on the right, set `body { box-sizing:border-box; padding-right:<px> }` then `window.dispatchEvent(new Event('resize'))`.** SudokuPad's ResizeHandler reads the (now-narrower) `.app`/`.game` **content width** — NOT `window.innerWidth` directly — and recenters/rescales the board + `#controls` into it (measured: at 649px-wide window, `padding-right:160` moved `.app` 649→489 and `#controls` right-edge 514→476). The synthetic `resize` is REQUIRED — the reflow is JS-driven, not pure CSS. Our floating buttons are `position:fixed`, so they stay in the gutter (body padding never moves fixed elements). Used by the Validate menu: reserve the gutter on open (sized to `menu.offsetWidth + ~28`), release on close. `.app`/`.game` respect body padding (they are NOT `100vw`), so no horizontal-scroll overflow.
+- ✅ **One bottom-anchored flex column (`#sp-toast-stack`, `flex-direction:column; align-items:flex-end`) makes every popup stack vertically instead of overlapping.** All toasts (`sp-remove-invalid-toast`, `sp-fs-toast`) append into it as `position:relative; width:100%` children instead of each being individually `position:fixed` at the same corner. Bottom-anchored → grows upward as toasts are added, reflows down as they're removed. Container `pointer-events:none` + children `auto` so the empty stack never blocks the puzzle. Anchor its `bottom` above the validate menu (if open) else the button row; width = gap between `#controls` right edge and the screen inset. (This replaced the old per-toast `getToastBottom()`.)
+
 ## Native dark mode — the substrate swap (v2.195, in progress on branch `native-mode`)
 
 **Direction change:** stop fighting DarkReader; evict it from SudokuPad and ride the site's own native dark mode instead. DR is a blind, adversarial colour *inverter* that re-runs on every mutation; native dark mode is the author's *semantic*, *static* stylesheet. Below "Beating DarkReader" describes the OLD architecture (the `main` branch). This section is the new one.

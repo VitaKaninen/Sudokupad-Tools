@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.97.0
+// @version      3.98.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.97.0';
+  var SCRIPT_VERSION = '3.98.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -299,9 +299,9 @@
     validateEntropicEnabled:      true,   // "Validate Constraints": run the entropic-line validator (every 3 consecutive cells = one low/mid/high digit; 9x9 + 6x6 only)
     validateModularEnabled:       true,   // "Validate Constraints": run the modular-line validator (every 3 consecutive cells = one of each residue mod 3: {1,4,7}/{2,5,8}/{3,6,9})
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
-    fsSelectDelayMs:              500,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
+    fsSelectDelayMs:              100,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
-    fsUndoDelayMs:                200,    // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
+    fsUndoDelayMs:                50,     // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
     suppressStartDialog:          true,   // auto-dismiss SudokuPad's "Start/Resume Puzzle" rules popup on load
 
     regionColorPalette0:          '#e05252',  // red
@@ -316,7 +316,7 @@
     shadedRegionColorEnabled:     false,      // colour puzzle "extra regions" with the region palette — grey #cages path.cage-extraregion shadings, grey #underlay cells, AND model-only regions with no shading (Windoku windows); auto-enabled per puzzle when extra regions are detected
     shadedRegionColorOpacity:     0.5,        // opacity of the recolored shaded-region fills
 
-    cellColorsOpacity:            0.6,        // 0..1; opacity of #cell-colors. Matches SudokuPad's native --cell-color-opacity (0.6), so enabling at default = no visible change
+    cellColorsOpacity:            0.3,        // 0..1; opacity of #cell-colors (native --cell-color-opacity is 0.6; default 0.3 dims shaded cells to half the native strength when enabled)
     cellColorsOpacityEnabled:     false,      // override #cell-colors opacity when true
   };
 
@@ -702,20 +702,25 @@
   // When the toggle is on we hide each such rectilinear author border line so our
   // borders show cleanly; diagonal/curved cosmetic lines and classed/filled shapes
   // are left untouched. Restores them when off.
+  // The exact per-element test applyHideAuthorBorders uses to decide an #overlay
+  // path/line is a classless, outline-only, rectilinear author-drawn border. Shared
+  // with the settings 👁 highlight getter (HT.regAuthor) so the two never drift.
+  function isAuthorBorderEl(el) {
+    if (el.getAttribute('class')) return false;                     // only classless cosmetic structure
+    var f = el.getAttribute('fill'), s = el.getAttribute('stroke');
+    if (!(f === 'none' || f === null) || !s || s === 'none') return false;  // outline-only (no fill)
+    if (el.tagName.toLowerCase() === 'line') {
+      return Math.abs((+el.getAttribute('x1')) - (+el.getAttribute('x2'))) < 0.01 ||
+             Math.abs((+el.getAttribute('y1')) - (+el.getAttribute('y2'))) < 0.01;
+    }
+    return pathIsRectilinear(el.getAttribute('d') || '');
+  }
   function applyHideAuthorBorders(svg) {
     var ov = svg && svg.querySelector('#overlay');
     if (!ov) return;
     if (settings.regionHideAuthorBorders) {
       ov.querySelectorAll('path, line').forEach(function (el) {
-        if (el.getAttribute('class')) return;                       // only classless cosmetic structure
-        var f = el.getAttribute('fill'), s = el.getAttribute('stroke');
-        if (!(f === 'none' || f === null) || !s || s === 'none') return;  // outline-only (no fill)
-        var rect;
-        if (el.tagName.toLowerCase() === 'line') {
-          rect = Math.abs((+el.getAttribute('x1')) - (+el.getAttribute('x2'))) < 0.01 ||
-                 Math.abs((+el.getAttribute('y1')) - (+el.getAttribute('y2'))) < 0.01;
-        } else { rect = pathIsRectilinear(el.getAttribute('d') || ''); }
-        if (!rect) return;
+        if (!isAuthorBorderEl(el)) return;
         el.setAttribute('data-spdr-auth-border-hidden', '');
         el.style.setProperty('display', 'none', 'important');
       });
@@ -3623,7 +3628,7 @@
       t.closest('#sp-digit-prompt') ||
       t.closest('#sp-easy-shade-btn') || t.closest('#sp-easy-shade-card') ||
       t.closest('#sp-validate-btn') || t.closest('#sp-validate-menu') ||
-      t.closest('#sp-validate-undo-btn')
+      t.closest('#sp-validate-undo-btn') || t.closest('#sp-toast-stack')
     );
   }
   BLOCKED_EVENTS.forEach(function (type) {
@@ -3981,7 +3986,7 @@
     return row;
   }
 
-  function makeSubCheckbox(settingKey, label) {
+  function makeSubCheckbox(settingKey, label, hilite, hiliteTitle) {
     var wrap = document.createElement('label');
     Object.assign(wrap.style, {
       display: 'flex', alignItems: 'center', gap: '8px',
@@ -4001,7 +4006,9 @@
     controlSyncers[settingKey] = function () { cb.checked = !!settings[settingKey]; };
     var txt = document.createElement('span');
     txt.textContent = label;
+    txt.style.flex = '0 1 auto';   // hug the text so the 👁 sits right after it, not at the row's far end
     wrap.appendChild(cb); wrap.appendChild(txt);
+    if (hilite) wrap.appendChild(makeHiliteIcon(hilite, hiliteTitle));
     return wrap;
   }
 
@@ -4642,6 +4649,12 @@
     regCenter:     function () { return hqa('[data-spdr-region-split] path[data-spdr-kind="center"]'); },
     regMulti:      function () { return hqa('[data-spdr-region-split] [data-spdr-kind="multi"]'); },
     regCell:       function () { var e = hqa('[data-spdr-region-split] path[data-spdr-kind="cell"]'); return e.length ? e : hqa('#cell-grids path.cell-grid'); },
+    // "Hide built-in grid line on region boundaries" → the native cell-grid path(s)
+    // whose region-boundary edges the toggle suppresses.
+    regSuppress:   function () { return hqa('#cell-grids path.cell-grid, path.cell-grid'); },
+    // "Hide author-drawn region borders" → the classless rectilinear #overlay outlines
+    // the toggle hides (mirrors applyHideAuthorBorders via the shared isAuthorBorderEl).
+    regAuthor:     function () { return hqa('#overlay path, #overlay line').filter(isAuthorBorderEl); },
     // Action-section checkboxes → the on-screen elements they show/hide.
     actionBtns:    function () { return hqa('#sp-fill-btn-wrap, #sp-clear-btn-wrap, #sp-clearall-btn-wrap'); },
     easyShade:     function () { return firstOf('#sp-easy-shade-btn'); },
@@ -4703,6 +4716,7 @@
     objGray:    { test: function () { return objShade(true).length === 0; },                        msg: 'There are no gray objects in this puzzle.' },
     objBorders: { test: function () { return objFillSources().filter(hasPaintedStroke).length === 0; }, msg: 'There are no object outlines in this puzzle.' },
     objAll:     { test: function () { return objShade(false).length === 0 && objShade(true).length === 0; }, msg: 'There are no shaded objects in this puzzle.' },
+    regAuthor:  { test: function () { return HT.regAuthor().length === 0; },                          msg: 'This puzzle has no author-drawn region borders.' },
   };
 
   // A collapsible subsection inside a section: a checkbox row whose options are
@@ -5046,22 +5060,55 @@
   // or 'error' — controls colour only. By default toasts auto-fade after 2s
   // (paused while the mouse is over them). When toastPersist is true the toast
   // stays until the user clicks the × dismiss button.
-  function getToastBottom() {
+  // ── Toast stack ────────────────────────────────────────────────────────────
+  // Every action / validator / auto-fill popup is appended into ONE bottom-anchored
+  // flex column (#sp-toast-stack) instead of being individually fixed-positioned at
+  // the same corner. Result: multiple toasts stack VERTICALLY (newest at the bottom,
+  // nearest the buttons) and never overlap; removing one lets the rest reflow down.
+  // The stack sits ABOVE the validate menu (when open) or the button row, and is width-
+  // constrained to the empty space to the RIGHT of the number pad (it may overflow the
+  // top of the screen or cover the rules text — never the control buttons).
+  function ensureToastStack() {
+    var s = document.getElementById('sp-toast-stack');
+    if (!s) {
+      s = document.createElement('div');
+      s.id = 'sp-toast-stack';
+      Object.assign(s.style, {
+        position: 'fixed', right: '12px',
+        display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px',
+        zIndex: '999999', pointerEvents: 'none',   // children opt back in; empty stack never blocks the puzzle
+      });
+      document.body.appendChild(s);
+    }
+    positionToastStack(s);
+    return s;
+  }
+  // Anchor the stack's bottom edge above whatever floating UI is topmost, and size its
+  // width to the gap between the number pad's right edge and the screen inset.
+  function positionToastStack(s) {
+    s = s || document.getElementById('sp-toast-stack');
+    if (!s) return;
+    var inset = 12, gap = 8, bottomPx;
     var panel = document.getElementById('sp-fix-panel');
+    var menu  = document.getElementById('sp-validate-menu');
     if (panel && panel.style.display !== 'none') {
-      return (56 + panel.offsetHeight + 8) + 'px';
+      bottomPx = 56 + panel.offsetHeight + 8;
+    } else if (menu) {
+      bottomPx = (window.innerHeight - menu.getBoundingClientRect().top) + gap;
+    } else {
+      // Above the topmost visible floating button (Validate / Auto-fill share bottom:56).
+      var fsBtn = document.getElementById('sp-fill-single-btn');
+      var vBtn  = document.getElementById('sp-validate-btn');
+      var rowBtn = (vBtn && vBtn.offsetHeight > 0 && vBtn.style.display !== 'none') ? vBtn
+                 : (fsBtn && fsBtn.offsetHeight > 0 && fsBtn.style.display !== 'none') ? fsBtn : null;
+      bottomPx = rowBtn ? (56 + rowBtn.offsetHeight + 8) : 56;
     }
-    // Otherwise clear the topmost visible floating button in the bottom-right
-    // cluster (gear → Auto-fill → Validate) so toasts don't cover it. The Validate
-    // button sits highest when shown; fall back to the Auto-fill button, then the gear.
-    var vBtn = document.getElementById('sp-validate-btn');
-    if (vBtn && vBtn.offsetHeight > 0 && vBtn.style.display !== 'none') {
-      var vb = parseFloat(getComputedStyle(vBtn).bottom) || 120;
-      return (vb + vBtn.offsetHeight + 8) + 'px';
-    }
-    var fsBtn = document.getElementById('sp-fill-single-btn');
-    if (fsBtn && fsBtn.offsetHeight > 0) return (56 + fsBtn.offsetHeight + 8) + 'px';
-    return '56px';
+    s.style.bottom = bottomPx + 'px';
+    // Left bound = the number pad's right edge (+gap); toasts fill the space to its right.
+    var ctrl = document.querySelector('#controls');
+    var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
+    var avail = (window.innerWidth - inset) - (controlsRight + gap);
+    s.style.width = Math.round(Math.max(210, Math.min(360, avail))) + 'px';
   }
 
   // When true, the Settings "Debug: show popup" cycler is previewing a toast:
@@ -5083,10 +5130,8 @@
     };
     var c = colours[kind] || colours.success;
     Object.assign(toast.style, {
-      position:       'fixed',
-      bottom:         getToastBottom(),
-      right:          '12px',
-      width:          '340px',
+      position:       'relative',   // flex child of the toast stack (bottom-anchored, no overlap)
+      width:          '100%',
       padding:        '8px 32px 8px 12px',
       background:     c.bg,
       color:          c.text,
@@ -5095,10 +5140,10 @@
       fontFamily:     'system-ui, -apple-system, sans-serif',
       fontSize:       '12px',
       lineHeight:     '1.4',
-      zIndex:         '999999',
       boxShadow:      '0 4px 16px rgba(0,0,0,0.5)',
       whiteSpace:     'pre-line',
       boxSizing:      'border-box',
+      pointerEvents:  'auto',
     });
 
     // Message body (a span so the × button sits beside it)
@@ -5131,8 +5176,10 @@
     dismiss.addEventListener('click', function (e) { e.stopPropagation(); toast.remove(); });
     toast.appendChild(dismiss);
 
-    document.body.appendChild(toast);
-    if (fsPreviewActive) toast.style.zIndex = '1000000';   // preview: float above our settings panel (z 999999)
+    var stack = ensureToastStack();
+    stack.appendChild(toast);
+    if (fsPreviewActive) stack.style.zIndex = '1000000';   // preview: float above our settings panel (z 999999)
+    else stack.style.zIndex = '999999';
 
     // Auto-fade after 2s (unless toastPersist is on, or this is an error — errors always persist).
     if (!fsPreviewActive && !settings.toastPersist && kind !== 'error') {
@@ -9142,8 +9189,9 @@
     var vb = document.getElementById('sp-validate-btn');
     var ub = document.getElementById('sp-validate-undo-btn');
     if (!vb || !ub) return;
-    ub.style.bottom = vb.style.bottom || '120px';
-    ub.style.right  = (12 + vb.offsetWidth + 8) + 'px';   // just left of the Validate button
+    ub.style.bottom = vb.style.bottom || '56px';
+    var vbRight = parseFloat(vb.style.right) || 12;
+    ub.style.right  = (vbRight + vb.offsetWidth + 8) + 'px';   // just left of the Validate button
   }
   function validatorRefreshUndoButton() {
     var ub = document.getElementById('sp-validate-undo-btn');
@@ -9312,15 +9360,45 @@
   }
 
   // ── Validate popup menu ───────────────────────────────────────────────────
-  // The menu is a TOGGLE: it stays open across validator runs and selection
-  // changes (so "Validate selection only" workflows don't fight it); only the
-  // button (or a window resize) closes it. Clicks inside it never reach SudokuPad
-  // (isInOurUI blocks mousedown/up), so opening it or picking an item never
-  // clears the player's cell selection.
+  // The menu is a TOGGLE: it stays open across validator runs, selection changes,
+  // AND window resizes (so "Validate selection only" workflows don't fight it, and a
+  // browser resize no longer dismisses it); only the button closes it. Clicks inside
+  // it never reach SudokuPad (isInOurUI blocks mousedown/up), so opening it or picking
+  // an item never clears the player's cell selection.
+  //
+  // While it's open we reserve a right-hand gutter (body padding-right) so the whole
+  // SudokuPad app reflows LEFT, opening empty space on the right for the menu + toast
+  // stack to live in without overlapping the number pad. The gutter is released on
+  // close, so normal solving is unaffected.
+  var _rightGutter = null;   // saved body padding-right / box-sizing while a gutter is reserved
+  function reserveRightGutter(px) {
+    var b = document.body;
+    if (_rightGutter === null) _rightGutter = { pr: b.style.paddingRight, bs: b.style.boxSizing };
+    b.style.boxSizing   = 'border-box';
+    b.style.paddingRight = Math.round(px) + 'px';
+    window.dispatchEvent(new Event('resize'));   // prompt SudokuPad's ResizeHandler to reflow into the narrower area
+  }
+  function releaseRightGutter() {
+    if (_rightGutter === null) return;
+    var b = document.body;
+    b.style.paddingRight = _rightGutter.pr;
+    b.style.boxSizing    = _rightGutter.bs;
+    _rightGutter = null;
+    window.dispatchEvent(new Event('resize'));
+  }
+  // Reposition (not close) the open menu + toast stack when the window resizes.
+  function onValidateResize() {
+    var m = document.getElementById('sp-validate-menu');
+    var btn = document.getElementById('sp-validate-btn');
+    if (m && btn) positionValidateMenu(m, btn);
+    positionToastStack();
+  }
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
-    window.removeEventListener('resize', closeValidateMenu);
+    window.removeEventListener('resize', onValidateResize);
+    releaseRightGutter();
+    positionToastStack();   // toasts fall back to sitting above the button row
   }
   function toggleValidateMenu() {
     if (document.getElementById('sp-validate-menu')) closeValidateMenu();
@@ -9366,8 +9444,8 @@
     menu.id = 'sp-validate-menu';
     Object.assign(menu.style, {
       position: 'fixed', zIndex: '901',
-      minWidth: Math.max(btn.offsetWidth, 180) + 'px',
-      borderRadius: '8px', padding: '4px', boxSizing: 'border-box',
+      minWidth: '166px', maxWidth: '210px',
+      borderRadius: '8px', padding: '3px', boxSizing: 'border-box',
       fontFamily: 'Roboto, Arial, sans-serif',
       boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
     });
@@ -9383,11 +9461,11 @@
       var it = document.createElement('div');
       if (opts.title) it.title = opts.title;
       Object.assign(it.style, {
-        display: 'flex', alignItems: 'center', gap: '8px',
-        padding: '8px 12px', borderRadius: '6px',
+        display: 'flex', alignItems: 'center', gap: '6px',
+        padding: '6px 9px', borderRadius: '6px',
         cursor: disabled ? 'default' : 'pointer',
-        fontSize: '13px', fontWeight: '600',
-        whiteSpace: 'nowrap', userSelect: 'none',
+        fontSize: '12px', fontWeight: '600',
+        whiteSpace: 'normal', userSelect: 'none',
       });
       var lbl = document.createElement('span');
       lbl.textContent = label;
@@ -9411,8 +9489,8 @@
       var note = document.createElement('div');
       note.textContent = msg;
       Object.assign(note.style, {
-        padding: '8px 12px', fontSize: '12px', fontStyle: 'italic',
-        whiteSpace: 'normal', maxWidth: '260px', lineHeight: '1.35',
+        padding: '6px 9px', fontSize: '11px', fontStyle: 'italic',
+        whiteSpace: 'normal', lineHeight: '1.35',
         userSelect: 'none', opacity: '0.65',
       });
       note.style.setProperty('color', text, 'important');
@@ -9422,16 +9500,17 @@
       var row = document.createElement('label');
       row.title = tip;
       Object.assign(row.style, {
-        display: 'flex', alignItems: 'center', gap: '8px',
-        padding: '7px 12px', borderRadius: '6px', cursor: 'pointer',
-        fontSize: '13px', fontWeight: '600',
-        whiteSpace: 'nowrap', userSelect: 'none',
+        display: 'flex', alignItems: 'center', gap: '6px',
+        padding: '6px 9px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '12px', fontWeight: '600',
+        whiteSpace: 'normal', userSelect: 'none',
       });
       row.style.setProperty('color', text, 'important');
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = settings[key] === true;
       cb.style.cursor = 'pointer';
+      cb.style.flexShrink = '0';
       cb.addEventListener('change', function () {
         settings[key] = cb.checked;
         saveSettings(settings);
@@ -9458,10 +9537,10 @@
       b.textContent = label;
       b.title = tip || '';
       Object.assign(b.style, {
-        padding: '9px 12px', margin: '2px 0', borderRadius: '6px',
+        padding: '7px 9px', margin: '2px 0', borderRadius: '6px',
         cursor: disabled ? 'default' : 'pointer',
-        fontSize: '13px', fontWeight: '700', textAlign: 'center',
-        whiteSpace: 'nowrap', userSelect: 'none',
+        fontSize: '12px', fontWeight: '700', textAlign: 'center',
+        whiteSpace: 'normal', userSelect: 'none',
         opacity: disabled ? '0.4' : '1',
       });
       b.style.setProperty('color', text, 'important');
@@ -9482,10 +9561,10 @@
     function addThermoItem(def) {
       var row = document.createElement('div');
       Object.assign(row.style, {
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px',
-        padding: '8px 12px', borderRadius: '6px', cursor: 'pointer',
-        fontSize: '13px', fontWeight: '600',
-        whiteSpace: 'nowrap', userSelect: 'none',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+        padding: '6px 9px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '12px', fontWeight: '600',
+        whiteSpace: 'normal', userSelect: 'none',
       });
       row.style.setProperty('color', text, 'important');
       var lbl = document.createElement('span');
@@ -9495,7 +9574,7 @@
 
       var slowLbl = document.createElement('label');
       slowLbl.title = 'Check this if the thermometers in this puzzle are SLOW (digits along the line may repeat — increase or stay the same — instead of strictly increasing). Auto-detected where possible; override here if that guess is wrong.';
-      Object.assign(slowLbl.style, { display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer' });
+      Object.assign(slowLbl.style, { display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', flexShrink: '0' });
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = effectiveThermoSlow();
@@ -9562,25 +9641,26 @@
 
     document.body.appendChild(menu);
     positionValidateMenu(menu, btn);
-    window.addEventListener('resize', closeValidateMenu);
+    // Reserve the right gutter sized to the (now-measured) menu so the app reflows far
+    // enough left that the menu clears the number pad, then re-position both.
+    reserveRightGutter(menu.offsetWidth + 12 + 16);
+    setTimeout(function () { positionValidateMenu(menu, btn); positionToastStack(); }, 150);
+    positionToastStack();
+    window.addEventListener('resize', onValidateResize);
   }
-  // Align the menu's right edge to the button; open UPWARD when a downward menu
-  // would run off the bottom (the button sits near the bottom), else downward.
-  // Clamp into view if neither direction fully fits.
+  // Menu placement is CONSISTENT and bottom-anchored: right edge at the screen inset,
+  // bottom edge just above the button row, growing UPWARD as content grows (empty and
+  // full menus share the same bottom edge). maxHeight clamps it to the space above the
+  // buttons so a very tall menu scrolls instead of running off the top.
   function positionValidateMenu(menu, btn) {
+    var inset = 12, gap = 8, vh = window.innerHeight;
     var br = btn.getBoundingClientRect();
-    var mh = menu.offsetHeight, gap = 6, vh = window.innerHeight;
-    menu.style.right = (window.innerWidth - br.right) + 'px';
-    menu.style.left = 'auto';
-    var fitsDown = br.bottom + gap + mh <= vh;
-    var fitsUp = br.top - gap - mh >= 0;
-    if (!fitsDown && fitsUp) {
-      menu.style.bottom = (vh - br.top + gap) + 'px'; menu.style.top = 'auto';
-    } else if (fitsDown) {
-      menu.style.top = (br.bottom + gap) + 'px'; menu.style.bottom = 'auto';
-    } else {
-      menu.style.top = Math.max(8, vh - mh - 8) + 'px'; menu.style.bottom = 'auto';
-    }
+    menu.style.right  = inset + 'px';
+    menu.style.left   = 'auto';
+    menu.style.bottom = (vh - br.top + gap) + 'px';   // sit just above the button row
+    menu.style.top    = 'auto';
+    menu.style.maxHeight = Math.max(140, br.top - gap - 8) + 'px';
+    menu.style.overflowY = 'auto';
   }
 
   function buildActionButton(opts) {
@@ -10058,8 +10138,10 @@
         }
 
         // ── Top-level toggles (always visible, outside every collapsible subsection) ──
-        wrap.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries'));
-        wrap.appendChild(makeSubCheckbox('regionHideAuthorBorders', 'Hide author-drawn region borders'));
+        wrap.appendChild(makeSubCheckbox('regionBorderSuppressBoundary', 'Hide built-in grid line on region boundaries',
+          'regSuppress', 'Highlight the built-in grid lines this hides on region boundaries'));
+        wrap.appendChild(makeSubCheckbox('regionHideAuthorBorders', 'Hide author-drawn region borders',
+          'regAuthor', 'Highlight the author-drawn region borders this hides'));
 
         // ── Subsection 1: Center borders ──────────────────────────────────
         wrap.appendChild(divider());
@@ -10796,16 +10878,14 @@
         }
       }
       panel.style.display = 'none';
-      var toast = document.getElementById('sp-remove-invalid-toast');
-      if (toast) toast.style.bottom = getToastBottom();
+      positionToastStack();   // toasts re-anchor above the button row now the panel is hidden
     }
 
     triggerBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       if (panel.style.display === 'none') {
         panel.style.display = 'flex';
-        var toast = document.getElementById('sp-remove-invalid-toast');
-        if (toast) toast.style.bottom = getToastBottom();
+        positionToastStack();   // toasts re-anchor above the (now open) settings panel
       } else {
         closePanel();
       }
@@ -11255,16 +11335,16 @@
     var toast = document.createElement('div');
     toast.id = 'sp-fs-toast';
     Object.assign(toast.style, {
-      position: 'fixed', bottom: getToastBottom(), right: '12px', width: '320px',
+      position: 'relative', width: '100%',
       padding: '10px 12px', background: c.bg, color: c.text, border: '1px solid ' + c.border,
       borderRadius: '6px', fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: '12px',
-      lineHeight: '1.4', zIndex: '900', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
-      whiteSpace: 'pre-line', boxSizing: 'border-box',
+      lineHeight: '1.4', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+      whiteSpace: 'pre-line', boxSizing: 'border-box', pointerEvents: 'auto',
     });
     var msg = document.createElement('div');
     msg.textContent = message;
     toast.appendChild(msg);
-    document.body.appendChild(toast);
+    ensureToastStack().appendChild(toast);
   }
 
   // Hover explainer (shown when idle, no pending result). Green when the function
@@ -11350,10 +11430,10 @@
     var prevAction = document.getElementById('sp-remove-invalid-toast');
     if (prevAction) prevAction.remove();   // clear a prior action-toast preview (so fs↔action cycling doesn't stack)
     fsPreviewActive = true;
-    try { fsDebugList[fsDebugIdx](); }     // action toasts self-bump z-index + skip auto-fade while fsPreviewActive
+    try { fsDebugList[fsDebugIdx](); }     // action toasts self-bump the stack z-index + skip auto-fade while fsPreviewActive
     finally { fsPreviewActive = false; }
-    var t = document.getElementById('sp-fs-toast');
-    if (t) t.style.zIndex = '1000000';     // above our own settings panel (the debug button lives in it)
+    var stack = document.getElementById('sp-toast-stack');
+    if (stack) stack.style.zIndex = '1000000';   // above our own settings panel (the debug button lives in it)
     fsDebugIdx = (fsDebugIdx + 1) % fsDebugList.length;
     return fsDebugIdx + 1;                 // 1-based index of the NEXT popup (for the button label)
   }
@@ -11651,11 +11731,12 @@
     setTimeout(resize, 500);
   }
 
-  // Floating "Validate Constraints" button — sits above the Auto-fill button in the
-  // bottom-right cluster (gear → Auto-fill → Validate). Wider than the square trio so
-  // its label fits; the full description is the native hover tooltip. Clicking it
-  // TOGGLES the validator popup menu (toggleValidateMenu), which stays open until
-  // the button is clicked again.
+  // Floating "Validate Constraints" button — a SQUARE button (matching the Fill/Clear
+  // trio + the Auto-fill button) parked in the bottom-right cluster to the LEFT of the
+  // Auto-fill button (gear at bottom, then Validate + Auto-fill side by side above it).
+  // A small two-line label fits the square; the full description is the native hover
+  // tooltip. Clicking it TOGGLES the validator popup menu (toggleValidateMenu), which
+  // stays open until the button is clicked again (or another puzzle is loaded).
   function buildValidateButton() {
     if (document.getElementById('sp-validate-btn')) return;
     var colorRefBtn = document.querySelector('[data-control="pen"]') ||
@@ -11667,28 +11748,31 @@
                       ? colorRefStyle.backgroundColor : 'rgb(34, 36, 38)';
     var textColor = 'rgb(181, 104, 228)';                                  // literal theme purple (stable; see buildActionButton)
     var borderCol = colorRefStyle ? colorRefStyle.borderColor : 'rgb(62, 68, 70)';
+    var sizePx    = (colorRefBtn && colorRefBtn.offsetWidth > 0) ? colorRefBtn.offsetWidth : 56;  // square, matches a control button
 
     var btn = document.createElement('button');
     btn.id    = 'sp-validate-btn';
     btn.type  = 'button';
     btn.title = 'Validate constraints — toggles a menu of the validators this puzzle supports (Kropki dots, cages, little killers, …), with "Run all until stable" and "Validate selection only" modes';
-    btn.textContent = 'Validate Constraints';
+    btn.textContent = 'Validate\nConstraints';
     Object.assign(btn.style, {
       position:   'fixed',
-      bottom:     '120px',         // above the Auto-fill button (bottom:56px, 56px tall) with an 8px gap
-      right:      '12px',          // right edge aligns with the gear / Auto-fill column
-      height:     '36px',
-      padding:    '0 12px',
+      bottom:     '56px',                        // same row as the Auto-fill button
+      right:      (12 + sizePx + 8) + 'px',      // just LEFT of the Auto-fill button (right:12, sizePx wide)
+      width:      sizePx + 'px',
+      height:     sizePx + 'px',
+      padding:    '2px',
       borderRadius: '8px',
       cursor:     'pointer',
       fontFamily: 'Roboto, Arial, sans-serif',
       fontWeight: '700',
-      fontSize:   '13px',
-      lineHeight: '1.2',
-      whiteSpace: 'nowrap',
+      fontSize:   '10px',
+      lineHeight: '1.15',
+      whiteSpace: 'pre-line',                    // honour the explicit line break
       display:    'flex',
       alignItems: 'center',
       justifyContent: 'center',
+      textAlign:  'center',
       zIndex:     '900',           // below the native dialog scrim (z 1000) so it dims with the page
       boxShadow:  '0 2px 8px rgba(0,0,0,0.4)',
       boxSizing:  'border-box',
@@ -11700,6 +11784,22 @@
     btn.addEventListener('click', function (e) { e.stopPropagation(); toggleValidateMenu(); });
     document.body.appendChild(btn);
 
+    // Re-measure once the control buttons' CSS has settled (offsetWidth can read 0 at
+    // first paint), so the square ends up the right size and stays left of Auto-fill.
+    function vResize() {
+      var ref = document.querySelector('[data-control="pen"]') ||
+                document.querySelector('[data-control="corner"]') ||
+                document.querySelector('[data-control="centre"]') ||
+                document.querySelector('[data-control="normal"]');
+      if (ref && ref.offsetWidth > 0) {
+        btn.style.width  = ref.offsetWidth + 'px';
+        btn.style.height = ref.offsetWidth + 'px';
+        btn.style.right  = (12 + ref.offsetWidth + 8) + 'px';
+      }
+    }
+    setTimeout(vResize, 100);
+    setTimeout(vResize, 500);
+
     // Post-run Undo button — sits just LEFT of the Validate button, hidden until a
     // validator run removes candidates (see validatorArmUndo / validatorRefreshUndoButton).
     var ubtn = document.createElement('button');
@@ -11708,7 +11808,7 @@
     ubtn.title = 'Undo the last validator run — restores the candidates it removed. Stays here until you change the puzzle; if you Ctrl+Z back to this point it returns.';
     ubtn.textContent = 'Undo';
     Object.assign(ubtn.style, {
-      position: 'fixed', bottom: '120px', right: '200px',   // right is recomputed when shown
+      position: 'fixed', bottom: '56px', right: '200px',   // right is recomputed when shown
       height: '36px', padding: '0 12px', borderRadius: '8px', cursor: 'pointer',
       fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700', fontSize: '13px',
       lineHeight: '1.2', whiteSpace: 'nowrap', display: 'none',
