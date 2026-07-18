@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.98.0
+// @version      3.99.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.98.0';
+  var SCRIPT_VERSION = '3.99.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9366,38 +9366,41 @@
   // it never reach SudokuPad (isInOurUI blocks mousedown/up), so opening it or picking
   // an item never clears the player's cell selection.
   //
-  // While it's open we reserve a right-hand gutter (body padding-right) so the whole
-  // SudokuPad app reflows LEFT, opening empty space on the right for the menu + toast
-  // stack to live in without overlapping the number pad. The gutter is released on
-  // close, so normal solving is unaffected.
-  var _rightGutter = null;   // saved body padding-right / box-sizing while a gutter is reserved
-  function reserveRightGutter(px) {
-    var b = document.body;
-    if (_rightGutter === null) _rightGutter = { pr: b.style.paddingRight, bs: b.style.boxSizing };
-    b.style.boxSizing   = 'border-box';
-    b.style.paddingRight = Math.round(px) + 'px';
-    window.dispatchEvent(new Event('resize'));   // prompt SudokuPad's ResizeHandler to reflow into the narrower area
-  }
-  function releaseRightGutter() {
-    if (_rightGutter === null) return;
-    var b = document.body;
-    b.style.paddingRight = _rightGutter.pr;
-    b.style.boxSizing    = _rightGutter.bs;
-    _rightGutter = null;
-    window.dispatchEvent(new Event('resize'));
+  // While it's open we shift the SudokuPad app LEFT — but ONLY if the menu would
+  // otherwise overlap the number pad, and ONLY by the overlap amount (not a fixed
+  // gutter). We translate `.game` (a plain `translateX`, which SudokuPad's board-matrix
+  // resize logic leaves untouched), so the puzzle keeps its size and no empty space is
+  // added when there was already room. Cleared on close.
+  function updatePuzzleShift() {
+    var game = document.querySelector('.game');
+    if (!game) return;
+    var menu = document.getElementById('sp-validate-menu');
+    if (!menu) { game.style.transform = ''; return; }
+    game.style.transform = '';   // measure the UNSHIFTED geometry (synchronous; never painted)
+    var inset = 12, buffer = 10;
+    var ctrl = document.querySelector('#controls');
+    var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
+    var gridEl = document.querySelector('.grid') || ctrl;
+    var gridLeft = gridEl ? gridEl.getBoundingClientRect().left : 0;
+    var menuLeft = window.innerWidth - inset - menu.offsetWidth;
+    var overlap = (controlsRight + buffer) - menuLeft;
+    // Cap the shift so the grid never slides off the left edge (keep ≥6px visible).
+    var shift = Math.max(0, Math.min(overlap, Math.max(0, gridLeft - 6)));
+    if (shift > 0) game.style.transform = 'translateX(-' + Math.round(shift) + 'px)';
   }
   // Reposition (not close) the open menu + toast stack when the window resizes.
   function onValidateResize() {
     var m = document.getElementById('sp-validate-menu');
     var btn = document.getElementById('sp-validate-btn');
     if (m && btn) positionValidateMenu(m, btn);
+    updatePuzzleShift();
     positionToastStack();
   }
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
     window.removeEventListener('resize', onValidateResize);
-    releaseRightGutter();
+    updatePuzzleShift();    // menu gone → clears any shift, puzzle returns to place
     positionToastStack();   // toasts fall back to sitting above the button row
   }
   function toggleValidateMenu() {
@@ -9641,10 +9644,9 @@
 
     document.body.appendChild(menu);
     positionValidateMenu(menu, btn);
-    // Reserve the right gutter sized to the (now-measured) menu so the app reflows far
-    // enough left that the menu clears the number pad, then re-position both.
-    reserveRightGutter(menu.offsetWidth + 12 + 16);
-    setTimeout(function () { positionValidateMenu(menu, btn); positionToastStack(); }, 150);
+    // Shift the puzzle left ONLY if the (now-measured) menu would overlap the number
+    // pad, and only by the overlap — no puzzle movement when there was already room.
+    updatePuzzleShift();
     positionToastStack();
     window.addEventListener('resize', onValidateResize);
   }
