@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.96.0
+// @version      3.97.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.96.0';
+  var SCRIPT_VERSION = '3.97.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8039,8 +8039,41 @@
     return out;
   }
 
-  // Read thermo ARM CHAINS from the model (cp.thermos — SudokuPad's native
-  // constraint key). See buildThermoTrees for how arms sharing a bulb merge.
+  // Real thermometer BULBS as rendered in the DOM: near-full-cell CIRCULAR
+  // `#underlay rect`s that aren't Kropki dots (white/black). Shared by the DOM
+  // thermo reader (getThermoChainsFromDOM) and the model bulb-corroboration gate
+  // (getThermoChainsFromModel). Returns [{ cx, cy, fill }] in SVG pixel space.
+  function getThermoBulbCentres(cs) {
+    var bulbs = [];
+    if (!cs) return bulbs;
+    function norm(hex) { return (hex || '').toUpperCase().replace(/[^0-9A-F]/g, ''); }
+    document.querySelectorAll('#underlay rect').forEach(function (r) {
+      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
+      var rx = parseFloat(r.getAttribute('rx') || 0);
+      if (w < cs * 0.55 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;   // near-full-cell only
+      if (Math.abs(rx - w / 2) > w * 0.15) return;                                // must be circular
+      var fill = norm(r.getAttribute('fill'));
+      if (!fill || fill === 'FFFFFF' || fill === '000000') return;                // not a Kropki-style dot
+      var x = parseFloat(r.getAttribute('x') || 0), y = parseFloat(r.getAttribute('y') || 0);
+      bulbs.push({ cx: x + w / 2, cy: y + h / 2, fill: fill });
+    });
+    return bulbs;
+  }
+  // The bulb cells as a { "col,row": 1 } set — the model gate below asks "is there
+  // a real rendered bulb at this chain endpoint?".
+  function getThermoBulbCellKeys() {
+    var cs = getGridCellSize();
+    if (!cs) return {};
+    var N = detectGridSize(), set = {};
+    getThermoBulbCentres(cs).forEach(function (b) {
+      var col = Math.round(b.cx / cs - 0.5), row = Math.round(b.cy / cs - 0.5);
+      if (col >= 0 && col < N && row >= 0 && row < N) set[col + ',' + row] = 1;
+    });
+    return set;
+  }
+
+  // Read thermo ARM CHAINS from the model (cp.thermos). See buildThermoTrees for
+  // how arms sharing a bulb merge.
   function getThermoChainsFromModel() {
     var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
       ? Framework.app.puzzle.currentPuzzle : null;
@@ -8063,7 +8096,27 @@
       }
       if (chain && chain.length >= 2) chains.push(chain);
     });
-    return chains;
+
+    // cp.thermos IS NOT A RELIABLE "these are thermometers" LIST on scl/SudokuMaker
+    // puzzles. The importer dumps EVERY cosmetic line (zippers, whispers, renban,
+    // …) into cp.thermos as a generic ordered-point store — the scl analog of the
+    // f-puzzles bug the v3.90 veto handles (see getThermoDetection Layer 0). Live
+    // case: bgDhfmrfN4 "Trick Play" has EIGHT blue ZIPPER lines and zero thermos,
+    // yet cp.thermos held 16 segment entries (8 lines × 2), offering a bogus
+    // Thermometers validator on cells with nothing there. A genuine thermometer
+    // always renders a BULB; a dumped line does not. Keep a model chain only when a
+    // real rendered bulb sits at EXACTLY one endpoint, and orient it bulb-first
+    // (buildThermoTrees roots at chain[0]). fpuz never reaches here — it reads
+    // nativeLinesFor('thermo') instead — so this gate is scoped to the model path.
+    var bulbKeys = getThermoBulbCellKeys();
+    var kept = [];
+    chains.forEach(function (chain) {
+      var atStart = bulbKeys[chain[0]] ? 1 : 0;
+      var atEnd = bulbKeys[chain[chain.length - 1]] ? 1 : 0;
+      if (atStart + atEnd !== 1) return;                 // no bulb / both ends → not a verifiable thermo
+      kept.push(atStart ? chain : chain.slice().reverse());
+    });
+    return kept;
   }
 
   // Fallback for THERMOS DRAWN AS GENERIC COSMETICS instead of a native
@@ -8089,17 +8142,7 @@
     function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
     function norm(hex) { return (hex || '').toUpperCase().replace(/[^0-9A-F]/g, ''); }
 
-    var bulbs = [];
-    document.querySelectorAll('#underlay rect').forEach(function (r) {
-      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
-      var rx = parseFloat(r.getAttribute('rx') || 0);
-      if (w < cs * 0.55 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;   // near-full-cell only
-      if (Math.abs(rx - w / 2) > w * 0.15) return;                                // must be circular
-      var fill = norm(r.getAttribute('fill'));
-      if (!fill || fill === 'FFFFFF' || fill === '000000') return;                // not a Kropki-style dot
-      var x = parseFloat(r.getAttribute('x') || 0), y = parseFloat(r.getAttribute('y') || 0);
-      bulbs.push({ cx: x + w / 2, cy: y + h / 2, fill: fill });
-    });
+    var bulbs = getThermoBulbCentres(cs);
     if (bulbs.length === 0) return [];
 
     var arrowsLayer = document.getElementById('arrows');
