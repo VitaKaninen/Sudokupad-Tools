@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.101.0
+// @version      3.102.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.101.0';
+  var SCRIPT_VERSION = '3.102.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5074,8 +5074,8 @@
       s = document.createElement('div');
       s.id = 'sp-toast-stack';
       Object.assign(s.style, {
-        position: 'fixed', right: '12px',
-        display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px',
+        position: 'fixed',
+        display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '8px',
         zIndex: '999999', pointerEvents: 'none',   // children opt back in; empty stack never blocks the puzzle
       });
       document.body.appendChild(s);
@@ -5104,18 +5104,15 @@
       bottomPx = rowBtn ? (56 + rowBtn.offsetHeight + 8) : 56;
     }
     s.style.bottom = bottomPx + 'px';
-    // Width: when the menu is open, match it EXACTLY (right:12 on both) so messages sit
-    // in a clean column directly above the menu — never wider than it, so they can't
-    // overlap the number pad the menu was already shifted clear of. Text wraps inside.
-    // When the menu is closed, fill the space to the right of the number pad instead.
-    if (menu) {
-      s.style.width = menu.offsetWidth + 'px';
-    } else {
-      var ctrl = document.querySelector('#controls');
-      var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
-      var avail = (window.innerWidth - inset) - (controlsRight + gap);
-      s.style.width = Math.round(Math.max(210, Math.min(360, avail))) + 'px';
-    }
+    // Width + left: hug the number pad's right edge, same as the menu. When the menu is
+    // open, match its exact width so the message column sits directly above it. When
+    // closed, use a default width that still fits the space right of the number pad. Text
+    // wraps inside each message.
+    var avail = (window.innerWidth - inset) - (controlsButtonsRight() + gap);
+    var w = menu ? menu.offsetWidth : Math.round(Math.max(196, Math.min(320, avail)));
+    s.style.width = w + 'px';
+    s.style.left  = Math.round(rightZoneLeft(w)) + 'px';
+    s.style.right = 'auto';
   }
 
   // When true, the Settings "Debug: show popup" cycler is previewing a toast:
@@ -9646,15 +9643,40 @@
     positionToastStack();
     window.addEventListener('resize', onValidateResize);
   }
-  // Menu placement is CONSISTENT and bottom-anchored: right edge at the screen inset,
-  // bottom edge just above the button row, growing UPWARD as content grows (empty and
-  // full menus share the same bottom edge). maxHeight clamps it to the space above the
-  // buttons so a very tall menu scrolls instead of running off the top.
+  // The right edge of the VISIBLE number-pad buttons (Fill/Clear/Clear All, digits, …) —
+  // NOT `#controls`'s bounding box, which includes ~90px of container padding + the full-
+  // width cage-select/rules row, so anchoring to it leaves a big gap. We scan the button
+  // grid for the rightmost narrow (non-full-width) visible element.
+  function controlsButtonsRight() {
+    var cb = document.querySelector('#controls .controls-buttons') || document.querySelector('#controls');
+    if (!cb) return 0;
+    var cw = cb.getBoundingClientRect().width || 0, max = 0;
+    cb.querySelectorAll('*').forEach(function (el) {
+      var r = el.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && (cw === 0 || r.width < cw * 0.7) && r.right > max) max = r.right;
+    });
+    return max || cb.getBoundingClientRect().right;
+  }
+  // The left edge of the space to the right of the number-pad BUTTONS — where the menu +
+  // toast column hug the controls (left side almost touching Fill/Clear/Clear All).
+  // Returns the x (in px) to place their LEFT edge at, clamped so a `width`-wide box still
+  // fits before the screen inset. (The reserved gutter keeps the pad far enough left that
+  // this always leaves room.)
+  function rightZoneLeft(width) {
+    var inset = 12, gap = 8;
+    var br = controlsButtonsRight() || (window.innerWidth - inset - width);
+    var left = br + gap;
+    return Math.max(inset, Math.min(left, window.innerWidth - inset - width));
+  }
+  // Menu placement hugs the NUMBER PAD's right edge (not the window edge) so its left
+  // side almost touches the Fill/Clear/Clear All buttons — no big gap on puzzles where
+  // the pad sits far from the window edge. Bottom-anchored just above the button row,
+  // growing UPWARD; maxHeight clamps it to the space above so a tall menu scrolls.
   function positionValidateMenu(menu, btn) {
-    var inset = 12, gap = 8, vh = window.innerHeight;
+    var gap = 8, vh = window.innerHeight;
     var br = btn.getBoundingClientRect();
-    menu.style.right  = inset + 'px';
-    menu.style.left   = 'auto';
+    menu.style.left   = Math.round(rightZoneLeft(menu.offsetWidth)) + 'px';
+    menu.style.right  = 'auto';
     menu.style.bottom = (vh - br.top + gap) + 'px';   // sit just above the button row
     menu.style.top    = 'auto';
     menu.style.maxHeight = Math.max(140, br.top - gap - 8) + 'px';
