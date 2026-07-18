@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.95.0
+// @version      3.96.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.95.0';
+  var SCRIPT_VERSION = '3.96.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1578,37 +1578,39 @@
     if (vH*9 > best) { axis = 'H'; best = vH*9; }
     if (vS > best) { axis = 'S'; best = vS; }
     if (best < 1e-4) return;                       // originals identical on every axis → no ambiguity to restore
-    // Rendered (collapsed) base. Shading PRESERVES hue, so bH == the original hue; but
-    // it DISCARDS lightness & saturation (forced to slider-L / full-sat), which is WHY
-    // peach and orange collapse. So for the L and S axes we must re-centre the spread on
-    // the ORIGINAL mean (recovering the axis shading threw away) — NOT the collapsed
-    // value, which would push the vivid colour darker (the v3.94 bug: orange went dull,
-    // peach went vivid-orange). For the hue axis the collapsed hue already equals the
-    // original, so bH is the correct centre.
+    // Rendered (collapsed) base. Shading PRESERVES hue, so bH == the original hue.
     var rh = members.map(function (m) { return rgbToHsl(m.rend[0], m.rend[1], m.rend[2]); });
     var bH = meanHue(rh.map(function (x) { return x[0]; })), bL = 0, bS = 0;
     rh.forEach(function (x) { bL += x[2]; bS += x[1]; }); bL /= k; bS /= k;
-    // Each member's deviation from the mean on the chosen axis (original space), scaled
-    // so the cluster spans ~2·TARGET while NEVER shrinking a real difference, centred on
-    // the recovered origin. Preserves the author's ordering automatically (deviations
-    // keep their sign): the lighter original renders lighter, the greener one greener.
-    var TARGET = axis === 'H' ? 0.06 : axis === 'L' ? 0.22 : 0.28;
-    var dev = members.map(function (m, i) {
-      return axis === 'H' ? hueDelta(mh, oh[i][0]) : axis === 'L' ? oh[i][2] - mL : oh[i][1] - mS;
-    });
-    var maxDev = Math.max.apply(null, dev.map(Math.abs)) || 1e-6;
-    var gain = Math.max(1, Math.min(4, TARGET / maxDev));
-    var center = axis === 'H' ? bH
-               : axis === 'L' ? Math.max(0.30, Math.min(0.82, mL))    // recovered from originals, kept dark-theme-safe
-               :                Math.max(0.25, Math.min(1, mS));
-    members.forEach(function (m, i) {
-      var h = bH, s = bS, l = bL, v = center + dev[i] * gain;
-      if (axis === 'H') { h = ((v % 1) + 1) % 1; }
-      else if (axis === 'L') { l = Math.max(0.15, Math.min(0.92, v)); }
-      else { s = Math.max(0.15, Math.min(1, v)); }
-      var rgb = hslToRgb(h, s, l);
+    function paint(m, h, s, l) {
+      var rgb = hslToRgb(((h % 1) + 1) % 1, s, l);
       m.el.style.setProperty(m.prop, 'rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ')', 'important');
-    });
+    }
+    // Separation must survive the dark canvas AND the line's reduced opacity (~0.4),
+    // which washes a too-light or too-desaturated colour out to grey (the v3.95 over-
+    // correction: peach lifted to L 0.90 read grey). So the spread is BOUNDED and, for
+    // lightness/saturation, ANCHORED on the most-vivid member (it keeps its colour; the
+    // others step toward paler/lighter only as far as a floor allows).
+    if (axis === 'H') {
+      // Hue survives best (never greys) — rotate members apart around the shared hue by
+      // their original hue order, amplified to a clearly visible gap.
+      var devH = oh.map(function (x) { return hueDelta(mh, x[0]); });
+      var maxH = Math.max.apply(null, devH.map(Math.abs)) || 1e-6;
+      var gH = Math.max(1, Math.min(6, 0.055 / maxH));
+      members.forEach(function (m, i) { paint(m, bH + devH[i] * gH, bS, bL); });
+    } else if (axis === 'S') {
+      // The most-saturated original stays vivid; less-saturated ones step down, floored
+      // at 0.45 so none drops to grey.
+      var maxS = Math.max.apply(null, oh.map(function (x) { return x[1]; }));
+      members.forEach(function (m, i) { paint(m, bH, Math.max(0.45, Math.min(1, maxS - (maxS - oh[i][1]) * 0.7)), bL); });
+    } else {
+      // The DARKEST (most vivid) original keeps its lightness so it renders bright/vivid;
+      // paler originals step LIGHTER by a bounded amount, capped at 0.66 so they stay
+      // readable at line opacity instead of washing to cream/grey.
+      var minL = Math.min.apply(null, oh.map(function (x) { return x[2]; }));
+      var anchorL = Math.max(0.42, Math.min(0.52, minL));
+      members.forEach(function (m, i) { paint(m, bH, bS, Math.max(0.30, Math.min(0.66, anchorL + (oh[i][2] - minL) * 0.45))); });
+    }
   }
 
   // Given digits — apply colour via inline !important fill so the native dark
