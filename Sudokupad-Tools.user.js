@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.99.0
+// @version      3.100.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -171,7 +171,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.99.0';
+  var SCRIPT_VERSION = '3.100.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5104,11 +5104,18 @@
       bottomPx = rowBtn ? (56 + rowBtn.offsetHeight + 8) : 56;
     }
     s.style.bottom = bottomPx + 'px';
-    // Left bound = the number pad's right edge (+gap); toasts fill the space to its right.
-    var ctrl = document.querySelector('#controls');
-    var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
-    var avail = (window.innerWidth - inset) - (controlsRight + gap);
-    s.style.width = Math.round(Math.max(210, Math.min(360, avail))) + 'px';
+    // Width: when the menu is open, match it EXACTLY (right:12 on both) so messages sit
+    // in a clean column directly above the menu — never wider than it, so they can't
+    // overlap the number pad the menu was already shifted clear of. Text wraps inside.
+    // When the menu is closed, fill the space to the right of the number pad instead.
+    if (menu) {
+      s.style.width = menu.offsetWidth + 'px';
+    } else {
+      var ctrl = document.querySelector('#controls');
+      var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
+      var avail = (window.innerWidth - inset) - (controlsRight + gap);
+      s.style.width = Math.round(Math.max(210, Math.min(360, avail))) + 'px';
+    }
   }
 
   // When true, the Settings "Debug: show popup" cycler is previewing a toast:
@@ -5119,10 +5126,15 @@
   function showRemoveInvalidToast(message, kind) {
     // Errors always show (player must know something went wrong) regardless of showToasts.
     if (!fsPreviewActive && settings.showToasts === false && kind !== 'error') return;
-    var existing = document.getElementById('sp-remove-invalid-toast');
-    if (existing) existing.remove();
+    // Multiple action/validator messages STACK (each is its own element that auto-fades)
+    // — e.g. clicking several validators in a row shows one message per run, not just the
+    // last. The debug preview is the exception: it cycles one at a time, so it clears the
+    // prior preview first (fsPreviewActive branch).
+    if (fsPreviewActive) {
+      document.querySelectorAll('.sp-action-toast').forEach(function (t) { t.remove(); });
+    }
     var toast = document.createElement('div');
-    toast.id = 'sp-remove-invalid-toast';
+    toast.className = 'sp-action-toast';
     var colours = {
       success: { bg: '#2d4a36', border: '#3d8b54', text: '#cdebd1' },
       warning: { bg: '#4a3f2d', border: '#a3853d', text: '#ebe1cd' },
@@ -9368,15 +9380,18 @@
   //
   // While it's open we shift the SudokuPad app LEFT — but ONLY if the menu would
   // otherwise overlap the number pad, and ONLY by the overlap amount (not a fixed
-  // gutter). We translate `.game` (a plain `translateX`, which SudokuPad's board-matrix
-  // resize logic leaves untouched), so the puzzle keeps its size and no empty space is
-  // added when there was already room. Cleared on close.
+  // gutter). We translate `.app` (a plain `translateX`): it moves the board + number
+  // pad together by the EXACT amount with NO vertical change (`.app` sits at y:0, so
+  // becoming the board's containing block doesn't re-anchor it — translating `.game`
+  // at y:40 DID shift the board down), and SudokuPad's board-matrix resize logic leaves
+  // it untouched. So the puzzle keeps its size + position and nothing moves when there
+  // was already room. Cleared on close.
   function updatePuzzleShift() {
-    var game = document.querySelector('.game');
-    if (!game) return;
+    var app = document.querySelector('.app');
+    if (!app) return;
     var menu = document.getElementById('sp-validate-menu');
-    if (!menu) { game.style.transform = ''; return; }
-    game.style.transform = '';   // measure the UNSHIFTED geometry (synchronous; never painted)
+    if (!menu) { app.style.transform = ''; return; }
+    app.style.transform = '';   // measure the UNSHIFTED geometry (synchronous; never painted)
     var inset = 12, buffer = 10;
     var ctrl = document.querySelector('#controls');
     var controlsRight = ctrl ? ctrl.getBoundingClientRect().right : 0;
@@ -9386,7 +9401,7 @@
     var overlap = (controlsRight + buffer) - menuLeft;
     // Cap the shift so the grid never slides off the left edge (keep ≥6px visible).
     var shift = Math.max(0, Math.min(overlap, Math.max(0, gridLeft - 6)));
-    if (shift > 0) game.style.transform = 'translateX(-' + Math.round(shift) + 'px)';
+    if (shift > 0) app.style.transform = 'translateX(-' + Math.round(shift) + 'px)';
   }
   // Reposition (not close) the open menu + toast stack when the window resizes.
   function onValidateResize() {
@@ -11429,8 +11444,7 @@
   var fsDebugIdx = 0;
   function fsDebugShowNext() {
     fsClearResult();                       // clear any real sticky state + the fs-toast so the preview shows cleanly
-    var prevAction = document.getElementById('sp-remove-invalid-toast');
-    if (prevAction) prevAction.remove();   // clear a prior action-toast preview (so fs↔action cycling doesn't stack)
+    document.querySelectorAll('.sp-action-toast').forEach(function (t) { t.remove(); });   // clear prior action-toast preview(s) so fs↔action cycling doesn't stack
     fsPreviewActive = true;
     try { fsDebugList[fsDebugIdx](); }     // action toasts self-bump the stack z-index + skip auto-fade while fsPreviewActive
     finally { fsPreviewActive = false; }
