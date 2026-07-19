@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.103.0
+// @version      3.104.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -84,6 +84,8 @@
   .spdr-dark [stroke="#fff"], .spdr-dark [stroke="#ffffff"], .spdr-dark [stroke="#FFF"], .spdr-dark [stroke="#FFFFFF"] { stroke: var(--dm-black); }
   .spdr-dark [fill="#fff"], .spdr-dark [fill="#ffffff"], .spdr-dark [fill="#FFF"], .spdr-dark [fill="#FFFFFF"] { fill: var(--dm-black); }
   .spdr-dark [bordercolor="#fff"], .spdr-dark [bordercolor="#ffffff"], .spdr-dark [bordercolor="#FFF"], .spdr-dark [bordercolor="#FFFFFF"] { stroke: var(--dm-black); }
+  /* (next rule duplicates part of the #000/#000000 swap above — kept as-is so this
+     block stays a verbatim copy of the frozen DMA rule set) */
   .spdr-dark [stroke="#000000"] { stroke: var(--dm-white); }
   .spdr-dark [stroke="rgba(0, 0, 0, 1)"] { stroke: var(--dm-white); }
   /* Inside an SVG <mask>, fill/stroke encode luminance (white=show, black=hide),
@@ -171,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.103.0';
+  var SCRIPT_VERSION = '3.104.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -283,21 +285,7 @@
     toastPersist:                 false,  // keep action toasts until dismissed (default: auto-fade after 2s)
     showEasyShadeButton:          true,   // show/hide the Easy Shade button in the controls bar
     showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
-    showValidateButton:           true,   // show/hide the floating "Validate Constraints" button (Kropki validation, more constraints later)
-    validateKropkiEnabled:        true,   // "Validate Constraints": run the Kropki-dot validator (future per-validator toggle)
-    validateCagesEnabled:         true,   // "Validate Constraints": run the killer-cage validator (future per-validator toggle)
-    validateLittleKillerEnabled:  true,   // "Validate Constraints": run the little-killer diagonal-sum validator (future per-validator toggle)
-    validateThermoEnabled:        true,   // "Validate Constraints": run the thermometer validator (future per-validator toggle)
-    validateWhisperEnabled:       true,   // "Validate Constraints": run the German-whisper (green line, ≥5) validator (future per-validator toggle)
-    validateDutchEnabled:         true,   // "Validate Constraints": run the Dutch-whisper validator (cue-gated cosmetic line, adjacent digits differ by ≥4)
-    validateXVEnabled:            true,   // "Validate Constraints": run the XV validator (V = sum 5, X = sum 10 across a labeled edge)
-    validateArrowEnabled:         true,   // "Validate Constraints": run the sum-arrow validator (shaft digits sum to the circle digit)
-    validateRenbanEnabled:        true,   // "Validate Constraints": run the renban validator (line = a set of consecutive distinct digits, any order)
-    validateRegionSumEnabled:     true,   // "Validate Constraints": run the region-sum-line validator (box/region borders split the line into equal-sum segments)
-    validateParityEnabled:        true,   // "Validate Constraints": run the parity-line validator (adjacent digits alternate odd/even along the line)
-    validateZipperEnabled:        true,   // "Validate Constraints": run the zipper-line validator (equidistant-from-centre pairs share one sum; odd line's centre IS that sum)
-    validateEntropicEnabled:      true,   // "Validate Constraints": run the entropic-line validator (every 3 consecutive cells = one low/mid/high digit; 9x9 + 6x6 only)
-    validateModularEnabled:       true,   // "Validate Constraints": run the modular-line validator (every 3 consecutive cells = one of each residue mod 3: {1,4,7}/{2,5,8}/{3,6,9})
+    showValidateButton:           true,   // show/hide the floating "Validate Constraints" button — the single on/off for the whole validator feature (the old per-validator validate*Enabled keys were removed in v3.104; the menu already lists only detected constraints)
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
     fsSelectDelayMs:              100,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
@@ -328,6 +316,10 @@
     try {
       var stored = localStorage.getItem(SETTINGS_KEY);
       var merged = stored ? Object.assign({}, DEFAULTS, JSON.parse(stored)) : Object.assign({}, DEFAULTS);
+      // Prune keys that no longer exist in DEFAULTS — settings removed by later
+      // versions would otherwise live in localStorage forever (re-saved on every
+      // save) and resurface as ghost keys while debugging.
+      Object.keys(merged).forEach(function (k) { if (!(k in DEFAULTS)) delete merged[k]; });
       // Strip any letters from a digit set saved by an older version of the
       // script that allowed alphanumerics. Falls back to default if empty.
       var cleanedDigits = (merged.digitSet || '').split('').filter(function (c) { return /^[0-9]$/.test(c); }).join('');
@@ -2213,23 +2205,62 @@
     // Re-apply our fixes when SudokuPad re-renders the board (puzzle load, fog
     // reveal, etc. — all add fresh SVG nodes). We only need to watch childList:
     // with DarkReader locked out, nothing mutates our inline colours in place.
+    //
+    // v3.104 — two costs the original full-sweep-per-mutation design paid:
+    //   • EVERY added node ran the whole 12-pass pipeline synchronously — including
+    //     each cell selection (#cell-highlights paths), every placed digit and every
+    //     pencilmark, so a click or an auto-fill step cost a full board sweep.
+    //   • the own-node exclusion only knew the Kropki labels, so our own region-
+    //     border redraws ([data-spdr-region-split] strips/clones) re-triggered a
+    //     full sweep each time (converged, but pure waste).
+    // Now each added node is CLASSIFIED (skip our own nodes + the layers that have
+    // their own dedicated patch observers; #cell-values only needs the placed-digit
+    // pass) and the work is COALESCED into one requestAnimationFrame — rAF runs
+    // before the next paint, so fixes still land before the user sees the frame.
+    //
+    // Which work does an added node imply?
+    //   'none'  — our own injected node (region group subtree / kropki label), or a
+    //             layer with its own patch observer: #cell-candidates +
+    //             #cell-pencilmarks (sort + colour patches), #cell-highlights
+    //             (selection-border observer). Nothing in the sweep reads these.
+    //   'digits'— #cell-values: only placed-digit colouring (fixAllUserDigits).
+    //   'full'  — anything else (board build, fog reveal, new clues): full sweep.
+    function classifyAddedNode(node) {
+      var el = node.nodeType === 1 ? node : node.parentElement;   // text nodes: judge by parent
+      if (!el || !el.closest) return 'full';
+      if (el.getAttribute && el.getAttribute('data-spdr-kropki-label')) return 'none';
+      if (el.closest('[data-spdr-region-split]')) return 'none';
+      if (el.closest('#cell-candidates, #cell-pencilmarks, #cell-highlights')) return 'none';
+      if (el.closest('#cell-values')) return 'digits';
+      return 'full';
+    }
+    var WORK_DIGITS = 1, WORK_FULL = 2;
+    var pendingWork = 0, flushScheduled = false;
+    function flushFixes() {
+      flushScheduled = false;
+      var work = pendingWork;
+      pendingWork = 0;
+      if (work & WORK_FULL) {
+        fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); scheduleAutoShade();
+      } else if (work & WORK_DIGITS) {
+        fixAllUserDigits(svg);
+      }
+    }
     new MutationObserver(function (mutations) {
-      var needsFullScan = false;
       for (var i = 0; i < mutations.length; i++) {
         var m = mutations[i];
-        if (m.type === 'childList' && m.addedNodes.length > 0) {
-          // Ignore childList mutations caused by our own label insertions to avoid
-          // an infinite loop (rebuildKropkiLabels inserts nodes → observer fires →
-          // rebuildKropkiLabels again → ...).
-          for (var j = 0; j < m.addedNodes.length; j++) {
-            var node = m.addedNodes[j];
-            if (node.nodeType !== 1 || !node.getAttribute('data-spdr-kropki-label')) {
-              needsFullScan = true; break;
-            }
-          }
+        if (m.type !== 'childList' || m.addedNodes.length === 0) continue;
+        for (var j = 0; j < m.addedNodes.length; j++) {
+          var kind = classifyAddedNode(m.addedNodes[j]);
+          if (kind === 'digits') pendingWork |= WORK_DIGITS;
+          else if (kind === 'full') { pendingWork |= WORK_FULL; break; }
         }
+        if (pendingWork & WORK_FULL) break;
       }
-      if (needsFullScan) { fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); scheduleAutoShade(); }
+      if (pendingWork && !flushScheduled) {
+        flushScheduled = true;
+        requestAnimationFrame(flushFixes);
+      }
     }).observe(svg, { childList: true, subtree: true });
   }
 
@@ -6629,13 +6660,21 @@
   //      the selected line regardless of colour). Option "any line" is deliberately
   //      NOT offered — it would mis-flag palindromes/region-sum lines.
 
+  // Memoised on the currentPuzzle OBJECT IDENTITY — a new puzzle is a new object, so
+  // the cache self-invalidates on puzzle load/SPA switch. Classification calls this
+  // several times per pass (cue test, SELF_DEDUCTION test, clause-colour read), and a
+  // menu open classifies every line validator, so the rebuild+lowercase adds up.
+  var _rulesBlobCache = { cp: null, val: '' };
   function getPuzzleRulesBlob() {
     var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
       ? Framework.app.puzzle.currentPuzzle : null;
     if (!cp) return '';
+    if (_rulesBlobCache.cp === cp) return _rulesBlobCache.val;
     var md = cp.metadata || {};
     function rulesOf(o) { return Array.isArray(o.rules) ? o.rules.join(' ') : (typeof o.rules === 'string' ? o.rules : ''); }
-    return ((cp.title || md.title || '') + ' ' + rulesOf(cp) + ' ' + rulesOf(md)).toLowerCase();
+    _rulesBlobCache.cp = cp;
+    _rulesBlobCache.val = ((cp.title || md.title || '') + ' ' + rulesOf(cp) + ' ' + rulesOf(md)).toLowerCase();
+    return _rulesBlobCache.val;
   }
   // A "German whisper" ≥5 cue: the phrase itself, or a "differ/difference … 5/five"
   // phrasing. Kept in sync with the catalog analysis that showed 83% of whisper
@@ -7033,8 +7072,6 @@
     // Layer 4 — a whisper is present but its line can't be pinned → manual select.
     return { mode: 'ambiguous', lines: [], allLines: all };
   }
-  function whisperDetected() { return classifyWhisperLines().mode !== 'none'; }
-  function whisperIsAmbiguous() { return classifyWhisperLines().mode === 'ambiguous'; }
 
   // ── Cue-gated cosmetic-line detection (shared by renban + region-sum) ───────
   // Renban and region-sum lines have NO native model key and share the cosmetic
@@ -7113,8 +7150,6 @@
   // A cue that fires on a phrasing its clause can't read is a GUARANTEED ambiguous.
   var RENBAN_CLAUSE_RE = /renban|set of consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
   function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE, 'renban'); }
-  function renbanDetected() { return classifyRenbanLines().mode !== 'none'; }
-  function renbanIsAmbiguous() { return classifyRenbanLines().mode === 'ambiguous'; }
 
   // Region-sum lines: box/region borders split the line into segments of EQUAL sum.
   // Cue = "region sum", "box borders divide/split", or "same/equal sum in each
@@ -7137,8 +7172,6 @@
   var REGIONSUM_CUE_RE = /region[- ]?sum|equal[- ]?sums?\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:box|region|zone|grid)\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+(?:sum|total|number|value)[^.]{0,40}(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone|segment)|(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+segments?[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|segments?[^.]{0,40}(?:each|every)\s+of\s+which[^.]{0,30}(?:same|equal)\s+(?:sum|total)|(?:sum|total)[^.]{0,60}same\s+(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)|(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)/;
   var REGIONSUM_CLAUSE_RE = /region|box|segment|(?:same|equal)\s+sum/;
   function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE, 'regionsum'); }
-  function regionSumDetected() { return classifyRegionSumLines().mode !== 'none'; }
-  function regionSumIsAmbiguous() { return classifyRegionSumLines().mode === 'ambiguous'; }
 
   // Parity lines: adjacent digits alternate odd/even along the line. Catalog rules
   // phrase it as "parity line(s)", "alternate between odd and even", "adjacent
@@ -7166,8 +7199,6 @@
   // as renban's "consecutive" / region-sum's "sum").
   var PARITY_CLAUSE_RE = /parit|alternat/;
   function classifyParityLines() { return classifyCueLines(PARITY_CUE_RE, PARITY_CLAUSE_RE); }
-  function parityDetected() { return classifyParityLines().mode !== 'none'; }
-  function parityIsAmbiguous() { return classifyParityLines().mode === 'ambiguous'; }
 
   // Zipper lines: fold the line at its centre — every pair of cells equidistant
   // from the centre sums to one constant total S; for an odd-length line the lone
@@ -7178,8 +7209,6 @@
   var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
   var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
   function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE); }
-  function zipperDetected() { return classifyZipperLines().mode !== 'none'; }
-  function zipperIsAmbiguous() { return classifyZipperLines().mode === 'ambiguous'; }
 
   // Entropic lines: every run of THREE consecutive cells on the line holds one LOW,
   // one MID and one HIGH digit — equal thirds of the digit set.
@@ -7258,8 +7287,6 @@
     // lets the named cue and the described-partition cue share one code path.
     return classifyCueLines({ test: hasEntropicCue }, ENTROPIC_CLAUSE_RE, 'entropic');
   }
-  function entropicDetected() { return classifyEntropicLines().mode !== 'none'; }
-  function entropicIsAmbiguous() { return classifyEntropicLines().mode === 'ambiguous'; }
 
   // ── Modular lines ───────────────────────────────────────────────────────────
   // A modular line: every run of THREE consecutive cells holds one digit from each
@@ -7299,8 +7326,6 @@
     // layer-0 payload type — the cue/colour ladder is the only path.
     return classifyCueLines({ test: hasModularCue }, MODULAR_CLAUSE_RE, null);
   }
-  function modularDetected() { return classifyModularLines().mode !== 'none'; }
-  function modularIsAmbiguous() { return classifyModularLines().mode === 'ambiguous'; }
 
   // Resolve which line chains a cue-gated validator should check + whether removals
   // are MASKED to the selection. CONFIDENT mode → the classifier's pinned lines,
@@ -7465,8 +7490,6 @@
     // No native f-puzzles key for Dutch whispers (always cosmetic) → cue/colour only.
     return classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null);
   }
-  function dutchDetected() { return classifyDutchWhisperLines().mode !== 'none'; }
-  function dutchIsAmbiguous() { return classifyDutchWhisperLines().mode === 'ambiguous'; }
 
   // ── Renban validator ──────────────────────────────────────────────────────
   // A renban line: its cells hold a SET OF CONSECUTIVE DISTINCT digits in any
@@ -8898,7 +8921,10 @@
   //  ADDING A VALIDATOR — the full checklist (keep this current!)
   // ════════════════════════════════════════════════════════════════════════════
   // The validators wired into the button. Each is independent (own board read, own
-  // removal list) so a Settings panel could toggle them individually. Adding a new
+  // removal list). The whole feature's single on/off is the "Show Validate
+  // Constraints button" checkbox (settings.showValidateButton) — the per-validator
+  // validate*Enabled keys were removed in v3.104 (the menu already lists only
+  // detected constraints, so per-validator toggles added nothing). Adding a new
   // one is NOT just "append an entry here" — a validator has to opt into every
   // cross-cutting feature the others already carry, or it silently ships half-built
   // (e.g. no hover eyeball). When you ADD a validator, do ALL of these:
@@ -8909,22 +8935,25 @@
   //      half-checked). Line validators: reuse resolveCueValidatorLines + one of the
   //      shared engines (computeBandLineRemovals / computeWhisperLikeRemovals) — a
   //      new line type is usually a near-clone of an existing one.
-  //   2. A `detect()` — CHEAP "does this puzzle contain any of these clues?" (the menu
-  //      only lists detected validators; re-run per menu open so late model loads /
-  //      SPA navigation stay correct).
-  //   3. The registry entry below (name/unitNoun/menuLabel/enabled/detect/compute/
-  //      countKey/noneKey; line types also `ambiguous`).
-  //   4. A `settings.validate<X>Enabled` default (top of DEFAULTS) so enabled() reads it.
-  //   5. THE HOVER EYEBALL (v3.91) — every menu row gets a 👁 via makeValidatorEye,
-  //      but it only draws objects if the validator is reachable from its dispatch:
-  //        • LINE validators → add a `case` to validatorClassify() returning your
-  //          classify*Lines() (the eye + ambiguity note read it; the default branch of
-  //          validatorClueObjects then draws the confident lines automatically).
+  //   2. Detection, one of two shapes (the menu lists only detected validators;
+  //      re-evaluated per menu open so late model loads / SPA navigation stay correct):
+  //        • LINE validators → a `classify` field = your classify*Lines() fn.
+  //          detectedValidators() runs it ONCE per menu build and stashes the result
+  //          on the def as `def.cls` — detection (mode!=='none'), the greyed-out
+  //          ambiguity state (mode==='ambiguous') and the hover eyeball all read that
+  //          one result instead of re-classifying (a classification is a full DOM +
+  //          rules scan, and there are many line validators).
+  //        • NON-line validators → a cheap `detect()` presence probe.
+  //   3. The registry entry below (name/unitNoun/menuLabel/compute/countKey/noneKey
+  //      + classify OR detect per above).
+  //   4. THE HOVER EYEBALL (v3.91) — every menu row gets a 👁 via makeValidatorEye:
+  //        • LINE validators get it free via `classify` (the default branch of
+  //          validatorClueObjects draws the confident lines from def.cls).
   //        • NON-line validators → add a `case` to validatorClueObjects() that reuses
   //          your detection fn (the FOOLPROOF PRINCIPLE: preview from the SAME fn
   //          compute() reads, so it can never drift from what runs).
-  //   6. PROJECT_SUMMARY code map — add the new validator to the "Validate Constraints"
-  //      entry with its version.
+  //   5. PROJECT_SUMMARY / docs/VALIDATORS.md — add the new validator to the
+  //      "Validate Constraints" entry with its version.
   //
   //  ADDING A CROSS-CUTTING FEATURE to validators (like the v3.91 eyeball): apply it
   //  to EVERY existing validator retroactively AND extend THIS checklist so the next
@@ -8934,48 +8963,56 @@
   // ════════════════════════════════════════════════════════════════════════════
   function constraintValidators() {
     return [
-      { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots', enabled: function () { return settings.validateKropkiEnabled !== false; },
+      { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots',
         detect: function () { return collectKropkiDots().length > 0; },
         compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
-      { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages', enabled: function () { return settings.validateCagesEnabled  !== false; },
+      { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages',
         detect: function () { return getKillerCages().length > 0; },
         compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
-      { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers', enabled: function () { return settings.validateLittleKillerEnabled !== false; },
+      { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers',
         detect: function () { return getLittleKillers().length > 0; },
         compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
-      { name: 'thermo', unitNoun: 'thermometer', menuLabel: 'Thermometers', enabled: function () { return settings.validateThermoEnabled !== false; },
+      { name: 'thermo', unitNoun: 'thermometer', menuLabel: 'Thermometers',
         // bulbless-only puzzles still list the item: clicking it explains WHY
         // nothing can be checked (the bulbless note) instead of hiding the row.
         detect: function () { var d = getThermoDetection(); return d.trees.length > 0 || d.bulbless > 0; },
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
-      { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines', enabled: function () { return settings.validateWhisperEnabled !== false; },
-        detect: whisperDetected, ambiguous: whisperIsAmbiguous, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
-      { name: 'Dutch whisper', unitNoun: 'Dutch whisper line', menuLabel: 'Dutch whisper lines', enabled: function () { return settings.validateDutchEnabled !== false; },
-        detect: dutchDetected, ambiguous: dutchIsAmbiguous, compute: computeDutchWhisperRemovals, countKey: 'dutchCount', noneKey: 'noDutch' },
-      { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues', enabled: function () { return settings.validateXVEnabled !== false; },
+      { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines',
+        classify: classifyWhisperLines, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
+      { name: 'Dutch whisper', unitNoun: 'Dutch whisper line', menuLabel: 'Dutch whisper lines',
+        classify: classifyDutchWhisperLines, compute: computeDutchWhisperRemovals, countKey: 'dutchCount', noneKey: 'noDutch' },
+      { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues',
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
-      { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum arrows', enabled: function () { return settings.validateArrowEnabled !== false; },
+      { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum arrows',
         detect: function () { return getSumArrows().length > 0; },
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
-      { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines', enabled: function () { return settings.validateRenbanEnabled !== false; },
-        detect: renbanDetected, ambiguous: renbanIsAmbiguous, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
-      { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines', enabled: function () { return settings.validateRegionSumEnabled !== false; },
-        detect: regionSumDetected, ambiguous: regionSumIsAmbiguous, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
-      { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines', enabled: function () { return settings.validateParityEnabled !== false; },
-        detect: parityDetected, ambiguous: parityIsAmbiguous, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
-      { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines', enabled: function () { return settings.validateZipperEnabled !== false; },
-        detect: zipperDetected, ambiguous: zipperIsAmbiguous, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
-      { name: 'entropic', unitNoun: 'entropic line', menuLabel: 'Entropic lines', enabled: function () { return settings.validateEntropicEnabled !== false; },
-        detect: entropicDetected, ambiguous: entropicIsAmbiguous, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
-      { name: 'modular', unitNoun: 'modular line', menuLabel: 'Modular lines', enabled: function () { return settings.validateModularEnabled !== false; },
-        detect: modularDetected, ambiguous: modularIsAmbiguous, compute: computeModularRemovals, countKey: 'modularCount', noneKey: 'noModular' },
+      { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines',
+        classify: classifyRenbanLines, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
+      { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines',
+        classify: classifyRegionSumLines, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
+      { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines',
+        classify: classifyParityLines, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
+      { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines',
+        classify: classifyZipperLines, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
+      { name: 'entropic', unitNoun: 'entropic line', menuLabel: 'Entropic lines',
+        classify: classifyEntropicLines, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
+      { name: 'modular', unitNoun: 'modular line', menuLabel: 'Modular lines',
+        classify: classifyModularLines, compute: computeModularRemovals, countKey: 'modularCount', noneKey: 'noModular' },
     ];
   }
+  // Line validators (def.classify) are classified ONCE here per menu build and the
+  // result stashed on the def (`def.cls`) — the menu's ambiguity greying and the
+  // hover eyeball read it instead of re-running the full DOM+rules classification
+  // (previously detect + ambiguous + eye each re-classified: ~3 passes per line
+  // validator per menu open). Runs (compute) still classify FRESH at click time —
+  // the stash is a per-menu-build preview cache, never a correctness input.
   function detectedValidators() {
     return constraintValidators().filter(function (v) {
-      if (!v.enabled()) return false;
-      try { return v.detect(); } catch (e) { return false; }
+      try {
+        if (v.classify) { v.cls = v.classify(); return v.cls.mode !== 'none'; }
+        return v.detect();
+      } catch (e) { return false; }
     });
   }
 
@@ -8992,17 +9029,10 @@
   // Each getter reuses the SAME detection function the validator's compute() reads
   // (the FOOLPROOF PRINCIPLE), so the preview can't drift from what runs.
   function validatorClassify(def) {
-    switch (def.name) {
-      case 'German whisper': return classifyWhisperLines();
-      case 'renban':      return classifyRenbanLines();
-      case 'region sum':  return classifyRegionSumLines();
-      case 'parity':      return classifyParityLines();
-      case 'zipper':      return classifyZipperLines();
-      case 'entropic':    return classifyEntropicLines();
-      case 'modular':     return classifyModularLines();
-      case 'Dutch whisper': return classifyDutchWhisperLines();
-    }
-    return null;   // non-line validators have no ambiguity concept
+    // Prefer the classification stashed by detectedValidators() for this menu
+    // build; classify fresh only if the def somehow arrives without one.
+    if (def.cls) return def.cls;
+    return def.classify ? def.classify() : null;   // non-line validators have no ambiguity concept
   }
   // Clue-object descriptors for spdrHi.showObjects: {type:'dot',a,b},
   // {type:'line'|'diag',keys}, {type:'cage',keys}, {type:'arrow',circle,shaft},
@@ -9062,15 +9092,15 @@
   // ── "Validate Constraints" button: menu + runners ─────────────────────────
   // The button TOGGLES a popup menu (toggleValidateMenu) that stays open across
   // runs — only the button (or a window resize) closes it. The menu lists one
-  // item per validator DETECTED in the current puzzle (detect(), re-checked each
-  // open), plus two mode checkboxes at the bottom:
-  //   • "Run all until stable" — clicking ANY validator item runs every detected
-  //     validator in sequence, repeating the whole cycle until a full pass removes
-  //     nothing — a cross-constraint fixpoint (e.g. a cage removal that unlocks a
-  //     further Kropki removal). Off → the click runs just that one validator.
-  //   • "Validate selection only" (session-only) — validators only consider clues
-  //     whose ENTIRE cell list is inside the current selection; a partially-
-  //     selected clue is skipped outright (never half-checked).
+  // item per validator DETECTED in the current puzzle (re-checked each open);
+  // clicking an item runs just that validator. Below the items:
+  //   • a "Run all above functions" button — runs every detected validator in
+  //     sequence, repeating the whole cycle until a full pass removes nothing —
+  //     a cross-constraint fixpoint (e.g. a cage removal that unlocks a further
+  //     Kropki removal). Disabled while selection-only is ticked.
+  //   • "Validate selection only" (session-only checkbox) — validators only
+  //     consider clues whose ENTIRE cell list is inside the current selection; a
+  //     partially-selected clue is skipped outright (never half-checked).
   // Nothing runs concurrently: each validator is its own compute → apply (its own
   // undo group), guarded by the shared actionInProgress lock.
 
@@ -9607,8 +9637,9 @@
     } else {
       detected.forEach(function (def) {
         if (def.name === 'thermo') { addThermoItem(def); return; }
-        var amb = false;
-        try { amb = def.ambiguous ? def.ambiguous() : false; } catch (e) { amb = false; }
+        // Line validators carry their classification from detectedValidators()
+        // (def.cls) — no re-classification here.
+        var amb = !!(def.cls && def.cls.mode === 'ambiguous');
         var noun = def.unitNoun || def.name;
         var tip = '';
         if (amb && !selOnly)
@@ -11920,17 +11951,28 @@
     // First gutter sizing waits until the puzzle model is ready, so its resize churn
     // doesn't race the initial grid / digit-set detection. Then recompute on window
     // resize (debounced; ignore our own synthetic resizes via the _gutterBusy guard).
-    (function waitReadyThenGutter(tries) {
-      tries = tries || 0;
-      if (puzzleModelReady() || tries > 60) { updateValidateGutter(); return; }
-      setTimeout(function () { waitReadyThenGutter(tries + 1); }, 150);
-    })();
+    poll(function () {
+      if (!puzzleModelReady()) return false;   // (updateValidateGutter also no-ops until ready, so giving up at the cap loses nothing)
+      updateValidateGutter();
+      return true;
+    }, 150, 60);
     var _gutterResizeT = null;
     window.addEventListener('resize', function () {
       if (_gutterBusy) return;
       clearTimeout(_gutterResizeT);
       _gutterResizeT = setTimeout(updateValidateGutter, 200);
     });
+  }
+
+  // Run `fn` now, then retry every `interval` ms until it returns truthy or `cap`
+  // retries have failed — the shared shape of "build this once its DOM target
+  // exists" (SudokuPad's controls can take a while to appear after load).
+  function poll(fn, interval, cap) {
+    if (fn()) return;
+    var attempts = 0;
+    var timer = setInterval(function () {
+      if (fn() || ++attempts >= cap) clearInterval(timer);
+    }, interval);
   }
 
   function buildAllUI() {
@@ -11943,27 +11985,9 @@
     // (works the same in light themes), so start it here rather than gating
     // on isDarkReader() like the SVG-fix observers do.
     startSelectionBorderObserver();
-    if (!buildActionButtons()) {
-      var attempts = 0;
-      var timer = setInterval(function () {
-        attempts++;
-        if (buildActionButtons() || attempts > 100) clearInterval(timer);
-      }, 100);
-    }
-    if (!buildEasyRegionShadeButton()) {
-      var attempts2 = 0;
-      var timer2 = setInterval(function () {
-        attempts2++;
-        if (buildEasyRegionShadeButton() || attempts2 > 100) clearInterval(timer2);
-      }, 100);
-    }
-    if (!darkenInlineToolButtons()) {
-      var attempts3 = 0;
-      var timer3 = setInterval(function () {
-        attempts3++;
-        if (darkenInlineToolButtons() || attempts3 > 100) clearInterval(timer3);
-      }, 100);
-    }
+    poll(buildActionButtons, 100, 100);
+    poll(buildEasyRegionShadeButton, 100, 100);
+    poll(darkenInlineToolButtons, 100, 100);
   }
   if (document.body) buildAllUI();
   else document.addEventListener('DOMContentLoaded', buildAllUI);
