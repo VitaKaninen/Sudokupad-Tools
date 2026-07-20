@@ -384,3 +384,37 @@ styling. Any flex `gap` on the row therefore lands on top of 4.8px of margin, an
 margin also insets the row's last button from the column's right edge. `margin: 0` in
 `styleRightColButton` + `COL_BTN_GAP` on the row is the fix; the natives' own
 neighbour spacing is exactly that 4.8px, so `COL_BTN_GAP = 4.8` matches them.
+
+## Writing to #controls repeatedly = a visible resize per write (v3.111)
+
+`applyControlsWidthCap` (v3.110) was hung off `poll(fn, 100, 100)` and wrote
+`#controls.style.maxWidth` on **every tick**. SudokuPad's ResizeHandler treats any
+layout change on `#controls` as a reason to recompute its `transform: scale()`, so the
+poll turned into a visible resize ~10× a second on load. Rule: anything that writes
+geometry onto `#controls` must be **idempotent — compare against the last applied
+value and skip the write when unchanged.** Then a re-measuring watcher (poll,
+MutationObserver, ResizeObserver) is free.
+
+Two more load-order traps found at the same time, same symptom ("everything loads
+tiny, resizes a few times, settles wrong; resizing the window fixes it"):
+
+- **Never measure a half-built control block.** `nativePadWidth()` returns a *plausible
+  but wrong* narrow number while SudokuPad is still filling `#controls` in (e.g. 262 —
+  only the `.controls-app` row). Because the poll stopped on the first non-zero result,
+  that narrow value could become the permanent cap, and SudokuPad scaled the entire
+  control block down to match — the "sometimes they just stay small" case. Gate on
+  `nativeControlsReady()`: all three rows present **and** `.controls-main` has both its
+  `.controls-input` and `.controls-tool` children. `.controls-main` is the widest row
+  and the last to fill in, so it is the honest signal.
+- **CSS that removes a width bound must not be injected before the bound is replaced.**
+  `.puzzle-rules { max-width: none }` lived in `injectRightColCss()`, which runs from
+  `ensureRightColumn()` — before any cap exists. That gives at least one frame of
+  `#controls` at full window width (its shrink-to-fit max-content is now unbounded),
+  which SudokuPad answers by scaling everything way down: the initial tiny flash. It is
+  now `injectRulesWidthCss()`, called *only* by `applyControlsWidthCap()` on success.
+
+Debugging note: a rAF sampler installed ~1s after reload is too late to see any of
+this. Judge the fix by whether a **plain load with no window resize** lands on the
+right numbers (cap 562 / pad 352 / banner+rules 498 on a 9×9), at more than one
+viewport width — "resizing the window fixes it" is the tell that load order, not
+geometry, is wrong.
