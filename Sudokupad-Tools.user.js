@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.109.0
+// @version      3.110.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.109.0';
+  var SCRIPT_VERSION = '3.110.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5151,7 +5151,55 @@
       pointerEvents: 'none',           // children opt back in; empty column never blocks the puzzle
     });
     cb.appendChild(col);
+    applyControlsWidthCap();       // re-run by a poll in buildAllUI until the pad measures
     return col;
+  }
+  // The natural DESIGN width of SudokuPad's own control block: the widest extent its
+  // three rows' children actually reach. NOT any row's offsetWidth — `.controls-app`,
+  // `.controls-main` and `.controls-aux` all STRETCH to whatever #controls is, so their
+  // widths tell you nothing about the buttons. The children are left-aligned
+  // (justify-content: flex-start) and fixed-size, so their extent is stable: 352 on a
+  // standard 9×9 at every window size. Measured with offsetLeft/offsetWidth, which are
+  // transform-blind — exactly right here, these are design px.
+  function nativePadWidth() {
+    var w = 0;
+    ['.controls-app', '.controls-main', '.controls-aux'].forEach(function (sel) {
+      var box = document.querySelector('#controls ' + sel);
+      if (!box) return;
+      for (var i = 0; i < box.children.length; i++) {
+        var c = box.children[i];
+        if (c.id === 'sp-right-col') continue;      // our own column isn't native content
+        var right = c.offsetLeft + c.offsetWidth;
+        if (right > w) w = right;
+      }
+    });
+    return w;
+  }
+  // Cap #controls at exactly "native pad + gap + our column".
+  //
+  // WHY THIS EXISTS: #controls is `position: absolute`, so its width is shrink-to-fit —
+  // min(available, max-content). Lifting `.puzzle-rules`'s `max-width: 480px` (which we
+  // do below, so the rules block can match the widened title banner) removed the only
+  // thing bounding that max-content, so on a puzzle WITH a rules block #controls grew
+  // with the window: measured 562 design px at a 1084px viewport but 979 at 1884. The
+  // native rows stretch with it while their buttons stay left-aligned, so the slack all
+  // opened up between the number pad and our right-hand column — which is what looked
+  // like "the Auto-fill/Validate buttons and the menu drift toward the right edge of the
+  // window". They were never window-anchored; #controls itself was growing underneath
+  // them. (A puzzle with no rules text has a narrow max-content, which is why the bug is
+  // invisible there — don't test layout on one.)
+  //
+  // With the cap, #controls is content-sized again at every viewport width, so the pad →
+  // column gap is a constant RIGHT_COL_GAP design px, and the title banner and rules
+  // block (both #controls width - 64, from SudokuPad's `margin: 0 32px`) track our
+  // column instead of the window.
+  function applyControlsWidthCap() {
+    var ctrls = document.getElementById('controls');
+    if (!ctrls) return false;
+    var pad = nativePadWidth();
+    if (!pad) return false;                  // controls not laid out yet — caller retries
+    ctrls.style.maxWidth = (pad + RIGHT_COL_GAP + RIGHT_COL_W) + 'px';
+    return true;
   }
   // Two rules, both consequences of adding the column:
   //  1. .controls-buttons reserves the column's strip with padding-right (this is the
@@ -11987,6 +12035,7 @@
     suppressStartDialog();
     // All of these live inside #controls now, so they must wait for SudokuPad to
     // build it (each returns false until its target container exists).
+    poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)
     poll(buildVersionLabel, 100, 100);
     poll(buildFillSingleButton, 100, 100);
     poll(buildValidateButton, 100, 100);
