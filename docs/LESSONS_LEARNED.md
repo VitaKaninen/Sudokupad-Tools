@@ -344,29 +344,40 @@ Baselines after the rewrite: german whisper 96.6%, zipper 96.9%, region sum 94.5
 ---
 *Personal / non-session notes (removed-feature history, browser-environment workarounds) live in [personal-notes.md](personal-notes.md) — not loaded by default.*
 
-## The right-hand column does NOT drift toward the window edge (measured v3.109)
+## ALWAYS test layout on a puzzle WITH a rules block (v3.109 → v3.110)
 
-Recurring suspicion: "as the window widens, the Validate/Auto-fill buttons and the
-validate menu move with the right edge of the screen instead of staying stuck to the
-number pad." Measured at 1084px and 1884px viewport width — it does not happen, and
-cannot:
+**Test layout on https://sudokupad.app/n7a6oi1gyy (has rules), never on
+https://sudokupad.app/pbwqsppuho (none).** A rules-less puzzle hides an entire class
+of width bug, and it cost a wasted release: v3.109 measured the "our UI drifts toward
+the right edge of the window" report on the rules-less puzzle, found the geometry
+rigid at 1084px and 1884px, and wrote it off as a misperception. It was real — just
+invisible without rules text.
 
-- `.controls-buttons` is content-sized. Its layout width is **562 design px at every
-  window size** (352 for the native pad + the 210 `padding-right` strip our column is
-  absolutely placed into). `#controls` is the same 562. Nothing here is a percentage
-  of the viewport, so `right: 0` on `#sp-right-col` is a fixed distance from the pad,
-  not from the window.
-- The only thing that changes with window width is the `transform: scale()` on
-  `#controls`. Measured pad-to-column gap: 8 screen px at scale 0.737, 10 at 1.053 —
-  i.e. exactly `RIGHT_COL_GAP * scale`. That is proportional growth of the whole
-  control block, which is the intended behaviour, not drift.
+**The bug.** `#controls` is `position: absolute`, so its width is shrink-to-fit —
+`min(available, max-content)`. v3.108's `.puzzle-rules { max-width: none }` (added so
+the rules block could match the widened title banner) removed the only thing bounding
+that max-content. On a puzzle with rules, `#controls` then grew with the viewport:
+measured **562 design px at a 1084px viewport, 979 at 1884px**. All three native rows
+(`.controls-app` / `.controls-main` / `.controls-aux`) stretch to `#controls`, while
+their buttons stay `justify-content: flex-start` — so every px of that growth opened
+up as slack *between the number pad and `#sp-right-col`*. Nothing was window-anchored;
+`#controls` was growing underneath everything.
 
-So if the buttons *look* like they are drifting right, the cause is horizontal
-alignment inside the 200px column, not anchoring. Before v3.109 the button row was
-`justify-content: flex-start` while the menu above it was 100% wide, so the buttons
-sat at the column's left and the menu's right edge ran ~67px past them. Don't go
-re-plumbing the anchoring for this — check `justifyContent` on
-`#sp-right-col-buttons` first.
+**The fix** (`applyControlsWidthCap`, called from `ensureRightColumn` + a poll in
+`buildAllUI`): set `#controls { max-width: nativePadWidth() + RIGHT_COL_GAP +
+RIGHT_COL_W }`, restoring content-sizing at every viewport width.
+
+**Trap inside the fix:** you cannot measure the pad with any row's `offsetWidth` —
+all three rows report `#controls`'s stretched width (769 in the 979 case), not their
+content. `nativePadWidth()` takes the max of `offsetLeft + offsetWidth` over the rows'
+*children*, which are fixed-size and left-aligned (stable 352 on a 9×9 at every
+window size).
+
+Corollary for reading this file: `.controls-buttons`'s own width is **not** evidence
+of anything, and neither is the fact that the pad→column gap scales cleanly with the
+`#controls` transform (measured 8 screen px at scale 0.737, 10 at 1.053 — that part
+was always correct). Both are true while the pad is still drifting away from the
+column.
 
 Also: our column buttons **inherit `margin: 2.4px`** from SudokuPad's control-button
 styling. Any flex `gap` on the row therefore lands on top of 4.8px of margin, and the
