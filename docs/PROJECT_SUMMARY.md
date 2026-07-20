@@ -640,8 +640,12 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
 - ⚠️ **Never use `offsetWidth` to detect the page scale — it is transform-blind** (a native control
   button reads 64 at every window size while its `getBoundingClientRect().width` varies). This
   silently made the whole v3.106 attempt a no-op. Use `getBoundingClientRect()` if you must measure.
-- The settings *panel* (`#sp-fix-panel`) stays `position: fixed`, window-anchored — only the gear
-  moved. Build order: the three column builders are `poll`ed in `buildAllUI` because they need
+- The settings *panel* (`#sp-fix-panel`) stays `position: fixed`, but `positionPanel()` re-anchors it
+  to the gear on every open (and on resize while open): `bottom = innerHeight - gearRect.top +
+  PANEL_GEAR_GAP`, `right = innerWidth - gearRect.right`, with `maxHeight` capped to the space left
+  above it. ⚠️ Measure with `getBoundingClientRect()` — the gear sits inside the transformed
+  `#controls`, so its viewport position moves with the page scale and board height; the old fixed
+  `bottom: 56px` corner left the panel mid-window and covering the gear on a tall page. Build order: the three column builders are `poll`ed in `buildAllUI` because they need
   `.controls-main` to exist; the gear has a body fallback plus a poll that re-homes it.
 
 ### Clue-line read sites (keep in sync)

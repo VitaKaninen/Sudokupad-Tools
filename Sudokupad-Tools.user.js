@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.111.0
+// @version      3.112.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.111.0';
+  var SCRIPT_VERSION = '3.112.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -11099,10 +11099,30 @@
       panel.style.display = 'none';
     }
 
+    // Anchor the panel just above the gear instead of the window's bottom-right.
+    // The gear lives in #sp-gear-holder inside the transformed #controls, so its
+    // viewport position moves with the page scale and the board height — only a
+    // measured (getBoundingClientRect) anchor tracks it. Falls back to the old
+    // bottom-right corner if the gear isn't laid out yet.
+    var PANEL_GEAR_GAP = 8;   // px between the panel's bottom and the gear's top
+    function positionPanel() {
+      var r = triggerBtn.getBoundingClientRect();
+      if (!r.width && !r.height) return;
+      var bottom = Math.max(4, window.innerHeight - r.top + PANEL_GEAR_GAP);
+      panel.style.bottom = bottom + 'px';
+      panel.style.right = Math.max(4, window.innerWidth - r.right) + 'px';
+      // Never run off the top of the window: cap to the space we actually have.
+      panel.style.maxHeight = Math.max(120, window.innerHeight - bottom - 8) + 'px';
+    }
+    window.addEventListener('resize', function () {
+      if (panel.style.display !== 'none') positionPanel();
+    });
+
     triggerBtn.addEventListener('click', function (e) {
       e.stopPropagation();
       if (panel.style.display === 'none') {
         panel.style.display = 'flex';
+        positionPanel();
       } else {
         closePanel();
       }
