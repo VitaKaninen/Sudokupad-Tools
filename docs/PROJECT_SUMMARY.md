@@ -462,8 +462,8 @@ way so it stays low-maintenance.
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
-  removed v3.104). Its on-screen geometry (button, menu, toasts) scales — see "Floating-UI scale"
-  below. Architecture, per-validator notes, detection layers, ambiguity policy,
+  removed v3.104). Its button, menu and toasts live in the right-hand column — see "The right-hand
+  column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
@@ -582,28 +582,35 @@ way so it stays low-maintenance.
   fixed by us (`!important` filter). See the Audit log in
   [`archive/NATIVE_MODE_MIGRATION.md`](archive/NATIVE_MODE_MIGRATION.md) (closed).
 
-### Floating-UI scale (v3.106) — one unit, one re-sync
+### The right-hand column (v3.107) — how our UI scales, and why there is no layout maths
 
-Our floating UI (Validate button + menu, Auto-fill button, post-run Undo, toast column) is sized
-off ONE live unit so it tracks SudokuPad's own smooth fit-scaling instead of freezing at whatever
-size it read at load.
+**The governing fact:** `#controls` carries a live `transform: scale(...)` maintained by SudokuPad's
+ResizeHandler. Anything parented inside that subtree scales smoothly with the window **for free**,
+hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, not arithmetic*.
 
-- `controlButtonSize()` — the native control buttons' current width (`[data-control="pen"]` etc.),
-  `0` when not yet built. `uiScale()` = that ÷ `UI_BASE_BTN` (56 = the size the original fixed px
-  were tuned at, so scale 1 reproduces the pre-v3.106 look), clamped to 0.7–2. `uiPx(n)` = the
-  scaled px for a design-size `n`. **Any new fixed px in this UI goes through `uiPx`.**
-- `validateMenuMaxW()` — single source of truth for the menu's widest width. Both the menu's inline
-  `maxWidth` and `updateValidateGutter`'s deficit maths call it, so the gutter can't drift out of
-  sync with the menu it reserves room for (it replaced a hand-kept `VALIDATE_MENU_MAX_W = 196`).
-- `spdrSyncUiScale()` — re-applies every scale-derived dimension. Called twice at load (while
-  SudokuPad's CSS settles) and from ONE debounced `resize` listener in `buildValidateButton`, which
-  runs it **before** `updateValidateGutter` (the gutter maths must see the new scale). The menu's
-  rows bake px in at build time, so the sync re-renders it via `rebuildValidateMenu` rather than
-  patching. `updateValidateGutter` also calls it once after a non-zero gutter settles — reserving
-  the gutter re-fits the puzzle, which changes the very button size the scale reads.
-- ⚠️ The settings gear is deliberately NOT scaled (fixed 36px at `bottom:12`), so the floating
-  button row's `bottom:56px` and the `right:12px` window inset stay unscaled too — they're anchored
-  to the gear, not to the puzzle.
+- `ensureRightColumn()` → `#sp-right-col`, a fixed-width (`RIGHT_COL_W = 200` design px) flex column
+  appended to **`.controls-main`** — the row-direction container holding the digit pad and
+  `.controls-tool`. ⚠️ Not `.controls-buttons`: that is `flex-direction: column`, so appending there
+  stacks *below* the pad, not beside it.
+- Column contents, top to bottom: `#sp-toast-stack` → `#sp-validate-menu` (when open) →
+  `#sp-validate-undo-btn` (when armed) → `#sp-right-col-buttons`. `justify-content: flex-end` hugs
+  them to the bottom so they grow upward. The column is `pointer-events: none`; each child opts back
+  in, so empty space never blocks the puzzle.
+- `ensureRightColButtonRow()` → `#sp-right-col-buttons`, holding Validate, Auto-fill and the settings
+  gear as equal `flex: 1 1 0; aspect-ratio: 1/1` items. `styleRightColButton(btn, fontPx)` is their
+  shared look.
+- **The width is reserved permanently, menu open or closed** — so toggling the menu moves nothing.
+- **There is no gutter code.** Widening `.controls-main` makes SudokuPad scale the controls down and
+  hand the freed space to the board by itself (measured: transform 0.959→0.788, board 626→713).
+  v3.107 deleted `updateValidateGutter`, `releaseValidateGutter`, `controlsButtonsRight`,
+  `rightZoneLeft`, `positionValidateMenu`, `positionToastStack` and `onValidateResize` outright,
+  along with every `window.dispatchEvent(new Event('resize'))` they relied on.
+- ⚠️ **Never use `offsetWidth` to detect the page scale — it is transform-blind** (a native control
+  button reads 64 at every window size while its `getBoundingClientRect().width` varies). This
+  silently made the whole v3.106 attempt a no-op. Use `getBoundingClientRect()` if you must measure.
+- The settings *panel* (`#sp-fix-panel`) stays `position: fixed`, window-anchored — only the gear
+  moved. Build order: the three column builders are `poll`ed in `buildAllUI` because they need
+  `.controls-main` to exist; the gear has a body fallback plus a poll that re-homes it.
 
 ### Clue-line read sites (keep in sync)
 Cosmetic **line** clues (whisper/renban/region-sum/palindrome/thermo shafts) are read from the DOM
