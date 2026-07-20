@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.108.0
+// @version      3.109.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.108.0';
+  var SCRIPT_VERSION = '3.109.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5114,6 +5114,15 @@
   // when the menu is toggled.
   var RIGHT_COL_W   = 200;   // design px — the #controls transform scales it on screen
   var RIGHT_COL_GAP = 10;    // design px between the number pad and our column
+  // ── Tunables for the column's buttons (all DESIGN px; the #controls transform
+  //    scales them on screen, so these stay constant at every window size) ──
+  var COL_BTN_GAP   = 4.8;   // design px between Auto-fill and Validate. 4.8 == the
+                             // native controls' spacing: they carry `margin: 2.4px`
+                             // each, so neighbours sit 2.4+2.4 apart. Ours use
+                             // margin:0 + this flex gap, which is the same distance.
+  var GEAR_SIZE     = 34;    // design px — settings gear width/height. TUNE ME.
+  var GEAR_TOP_GAP  = 14;    // design px between the bottom of the Auto-fill/Validate
+                             // row and the top of the gear. TUNE ME.
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
     if (col && col.isConnected) return col;
@@ -10955,16 +10964,24 @@
     triggerBtn.id = 'sp-fix-btn';
     triggerBtn.title = 'DarkReader Fix settings';
     triggerBtn.textContent = '⚙';
-    // Lives in .controls-footer, on the same line as SudokuPad's "Created by …"
-    // credit — that row already exists, so the gear costs no extra vertical space.
-    // Sized to the footer's own line height rather than a control button.
+    // Hangs BELOW the Auto-fill/Validate row, absolutely positioned inside it (the row
+    // is position:relative). Out of flow, so it can't push the row off the Easy Shade
+    // baseline, and .controls-buttons/#controls are both overflow:visible so it is free
+    // to sit past the column's bottom edge in the empty space under the controls.
+    //   - vertical anchor: GEAR_TOP_GAP below the row's bottom (== the buttons' bottom)
+    //   - horizontal anchor: right:0 == the column's right edge == the validate menu's
+    // Both are design px inside #controls, so they scale with the page like everything
+    // else. Size + gap are the two tunables at the top of the right-column section.
     Object.assign(triggerBtn.style, {
-      flex: '0 0 auto', width: '15px', height: '15px',
+      position: 'absolute', right: '0px', top: 'calc(100% + ' + GEAR_TOP_GAP + 'px)',
+      flex: '0 0 auto', margin: '0',
+      width: GEAR_SIZE + 'px', height: GEAR_SIZE + 'px',
       background: '#313244', color: '#cdd6f4',
       border: '1px solid #45475a', borderRadius: '4px',
-      cursor: 'pointer', fontSize: '11px',
+      cursor: 'pointer', fontSize: Math.round(GEAR_SIZE * 0.62) + 'px',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
       padding: '0', lineHeight: '1', boxSizing: 'border-box',
+      pointerEvents: 'auto',
     });
     spdrFxButton(triggerBtn);   // hover-brighten + active-depress + click flash
     // Save the digit set field and hide the panel.
@@ -11009,11 +11026,11 @@
     });
 
     document.body.appendChild(panel);   // the panel stays window-anchored (position:fixed)
-    // The gear + version label go in the footer. If the controls aren't built yet,
-    // fall back to the body so the settings UI is never unreachable; buildAllUI polls
-    // and re-homes it as soon as the footer exists.
-    var tools = ensureFooterTools();
-    if (tools) tools.appendChild(triggerBtn);
+    // The gear goes in the column's button row (the version label stays in the footer).
+    // If the controls aren't built yet, fall back to the body so the settings UI is
+    // never unreachable; buildAllUI polls and re-homes it as soon as the row exists.
+    var gearHost = ensureRightColButtonRow();
+    if (gearHost) gearHost.appendChild(triggerBtn);
     else document.body.appendChild(triggerBtn);
   }
 
@@ -11843,11 +11860,17 @@
     row = document.createElement('div');
     row.id = 'sp-right-col-buttons';
     Object.assign(row.style, {
+      position: 'relative',            // positioning context for the gear hung below it
       display: 'flex', flexDirection: 'row', alignItems: 'flex-end',
-      justifyContent: 'flex-start',    // left-aligned under the menu
-      gap: '8px', width: '100%', pointerEvents: 'auto',
+      justifyContent: 'flex-end',      // RIGHT-aligned, so the row's right edge is the
+                                       // column's right edge — i.e. flush with the
+                                       // validate menu above it (the menu is 100% wide).
+      gap: COL_BTN_GAP + 'px', width: '100%', pointerEvents: 'auto',
       marginBottom: '2.4px',           // matches the native buttons' margin, so our row's
                                        // baseline lines up exactly with the Easy Shade row
+                                       // (our buttons themselves carry margin:0 — see
+                                       // styleRightColButton — so the row edge IS the
+                                       // button edge, top/bottom/left/right)
     });
     col.appendChild(row);          // last child = bottom of the column
     return row;
@@ -11870,6 +11893,10 @@
     var s = nativeButtonSize();
     Object.assign(btn.style, {
       flex: '0 0 auto', width: s + 'px', height: s + 'px',
+      margin: '0',                     // the row's COL_BTN_GAP owns the spacing; a
+                                       // stray inherited 2.4px margin would both
+                                       // widen the gap and inset the right edge from
+                                       // the validate menu's
       padding: '2px', borderRadius: '8px', cursor: 'pointer',
       fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700',
       fontSize: (fontPx || 10) + 'px', lineHeight: '1.15',
@@ -11965,12 +11992,12 @@
     poll(buildValidateButton, 100, 100);
     buildSettingsUI();
     // The gear is built by buildSettingsUI, which falls back to the body if the
-    // footer wasn't ready. Re-home it as soon as the footer exists.
+    // column's button row wasn't ready. Re-home it as soon as the row exists.
     poll(function () {
-      var tools = ensureFooterTools();
-      var gear  = document.getElementById('sp-fix-btn');
-      if (!tools || !gear) return false;
-      if (gear.parentElement !== tools) tools.appendChild(gear);
+      var host = ensureRightColButtonRow();
+      var gear = document.getElementById('sp-fix-btn');
+      if (!host || !gear) return false;
+      if (gear.parentElement !== host) host.appendChild(gear);
       return true;
     }, 100, 100);
     // Selection-border offset observer is feature-independent of DarkReader
