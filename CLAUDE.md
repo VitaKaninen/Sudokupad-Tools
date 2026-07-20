@@ -4,9 +4,10 @@ TamperMonkey userscript (`@name` "Sudoku Tools", renamed from "SudokuPad – Nat
 
 ## Project knowledge — read before substantive work
 - [`docs/PROJECT_SUMMARY.md`](docs/PROJECT_SUMMARY.md) — current state, architecture, features, terminology, testing setup, test-puzzle URLs.
+- [`docs/VALIDATORS.md`](docs/VALIDATORS.md) — the Validate-Constraints subsystem in full: architecture, per-validator notes, detection layers, ambiguity policy, the candidate-elimination contract. Read it before touching any validator.
 - [`docs/LESSONS_LEARNED.md`](docs/LESSONS_LEARNED.md) — what beats DarkReader and what doesn't, dead ends, removed features. **Check this before debugging a rendering issue** so we don't re-solve a solved problem.
 - **The puzzle catalog** lives in its own project: [`..\..\Sudokupad Catalog\`](../../Sudokupad%20Catalog/) (`C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog`). Its `classify/` folder is the tag catalog this repo queries — 6,260 real puzzles hand-classified by 100 semantic tags (fog, killer_cage, whisper, renban, …); use it to pull examples by tag/keyword and to predict side effects of broad changes. **See "Cross-referencing the puzzle catalog" below — query it, never read it into context.** (Moved 2026-07-04 from `Tamper Monkey Extraction/cowork-classify`, now deleted; the old `docs/Catalog/` bucket dump was archived at the same time.)
-**Finding code:** the script is one ~8,500-line IIFE with 120+ functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region.
+**Finding code:** the script is one ~12,000-line IIFE with ~370 top-level functions. Don't read the whole file — grep for the function name in the "Code map" (PROJECT_SUMMARY) and read only that region. Validator logic changes: run `node tools/validator_harness.mjs` green before committing.
 
 When you add, rename, or remove a function listed in the Code map — or add a new feature — update the Code map in the same change; keep it coarse (entry points per feature, not every helper).
 
