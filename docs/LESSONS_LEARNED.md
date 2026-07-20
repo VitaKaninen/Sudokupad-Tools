@@ -343,3 +343,33 @@ Baselines after the rewrite: german whisper 96.6%, zipper 96.9%, region sum 94.5
 
 ---
 *Personal / non-session notes (removed-feature history, browser-environment workarounds) live in [personal-notes.md](personal-notes.md) — not loaded by default.*
+
+## The right-hand column does NOT drift toward the window edge (measured v3.109)
+
+Recurring suspicion: "as the window widens, the Validate/Auto-fill buttons and the
+validate menu move with the right edge of the screen instead of staying stuck to the
+number pad." Measured at 1084px and 1884px viewport width — it does not happen, and
+cannot:
+
+- `.controls-buttons` is content-sized. Its layout width is **562 design px at every
+  window size** (352 for the native pad + the 210 `padding-right` strip our column is
+  absolutely placed into). `#controls` is the same 562. Nothing here is a percentage
+  of the viewport, so `right: 0` on `#sp-right-col` is a fixed distance from the pad,
+  not from the window.
+- The only thing that changes with window width is the `transform: scale()` on
+  `#controls`. Measured pad-to-column gap: 8 screen px at scale 0.737, 10 at 1.053 —
+  i.e. exactly `RIGHT_COL_GAP * scale`. That is proportional growth of the whole
+  control block, which is the intended behaviour, not drift.
+
+So if the buttons *look* like they are drifting right, the cause is horizontal
+alignment inside the 200px column, not anchoring. Before v3.109 the button row was
+`justify-content: flex-start` while the menu above it was 100% wide, so the buttons
+sat at the column's left and the menu's right edge ran ~67px past them. Don't go
+re-plumbing the anchoring for this — check `justifyContent` on
+`#sp-right-col-buttons` first.
+
+Also: our column buttons **inherit `margin: 2.4px`** from SudokuPad's control-button
+styling. Any flex `gap` on the row therefore lands on top of 4.8px of margin, and the
+margin also insets the row's last button from the column's right edge. `margin: 0` in
+`styleRightColButton` + `COL_BTN_GAP` on the row is the fix; the natives' own
+neighbour spacing is exactly that 4.8px, so `COL_BTN_GAP = 4.8` matches them.
