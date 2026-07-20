@@ -148,6 +148,7 @@ One IIFE. Major regions, in order:
 9. Right-hand column layout: `ensureRightColumn`, `ensureRightColButtonRow`, `ensureGearHolder`,
    `nativePadWidth` / `nativeControlsReady` / `applyControlsWidthCap` / `watchNativePadWidth`,
    `rightColW` / `collapsedRightColW` / `setRightColWidth`,
+   `applyStaticColWidths` / `alignNativeAuxRow` / `centerControlsFooter`,
    `injectRightColCss` / `updateRightColCss` / `injectRulesWidthCss`
 10. `buildAllUI` — orchestrates the above on DOMContentLoaded
 
@@ -636,6 +637,25 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   shift right for as long as the menu is showing. ⚠️ `rebuildValidateMenu()` removes the menu node
   directly instead of calling `closeValidateMenu()` — going through close would collapse and
   instantly re-expand the whole control block on every in-menu toggle.
+- **Anchor to the column's LEFT edge, not its right** (v3.114). Opening the menu widens the
+  reservation, so `#controls`, the banner and the rules all move — intended — but the column's left
+  edge is invariant (`nativePadWidth() + RIGHT_COL_GAP`; the cap is that plus the column width).
+  So `#sp-right-col-buttons` and `#sp-validate-undo-btn` take a **fixed `collapsedRightColW()`
+  width** instead of `100%` (`applyStaticColWidths()` keeps them in step). That pins Auto-fill,
+  Validate, and — via `#sp-gear-holder`'s `right: 0` on the now-fixed row — the gear and version
+  label. Only `#sp-validate-menu` and `#sp-toast-stack` still span the column at `100%`.
+- `alignNativeAuxRow()` fixes SudokuPad's bottom row. `.controls-aux` is a flat flex row on a 69px
+  pitch, but the pad above it is two blocks (`.controls-input` + `.controls-tool`) with an 8px gap
+  between them, so from the 4th button on the bottom row is 8px left of the grid. It shifts the 4th
+  aux button (`[data-control="select"]`) right until its left edge matches `.controls-tool`'s first
+  button; Easy Shade follows it into the Clear All column. Measured, not constant, and idempotent
+  (a second run sees delta 0 and writes nothing) — ⚠️ it runs **before** `nativePadWidth()` in
+  `applyControlsWidthCap`, since it changes what that measures.
+- `centerControlsFooter()` pins the "Created by Sven Neumann…" credit line. SudokuPad's
+  `.controls-footer` is full-width under `#controls`, so it centres on the *reserved* width and
+  slides right when the menu opens; the rule gives it `width = 2 × the Check button's centre` +
+  `text-align: center`, i.e. centred on the native keypad. A stylesheet rule (`#sp-footer-centre-css`),
+  not an inline style — SudokuPad rebuilds that element on a puzzle change and nothing observes it.
 - **The validate menu has no `max-height`** (v3.113): a long validator list overflows *upward* out of
   the controls area and over the rules text rather than gaining a scrollbar — deliberate, the player
   can close the menu to read the rules again. `#sp-validate-menu` and `#sp-toast-stack` both carry

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.113.0
+// @version      3.114.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.113.0';
+  var SCRIPT_VERSION = '3.114.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5252,6 +5252,9 @@
   function applyControlsWidthCap() {
     var ctrls = document.getElementById('controls');
     if (!ctrls || !nativeControlsReady()) return false;   // caller retries
+    alignNativeAuxRow();         // BEFORE measuring: it shifts a bottom-row button right,
+                                 // which nativePadWidth would otherwise miss until the
+                                 // next re-cap
     var pad = nativePadWidth();
     if (!pad) return false;
     var cap = pad + RIGHT_COL_GAP + rightColW();
@@ -5260,7 +5263,77 @@
       ctrls.style.maxWidth = cap + 'px';
     }
     injectRulesWidthCss();       // only ever after a real cap is in place
+    applyStaticColWidths();      // keep our buttons pinned to the column's LEFT edge
+    centerControlsFooter();      // credit line → centred on Check, not on #controls
     return true;
+  }
+  // ── The five STATIC elements ───────────────────────────────────────────────
+  // Auto-fill, Validate, the gear, the version label and SudokuPad's credit line must
+  // not move when the validate menu opens. Opening it widens the reservation (and with
+  // it #controls, the title banner and the rules block — all intended), so anything
+  // anchored to the column's RIGHT edge rides along.
+  //
+  // The column's LEFT edge does not move: it is always `nativePadWidth() + RIGHT_COL_GAP`
+  // (the cap is that plus the column's width, and the column is right-aligned inside it).
+  // So the fix is to anchor to the left edge instead: the button row gets a FIXED
+  // collapsedRightColW() width rather than 100% of the column, which pins its left edge
+  // AND its right edge (the gear holder hangs off that right edge). Only the validate
+  // menu still spans the full column, which is what makes it widen. Toasts keep 100% too
+  // — they are transient, and a toast that is only as wide as two buttons reads badly.
+  function applyStaticColWidths() {
+    var w = collapsedRightColW() + 'px';
+    var row = document.getElementById('sp-right-col-buttons');
+    if (row && row.style.width !== w) row.style.width = w;
+    var undo = document.getElementById('sp-validate-undo-btn');
+    if (undo && undo.style.width !== w) undo.style.width = w;
+  }
+  // SudokuPad's bottom row (.controls-aux: undo / redo / check / select) is a plain
+  // flex row, so its buttons sit on a 69px pitch from x=0 — but the pad ABOVE it is
+  // two blocks, `.controls-input` (the 3 digit columns) and `.controls-tool`, with an
+  // 8px gap between them. So from the 4th button on, the bottom row is 8px left of the
+  // grid: `select` misses the colour/shading button above it, and our Easy Shade button
+  // (which follows it in the row) misses the Clear All column.
+  //
+  // Fix by measurement, not by a constant: shift the 4th aux button right until its left
+  // edge matches the first `.controls-tool` button's. Everything after it follows. It is
+  // idempotent — re-running measures a delta of 0 and writes nothing — so it is safe on
+  // the same MutationObserver as the width cap.
+  function alignNativeAuxRow() {
+    var aux  = document.querySelector('#controls .controls-aux');
+    var tool = document.querySelector('#controls .controls-main .controls-tool');
+    if (!aux || !tool || !tool.children.length) return;
+    // The 4th slot is `select` when it is present; if the site hides it, whatever else
+    // landed in that slot is the button that needs the shift.
+    var target = aux.querySelector('[data-control="select"]') || aux.children[3];
+    if (!target || !target.offsetWidth) return;
+    var colLeft = tool.children[0].offsetLeft;
+    if (!colLeft) return;
+    var delta = colLeft - target.offsetLeft;
+    if (!delta) return;                                  // already aligned
+    var cur = parseFloat(getComputedStyle(target).marginLeft) || 0;
+    target.style.marginLeft = (cur + delta) + 'px';
+  }
+  // SudokuPad's credit line is a full-width block under the control block, so it centres
+  // on #controls — which includes our reserved strip, and grows when the menu opens.
+  // Pin it to the native keypad instead: a box exactly twice the Check button's centre
+  // offset, centred text. Check is the middle column of the pad, so this is both "centred
+  // on Check" and "centred on the native keypad", and it no longer moves with #controls.
+  // A stylesheet rule rather than an inline style: SudokuPad rebuilds the footer element
+  // on a puzzle change, and nothing observes it.
+  function centerControlsFooter() {
+    var check = document.querySelector('#controls .controls-aux [data-control="check"]');
+    var cb    = document.querySelector('#controls .controls-buttons');
+    if (!check || !check.offsetWidth || !cb) return;
+    var centre = cb.offsetLeft + check.offsetLeft + check.offsetWidth / 2;
+    var css = '#controls .controls-footer { width: ' + (centre * 2) + 'px;' +
+              ' margin-left: 0; text-align: center; }';
+    var st = document.getElementById('sp-footer-centre-css');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'sp-footer-centre-css';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    if (st.textContent !== css) st.textContent = css;    // never write an unchanged value
   }
   // Re-apply the cap if the native pad's content ever changes size after load (a puzzle
   // swap, a different digit set, SudokuPad adding a row). childList on the three rows is
@@ -12009,10 +12082,14 @@
     Object.assign(row.style, {
       position: 'relative',            // positioning context for the gear hung below it
       display: 'flex', flexDirection: 'row', alignItems: 'flex-end',
-      justifyContent: 'flex-end',      // RIGHT-aligned, so the row's right edge is the
-                                       // column's right edge — i.e. flush with the
-                                       // validate menu above it (the menu is 100% wide).
-      gap: COL_BTN_GAP + 'px', width: '100%', pointerEvents: 'auto',
+      justifyContent: 'flex-start',
+      // FIXED width (the two buttons exactly), NOT 100% of the column — see
+      // applyStaticColWidths. 100% pinned the row to the column's right edge, which
+      // moves when the validate menu widens the reservation; the column's LEFT edge
+      // never moves, so a fixed-width row leaves the buttons (and the gear/version pair
+      // hanging off its right edge) exactly where they are with the menu closed.
+      gap: COL_BTN_GAP + 'px', width: collapsedRightColW() + 'px',
+      flex: '0 0 auto', alignSelf: 'flex-start', pointerEvents: 'auto',
       marginBottom: '2.4px',           // matches the native buttons' margin, so our row's
                                        // baseline lines up exactly with the Easy Shade row
                                        // (our buttons themselves carry margin:0 — see
@@ -12119,7 +12196,10 @@
     // Full-width row of its own, directly above the button row — a wide "Undo" reads
     // better than squeezing a 4th square into the bottom row.
     Object.assign(ubtn.style, {
-      width: '100%', padding: '7px 12px', borderRadius: '8px', cursor: 'pointer',
+      // Same fixed width as the button row below it (applyStaticColWidths keeps it in
+      // step) — 100% would ride the column's right edge out when the menu opens.
+      width: collapsedRightColW() + 'px', alignSelf: 'flex-start', flex: '0 0 auto',
+      padding: '7px 12px', borderRadius: '8px', cursor: 'pointer',
       fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700', fontSize: '13px',
       lineHeight: '1.2', whiteSpace: 'nowrap', display: 'none',
       alignItems: 'center', justifyContent: 'center',
