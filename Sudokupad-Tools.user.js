@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.112.0
+// @version      3.113.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.112.0';
+  var SCRIPT_VERSION = '3.113.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5110,9 +5110,12 @@
   // entirely by itself (measured: transform 0.959→0.788, board 626→713). So there is
   // no deficit maths, no synthetic resize dispatch, and no resize listener here.
   //
-  // The width is always reserved, menu open or closed, so nothing on screen moves
-  // when the menu is toggled.
-  var RIGHT_COL_W   = 200;   // design px — the #controls transform scales it on screen
+  // The reservation is NOT constant: it is only as wide as the column's buttons need
+  // until the validate menu opens, then widens to RIGHT_COL_W. See rightColW /
+  // setRightColWidth below.
+  var RIGHT_COL_W   = 200;   // design px — the #controls transform scales it on screen.
+                             // This is the OPEN width: only reserved while the validate
+                             // menu is showing (see setRightColWidth).
   var RIGHT_COL_GAP = 10;    // design px between the number pad and our column
   // ── Tunables for the column's buttons (all DESIGN px; the #controls transform
   //    scales them on screen, so these stay constant at every window size) ──
@@ -5123,6 +5126,34 @@
   var GEAR_SIZE     = 28;    // design px — settings gear width/height. TUNE ME.
   var GEAR_TOP_GAP  = 9;    // design px between the bottom of the Auto-fill/Validate
                              // row and the top of the gear. TUNE ME.
+  // ── How much width the column reserves ────────────────────────────────────
+  // Two widths, not one. The validate menu needs RIGHT_COL_W, but the column's own
+  // buttons (Auto-fill + Validate, two native-sized squares plus COL_BTN_GAP) need far
+  // less — and reserving the menu's width permanently pushed the title banner and the
+  // rules block right by ~65 design px for a menu that is usually closed. So the
+  // reservation is now COLLAPSED by default and only widens while the menu is open
+  // (openValidateMenu / closeValidateMenu call setRightColWidth).
+  //
+  // Everything downstream reads rightColW(), never RIGHT_COL_W directly: the column's
+  // own width, the .controls-buttons padding-right that does the actual reserving, and
+  // the #controls cap (applyControlsWidthCap). Changing it re-runs the cap, so
+  // SudokuPad rescales the control block and the banner/rules track it, exactly as they
+  // do on any other pad-width change.
+  var rightColOpen = false;
+  function collapsedRightColW() {
+    return Math.ceil(nativeButtonSize() * 2 + COL_BTN_GAP);
+  }
+  function rightColW() {
+    return rightColOpen ? RIGHT_COL_W : collapsedRightColW();
+  }
+  function setRightColWidth(open) {
+    if (rightColOpen === open) return;
+    rightColOpen = open;
+    var col = document.getElementById('sp-right-col');
+    if (col) col.style.width = rightColW() + 'px';
+    updateRightColCss();
+    applyControlsWidthCap();
+  }
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
     if (col && col.isConnected) return col;
@@ -5143,7 +5174,7 @@
     col.id = 'sp-right-col';
     Object.assign(col.style, {
       position: 'absolute', right: '0px', top: '0px', bottom: '0px',
-      width: RIGHT_COL_W + 'px',
+      width: rightColW() + 'px',
       display: 'flex', flexDirection: 'column',
       justifyContent: 'flex-end',      // contents hug the bottom, growing upward
       alignItems: 'stretch', gap: '8px',
@@ -5223,7 +5254,7 @@
     if (!ctrls || !nativeControlsReady()) return false;   // caller retries
     var pad = nativePadWidth();
     if (!pad) return false;
-    var cap = pad + RIGHT_COL_GAP + RIGHT_COL_W;
+    var cap = pad + RIGHT_COL_GAP + rightColW();
     if (cap !== lastControlsCap) {
       lastControlsCap = cap;
       ctrls.style.maxWidth = cap + 'px';
@@ -5248,14 +5279,22 @@
   // space-reservation mechanism — widening it makes SudokuPad scale the controls down and
   // hand the freed width to the board) and becomes the positioning context the column is
   // absolutely placed into. Safe to inject at any time.
+  // The reserved strip is rightColW() wide, which changes when the menu opens/closes —
+  // so the rule is rewritten by updateRightColCss rather than being written once.
   function injectRightColCss() {
     if (document.getElementById('sp-right-col-css')) return;
     var st = document.createElement('style');
     st.id = 'sp-right-col-css';
-    st.textContent =
-      '#controls .controls-buttons { position: relative; box-sizing: border-box;' +
-      ' padding-right: ' + (RIGHT_COL_W + RIGHT_COL_GAP) + 'px; }';
     (document.head || document.documentElement).appendChild(st);
+    updateRightColCss();
+  }
+  function updateRightColCss() {
+    var st = document.getElementById('sp-right-col-css');
+    if (!st) return;
+    var css =
+      '#controls .controls-buttons { position: relative; box-sizing: border-box;' +
+      ' padding-right: ' + (rightColW() + RIGHT_COL_GAP) + 'px; }';
+    if (st.textContent !== css) st.textContent = css;   // never write an unchanged value
   }
   // Widening #controls lets SudokuPad's title banner (.puzzle-header, no max-width) grow
   // — but the rules block underneath is capped at `max-width: 480px`, so it stops short
@@ -5290,7 +5329,9 @@
       s.id = 'sp-toast-stack';
       Object.assign(s.style, {
         display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '8px',
-        width: '100%', pointerEvents: 'none',
+        width: '100%', flexShrink: '0',   // overflow upward, never get squeezed by the
+                                          // column when the menu below is tall
+        pointerEvents: 'none',
       });
     }
     var col = ensureRightColumn();
@@ -9562,6 +9603,7 @@
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
+    setRightColWidth(false);      // give the reserved width back to the board/rules
   }
   function toggleValidateMenu() {
     if (document.getElementById('sp-validate-menu')) closeValidateMenu();
@@ -9570,10 +9612,11 @@
   // Re-render in place so a toggle inside the menu (selection-only) updates what it
   // greys out immediately, instead of only on the next open.
   function rebuildValidateMenu() {
-    if (!document.getElementById('sp-validate-menu')) return;
-    closeValidateMenu();
-    openValidateMenu();
-  }
+    var m = document.getElementById('sp-validate-menu');
+    if (!m) return;
+    m.remove();            // NOT closeValidateMenu — that collapses the column's width,
+    openValidateMenu();    // which openValidateMenu would immediately re-expand (a
+  }                        // pointless reflow of the whole control block per toggle)
   // A validator item was clicked: resolve the selection filter (may toast + bail),
   // AND in the always-on fog gate (skips any clue with a cell still under fog),
   // then run just that validator. (The "Run all above functions" button runs every
@@ -9607,11 +9650,14 @@
     menu.id = 'sp-validate-menu';
     Object.assign(menu.style, {
       // In-flow child of the right-hand column: full width of the reserved space,
-      // no positioning of its own. maxHeight keeps a long validator list inside the
-      // controls area (it scrolls) instead of overflowing up over the rules text.
+      // no positioning of its own. DELIBERATELY unbounded in height — a long validator
+      // list grows upward out of the controls area and over the rules text rather than
+      // gaining a scrollbar (the player has read the rules before starting; closing the
+      // menu brings them back). flexShrink:0 is what makes that overflow instead of the
+      // column squeezing the menu to fit.
       position: 'relative', zIndex: '901',
       width: '100%', boxSizing: 'border-box',
-      maxHeight: '320px', overflowY: 'auto',
+      flexShrink: '0', overflow: 'visible',
       borderRadius: '8px', padding: '3px',
       fontFamily: 'Roboto, Arial, sans-serif',
       boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
@@ -9812,6 +9858,9 @@
     // width comes from the column, so it needs no sizing or positioning of its own.
     var col = ensureRightColumn();
     var row = document.getElementById('sp-right-col-buttons');
+    // Widen the reservation first, so the menu is laid out at its full width in the
+    // same frame it appears (the column is collapsed to the buttons' width otherwise).
+    setRightColWidth(true);
     if (col) col.insertBefore(menu, row || null);
     else document.body.appendChild(menu);   // pre-controls fallback
   }

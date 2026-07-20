@@ -147,7 +147,8 @@ One IIFE. Major regions, in order:
 8. `buildActionButtons`, `buildEasyRegionShadeButton`, `buildVersionLabel`, `buildFillSingleButton`
 9. Right-hand column layout: `ensureRightColumn`, `ensureRightColButtonRow`, `ensureGearHolder`,
    `nativePadWidth` / `nativeControlsReady` / `applyControlsWidthCap` / `watchNativePadWidth`,
-   `injectRightColCss` / `injectRulesWidthCss`
+   `rightColW` / `collapsedRightColW` / `setRightColWidth`,
+   `injectRightColCss` / `updateRightColCss` / `injectRulesWidthCss`
 10. `buildAllUI` — orchestrates the above on DOMContentLoaded
 
 ### SVG z-order (DOM order in `#svgrenderer`; earlier = rendered behind)
@@ -591,9 +592,10 @@ way so it stays low-maintenance.
 ResizeHandler. Anything parented inside that subtree scales smoothly with the window **for free**,
 hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, not arithmetic*.
 
-- `ensureRightColumn()` → `#sp-right-col`, `RIGHT_COL_W = 200` design px, **absolutely positioned
+- `ensureRightColumn()` → `#sp-right-col`, `rightColW()` design px wide, **absolutely positioned
   inside `.controls-buttons`** (`right/top/bottom: 0`). Space is reserved by `padding-right:
-  RIGHT_COL_W + RIGHT_COL_GAP` on `.controls-buttons` itself, injected by `injectRightColCss()`.
+  rightColW() + RIGHT_COL_GAP` on `.controls-buttons` itself, written by `injectRightColCss()` /
+  `updateRightColCss()`.
   ⚠️ **Parent must be `.controls-buttons`, not `.controls-main`** — `.controls-buttons` is the
   column-direction stack holding `.controls-app`, `.controls-main` *and* `.controls-aux` (Easy
   Shade), so spanning its full height is what puts our button row level with the Easy Shade row.
@@ -618,7 +620,7 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   baseline, and it may hang below the column (`#controls` and `.controls-buttons` are both
   `overflow: visible`). `GEAR_SIZE` / `GEAR_TOP_GAP` / `COL_BTN_GAP` are tunables at the top of the
   right-column section.
-- `applyControlsWidthCap()` caps `#controls` at `nativePadWidth() + RIGHT_COL_GAP + RIGHT_COL_W`.
+- `applyControlsWidthCap()` caps `#controls` at `nativePadWidth() + RIGHT_COL_GAP + rightColW()`.
   ⚠️ **This is load-bearing** — without it `#controls` (position:absolute, so shrink-to-fit) grows
   with the viewport on any puzzle with a rules block, opening slack between the pad and our column.
   `nativePadWidth()` measures the widest extent the native rows' **children** reach; a row's own
@@ -626,7 +628,18 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   rules around it (`nativeControlsReady`, the idempotent write, `injectRulesWidthCss`) — they are
   what stops the controls loading tiny and resizing repeatedly. `watchNativePadWidth()` re-caps on a
   childList MutationObserver over the three rows.
-- **The width is reserved permanently, menu open or closed** — so toggling the menu moves nothing.
+- **The reservation is two-state (v3.113).** `rightColW()` returns `collapsedRightColW()` (=
+  `2 × nativeButtonSize() + COL_BTN_GAP`, just the Auto-fill/Validate row) while the validate menu
+  is closed, and `RIGHT_COL_W = 200` while it is open; `setRightColWidth(open)` flips it and is
+  called by `openValidateMenu` / `closeValidateMenu`. It rewrites the column width **and** the
+  `.controls-buttons` padding, then re-runs `applyControlsWidthCap()`, so the banner and rules only
+  shift right for as long as the menu is showing. ⚠️ `rebuildValidateMenu()` removes the menu node
+  directly instead of calling `closeValidateMenu()` — going through close would collapse and
+  instantly re-expand the whole control block on every in-menu toggle.
+- **The validate menu has no `max-height`** (v3.113): a long validator list overflows *upward* out of
+  the controls area and over the rules text rather than gaining a scrollbar — deliberate, the player
+  can close the menu to read the rules again. `#sp-validate-menu` and `#sp-toast-stack` both carry
+  `flex-shrink: 0`, which is what makes the column overflow instead of squeezing them to fit.
 - **There is no gutter code.** Widening `.controls-buttons` makes SudokuPad scale the controls down
   and hand the freed space to the board by itself (measured: transform 0.959→0.788, board 626→713).
   v3.107 deleted `updateValidateGutter`, `releaseValidateGutter`, `controlsButtonsRight`,
