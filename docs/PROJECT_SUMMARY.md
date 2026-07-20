@@ -145,7 +145,10 @@ One IIFE. Major regions, in order:
    `makeSubCheckbox`, …)
 7. `buildSettingsUI`
 8. `buildActionButtons`, `buildEasyRegionShadeButton`, `buildVersionLabel`, `buildFillSingleButton`
-9. `buildAllUI` — orchestrates the above on DOMContentLoaded
+9. Right-hand column layout: `ensureRightColumn`, `ensureRightColButtonRow`, `ensureGearHolder`,
+   `nativePadWidth` / `nativeControlsReady` / `applyControlsWidthCap` / `watchNativePadWidth`,
+   `injectRightColCss` / `injectRulesWidthCss`
+10. `buildAllUI` — orchestrates the above on DOMContentLoaded
 
 ### SVG z-order (DOM order in `#svgrenderer`; earlier = rendered behind)
 1. **Our injected group** `[data-spdr-region-split]` at `svgEl.firstChild`: cell-grid clone first,
@@ -603,10 +606,26 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
 - `ensureRightColButtonRow()` → `#sp-right-col-buttons`, holding Validate and Auto-fill.
   `styleRightColButton(btn, fontPx)` sizes them to `nativeButtonSize()` — the native control
   button's `offsetWidth` (64). ⚠️ Size them to that, **not** `flex: 1 1 0`: dividing the column's
-  width between the buttons made them 58px against the natives' 64px.
-- The settings gear + version label live in `#sp-footer-tools` (`ensureFooterTools()`), right-aligned
-  via `margin-left: auto` on `.controls-footer` — SudokuPad's existing ~13px "Created by …" credit
-  line, so they cost no extra vertical space. The gear is 15px there, not a control-button square.
+  width between the buttons made them 58px against the natives' 64px. The row is
+  `justify-content: flex-end`, so its right edge is the column's right edge == the validate menu's.
+  ⚠️ Our buttons **inherit `margin: 2.4px`** from SudokuPad's control-button styling; they set
+  `margin: 0` and the row owns spacing via `COL_BTN_GAP = 4.8` (== the natives' own 2.4+2.4
+  neighbour gap). Leave the margin in and any flex `gap` stacks on top of it *and* insets the last
+  button from the menu edge.
+- The settings gear + version label live in `#sp-gear-holder` (`ensureGearHolder()`), a flex pair
+  absolutely positioned **inside the button row** at `right: 0; top: calc(100% + GEAR_TOP_GAP)` —
+  label left, gear right. Out of flow, so growing the gear can never push the row off the Easy Shade
+  baseline, and it may hang below the column (`#controls` and `.controls-buttons` are both
+  `overflow: visible`). `GEAR_SIZE` / `GEAR_TOP_GAP` / `COL_BTN_GAP` are tunables at the top of the
+  right-column section.
+- `applyControlsWidthCap()` caps `#controls` at `nativePadWidth() + RIGHT_COL_GAP + RIGHT_COL_W`.
+  ⚠️ **This is load-bearing** — without it `#controls` (position:absolute, so shrink-to-fit) grows
+  with the viewport on any puzzle with a rules block, opening slack between the pad and our column.
+  `nativePadWidth()` measures the widest extent the native rows' **children** reach; a row's own
+  `offsetWidth` is useless (all three stretch to `#controls`). See LESSONS_LEARNED for the load-order
+  rules around it (`nativeControlsReady`, the idempotent write, `injectRulesWidthCss`) — they are
+  what stops the controls loading tiny and resizing repeatedly. `watchNativePadWidth()` re-caps on a
+  childList MutationObserver over the three rows.
 - **The width is reserved permanently, menu open or closed** — so toggling the menu moves nothing.
 - **There is no gutter code.** Widening `.controls-buttons` makes SudokuPad scale the controls down
   and hand the freed space to the board by itself (measured: transform 0.959→0.788, board 626→713).
@@ -614,8 +633,10 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   `rightZoneLeft`, `positionValidateMenu`, `positionToastStack` and `onValidateResize` outright,
   along with every `window.dispatchEvent(new Event('resize'))` they relied on.
 - Widening `#controls` also widens SudokuPad's title banner (`.puzzle-header`). To keep the rules
-  block aligned with it, `injectRightColCss` lifts the rules' `max-width: 480px` cap **and** matches
+  block aligned with it, `injectRulesWidthCss` lifts the rules' `max-width: 480px` cap **and** matches
   the banner's `margin: 0 32px` — lifting the cap alone leaves the rules 64px wider than the banner.
+  ⚠️ It is a separate function from `injectRightColCss` on purpose: lifting that cap unbounds
+  `#controls`, so it must never be injected before `applyControlsWidthCap` has succeeded.
 - ⚠️ **Never use `offsetWidth` to detect the page scale — it is transform-blind** (a native control
   button reads 64 at every window size while its `getBoundingClientRect().width` varies). This
   silently made the whole v3.106 attempt a no-op. Use `getBoundingClientRect()` if you must measure.
