@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.110.0
+// @version      3.111.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.110.0';
+  var SCRIPT_VERSION = '3.111.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5120,8 +5120,8 @@
                              // native controls' spacing: they carry `margin: 2.4px`
                              // each, so neighbours sit 2.4+2.4 apart. Ours use
                              // margin:0 + this flex gap, which is the same distance.
-  var GEAR_SIZE     = 34;    // design px — settings gear width/height. TUNE ME.
-  var GEAR_TOP_GAP  = 14;    // design px between the bottom of the Auto-fill/Validate
+  var GEAR_SIZE     = 28;    // design px — settings gear width/height. TUNE ME.
+  var GEAR_TOP_GAP  = 9;    // design px between the bottom of the Auto-fill/Validate
                              // row and the top of the gear. TUNE ME.
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
@@ -5161,9 +5161,22 @@
   // (justify-content: flex-start) and fixed-size, so their extent is stable: 352 on a
   // standard 9×9 at every window size. Measured with offsetLeft/offsetWidth, which are
   // transform-blind — exactly right here, these are design px.
+  var NATIVE_ROW_SELECTORS = ['.controls-app', '.controls-main', '.controls-aux'];
+  // True once SudokuPad has finished building the control block. Measuring before this
+  // is the whole reason the controls used to load tiny and then jump: a half-built pad
+  // measures NARROW (e.g. only the 262px app row), we'd cap #controls at that, and
+  // SudokuPad would scale the entire control block down to match. `.controls-main` is
+  // the widest row and the last to fill in, so its two children are the real signal.
+  function nativeControlsReady() {
+    for (var i = 0; i < NATIVE_ROW_SELECTORS.length; i++) {
+      if (!document.querySelector('#controls ' + NATIVE_ROW_SELECTORS[i])) return false;
+    }
+    return !!(document.querySelector('#controls .controls-main .controls-input') &&
+              document.querySelector('#controls .controls-main .controls-tool'));
+  }
   function nativePadWidth() {
     var w = 0;
-    ['.controls-app', '.controls-main', '.controls-aux'].forEach(function (sel) {
+    NATIVE_ROW_SELECTORS.forEach(function (sel) {
       var box = document.querySelector('#controls ' + sel);
       if (!box) return;
       for (var i = 0; i < box.children.length; i++) {
@@ -5193,32 +5206,73 @@
   // column gap is a constant RIGHT_COL_GAP design px, and the title banner and rules
   // block (both #controls width - 64, from SudokuPad's `margin: 0 32px`) track our
   // column instead of the window.
+  //
+  // LOAD-TIME STABILITY — three rules, all learned from the controls loading tiny and
+  // then visibly resizing two or three times before settling on a wrong size:
+  //  1. Never measure a half-built pad (see nativeControlsReady). A narrow measurement
+  //     becomes a narrow cap, and SudokuPad scales the whole control block down to it.
+  //  2. Never write max-width when the value hasn't changed. Every write is a layout
+  //     change that SudokuPad's ResizeHandler reacts to by recomputing the #controls
+  //     transform — that is what turned a 100ms poll into a visible resize per tick.
+  //  3. The `.puzzle-rules { max-width: none }` rule must not land BEFORE the cap (see
+  //     injectRulesWidthCss). Uncapped rules + uncapped #controls = one frame at full
+  //     window width, which is the "starts really small" flash.
+  var lastControlsCap = null;
   function applyControlsWidthCap() {
     var ctrls = document.getElementById('controls');
-    if (!ctrls) return false;
+    if (!ctrls || !nativeControlsReady()) return false;   // caller retries
     var pad = nativePadWidth();
-    if (!pad) return false;                  // controls not laid out yet — caller retries
-    ctrls.style.maxWidth = (pad + RIGHT_COL_GAP + RIGHT_COL_W) + 'px';
+    if (!pad) return false;
+    var cap = pad + RIGHT_COL_GAP + RIGHT_COL_W;
+    if (cap !== lastControlsCap) {
+      lastControlsCap = cap;
+      ctrls.style.maxWidth = cap + 'px';
+    }
+    injectRulesWidthCss();       // only ever after a real cap is in place
     return true;
   }
-  // Two rules, both consequences of adding the column:
-  //  1. .controls-buttons reserves the column's strip with padding-right (this is the
-  //     whole space-reservation mechanism — widening it makes SudokuPad scale the
-  //     controls down and hand the freed width to the board) and becomes the
-  //     positioning context the column is absolutely placed into.
-  //  2. Widening #controls lets SudokuPad's title banner (.puzzle-header, no
-  //     max-width) grow — but the rules block underneath is capped at
-  //     `max-width: 480px`, so it stops short and the two stop lining up. Lifting the
-  //     cap alone overshoots: the banner also carries `margin: 0 32px`, so the rules
-  //     would end up 64px WIDER than it. Match that margin and the two align exactly
-  //     (verified: both 498px wide at the same left edge).
+  // Re-apply the cap if the native pad's content ever changes size after load (a puzzle
+  // swap, a different digit set, SudokuPad adding a row). childList on the three rows is
+  // enough — their children are what nativePadWidth measures. Cheap: applyControlsWidthCap
+  // writes nothing when the measurement is unchanged, so this never causes a reflow loop.
+  function watchNativePadWidth() {
+    if (!window.MutationObserver || !nativeControlsReady()) return false;
+    var mo = new MutationObserver(function () { applyControlsWidthCap(); });
+    NATIVE_ROW_SELECTORS.forEach(function (sel) {
+      var box = document.querySelector('#controls ' + sel);
+      if (box) mo.observe(box, { childList: true });
+    });
+    return true;
+  }
+  // .controls-buttons reserves the column's strip with padding-right (this is the whole
+  // space-reservation mechanism — widening it makes SudokuPad scale the controls down and
+  // hand the freed width to the board) and becomes the positioning context the column is
+  // absolutely placed into. Safe to inject at any time.
   function injectRightColCss() {
     if (document.getElementById('sp-right-col-css')) return;
     var st = document.createElement('style');
     st.id = 'sp-right-col-css';
     st.textContent =
       '#controls .controls-buttons { position: relative; box-sizing: border-box;' +
-      ' padding-right: ' + (RIGHT_COL_W + RIGHT_COL_GAP) + 'px; }\n' +
+      ' padding-right: ' + (RIGHT_COL_W + RIGHT_COL_GAP) + 'px; }';
+    (document.head || document.documentElement).appendChild(st);
+  }
+  // Widening #controls lets SudokuPad's title banner (.puzzle-header, no max-width) grow
+  // — but the rules block underneath is capped at `max-width: 480px`, so it stops short
+  // and the two stop lining up. Lifting the cap alone overshoots: the banner also carries
+  // `margin: 0 32px`, so the rules would end up 64px WIDER than it. Match that margin and
+  // the two align exactly (verified: both 498px wide at the same left edge).
+  //
+  // DELIBERATELY NOT part of injectRightColCss: this rule removes the only bound on
+  // #controls' shrink-to-fit max-content (see applyControlsWidthCap). Injected before the
+  // cap is in place, it gives one frame of a full-window-width #controls, which SudokuPad
+  // answers by scaling the whole control block way down — the "everything loads tiny and
+  // then jumps" flash. applyControlsWidthCap is the only caller, and only on success.
+  function injectRulesWidthCss() {
+    if (document.getElementById('sp-rules-width-css')) return;
+    var st = document.createElement('style');
+    st.id = 'sp-rules-width-css';
+    st.textContent =
       '#controls .puzzle-rules { max-width: none; margin-left: 32px; margin-right: 32px; }';
     (document.head || document.documentElement).appendChild(st);
   }
@@ -11012,16 +11066,11 @@
     triggerBtn.id = 'sp-fix-btn';
     triggerBtn.title = 'DarkReader Fix settings';
     triggerBtn.textContent = '⚙';
-    // Hangs BELOW the Auto-fill/Validate row, absolutely positioned inside it (the row
-    // is position:relative). Out of flow, so it can't push the row off the Easy Shade
-    // baseline, and .controls-buttons/#controls are both overflow:visible so it is free
-    // to sit past the column's bottom edge in the empty space under the controls.
-    //   - vertical anchor: GEAR_TOP_GAP below the row's bottom (== the buttons' bottom)
-    //   - horizontal anchor: right:0 == the column's right edge == the validate menu's
-    // Both are design px inside #controls, so they scale with the page like everything
-    // else. Size + gap are the two tunables at the top of the right-column section.
+    // Lives in #sp-gear-holder (see ensureGearHolder), which does the positioning and
+    // puts the version label immediately to its left. GEAR_SIZE is the tunable at the
+    // top of the right-column section; it is a design px inside the #controls
+    // transform, so it scales with the page.
     Object.assign(triggerBtn.style, {
-      position: 'absolute', right: '0px', top: 'calc(100% + ' + GEAR_TOP_GAP + 'px)',
       flex: '0 0 auto', margin: '0',
       width: GEAR_SIZE + 'px', height: GEAR_SIZE + 'px',
       background: '#313244', color: '#cdd6f4',
@@ -11074,31 +11123,12 @@
     });
 
     document.body.appendChild(panel);   // the panel stays window-anchored (position:fixed)
-    // The gear goes in the column's button row (the version label stays in the footer).
-    // If the controls aren't built yet, fall back to the body so the settings UI is
-    // never unreachable; buildAllUI polls and re-homes it as soon as the row exists.
-    var gearHost = ensureRightColButtonRow();
+    // The gear goes in the column's gear holder, right of the version label. If the
+    // controls aren't built yet, fall back to the body so the settings UI is never
+    // unreachable; buildAllUI polls and re-homes it as soon as the holder exists.
+    var gearHost = ensureGearHolder();
     if (gearHost) gearHost.appendChild(triggerBtn);
     else document.body.appendChild(triggerBtn);
-  }
-
-  // The footer strip that carries our version label + settings gear, right-aligned on
-  // SudokuPad's existing "Created by …" credit line (.controls-footer, ~13px tall and
-  // already there — so this costs no extra vertical space). Inside #controls, so it
-  // scales with everything else. margin-left:auto pushes it right of the centred credit.
-  function ensureFooterTools() {
-    var tools = document.getElementById('sp-footer-tools');
-    if (tools && tools.isConnected) return tools;
-    var foot = document.querySelector('#controls .controls-footer');
-    if (!foot) return null;
-    tools = document.createElement('div');
-    tools.id = 'sp-footer-tools';
-    Object.assign(tools.style, {
-      display: 'flex', alignItems: 'center', gap: '6px',
-      marginLeft: 'auto', flex: '0 0 auto',
-    });
-    foot.appendChild(tools);
-    return tools;
   }
 
   function buildEasyRegionShadeButton() {
@@ -11374,13 +11404,13 @@
     return true;
   }
 
-  // Version label — sits immediately LEFT of the settings gear on the footer credit
-  // line (see ensureFooterTools). In-flow there, so it scales with the page instead of
-  // being pinned to the window corner. Returns false until the footer exists so
-  // buildAllUI's poll can retry.
+  // Version label — sits immediately LEFT of the settings gear, sharing its holder
+  // below the Auto-fill/Validate row (see ensureGearHolder). Inside #controls, so it
+  // scales with the page instead of being pinned to the window corner. Returns false
+  // until the holder exists so buildAllUI's poll can retry.
   function buildVersionLabel() {
     if (document.getElementById('sp-version-label')) return true;
-    var tools = ensureFooterTools();
+    var tools = ensureGearHolder();
     if (!tools) return false;
     var label = document.createElement('div');
     label.id = 'sp-version-label';
@@ -11923,6 +11953,30 @@
     col.appendChild(row);          // last child = bottom of the column
     return row;
   }
+  // The strip that hangs BELOW the Auto-fill/Validate row: version label, then the
+  // settings gear, right-aligned as a pair. Absolutely positioned inside the row (which
+  // is position:relative), so it is out of flow and can never push the row off the Easy
+  // Shade baseline — and .controls-buttons / #controls are both overflow:visible, so it
+  // is free to sit in the empty space under the controls.
+  //   - vertical anchor: GEAR_TOP_GAP below the row's bottom (== the buttons' bottom)
+  //   - horizontal anchor: right:0 == the column's right edge == the validate menu's
+  // Both are design px inside the #controls transform, so they scale with the page.
+  function ensureGearHolder() {
+    var holder = document.getElementById('sp-gear-holder');
+    if (holder && holder.isConnected) return holder;
+    var row = ensureRightColButtonRow();
+    if (!row) return null;
+    holder = document.createElement('div');
+    holder.id = 'sp-gear-holder';
+    Object.assign(holder.style, {
+      position: 'absolute', right: '0px', top: 'calc(100% + ' + GEAR_TOP_GAP + 'px)',
+      display: 'flex', flexDirection: 'row', alignItems: 'center',
+      justifyContent: 'flex-end', gap: '6px',
+      pointerEvents: 'auto', whiteSpace: 'nowrap',
+    });
+    row.appendChild(holder);
+    return holder;
+  }
   // The native control buttons' DESIGN size (layout px, before the #controls
   // transform). offsetWidth is transform-blind, which is exactly what we want here:
   // it returns the same 64 at every window size, so our buttons match the natives
@@ -12036,14 +12090,15 @@
     // All of these live inside #controls now, so they must wait for SudokuPad to
     // build it (each returns false until its target container exists).
     poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)
+    poll(watchNativePadWidth, 100, 100);     // …and re-applies it if the pad changes later
     poll(buildVersionLabel, 100, 100);
     poll(buildFillSingleButton, 100, 100);
     poll(buildValidateButton, 100, 100);
     buildSettingsUI();
     // The gear is built by buildSettingsUI, which falls back to the body if the
-    // column's button row wasn't ready. Re-home it as soon as the row exists.
+    // gear holder wasn't ready. Re-home it as soon as the holder exists.
     poll(function () {
-      var host = ensureRightColButtonRow();
+      var host = ensureGearHolder();
       var gear = document.getElementById('sp-fix-btn');
       if (!host || !gear) return false;
       if (gear.parentElement !== host) host.appendChild(gear);
