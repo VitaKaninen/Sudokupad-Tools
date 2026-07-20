@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.105.0
+// @version      3.106.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.105.0';
+  var SCRIPT_VERSION = '3.106.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5106,7 +5106,7 @@
       s.id = 'sp-toast-stack';
       Object.assign(s.style, {
         position: 'fixed',
-        display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '8px',
+        display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: uiPx(8) + 'px',
         zIndex: '999999', pointerEvents: 'none',   // children opt back in; empty stack never blocks the puzzle
       });
       document.body.appendChild(s);
@@ -5119,11 +5119,12 @@
   function positionToastStack(s) {
     s = s || document.getElementById('sp-toast-stack');
     if (!s) return;
-    var inset = 12, gap = 8, bottomPx;
+    s.style.gap = uiPx(8) + 'px';
+    var inset = 12, gap = uiPx(8), bottomPx;
     var panel = document.getElementById('sp-fix-panel');
     var menu  = document.getElementById('sp-validate-menu');
     if (panel && panel.style.display !== 'none') {
-      bottomPx = 56 + panel.offsetHeight + 8;
+      bottomPx = 56 + panel.offsetHeight + gap;
     } else if (menu) {
       bottomPx = (window.innerHeight - menu.getBoundingClientRect().top) + gap;
     } else {
@@ -5132,7 +5133,7 @@
       var vBtn  = document.getElementById('sp-validate-btn');
       var rowBtn = (vBtn && vBtn.offsetHeight > 0 && vBtn.style.display !== 'none') ? vBtn
                  : (fsBtn && fsBtn.offsetHeight > 0 && fsBtn.style.display !== 'none') ? fsBtn : null;
-      bottomPx = rowBtn ? (56 + rowBtn.offsetHeight + 8) : 56;
+      bottomPx = rowBtn ? (56 + rowBtn.offsetHeight + gap) : 56;
     }
     s.style.bottom = bottomPx + 'px';
     // Width + left: hug the number pad's right edge, same as the menu. When the menu is
@@ -5140,7 +5141,7 @@
     // closed, use a default width that still fits the space right of the number pad. Text
     // wraps inside each message.
     var avail = (window.innerWidth - inset) - (controlsButtonsRight() + gap);
-    var w = menu ? menu.offsetWidth : Math.round(Math.max(196, Math.min(320, avail)));
+    var w = menu ? menu.offsetWidth : Math.round(Math.max(validateMenuMaxW(), Math.min(uiPx(320), avail)));
     s.style.width = w + 'px';
     s.style.left  = Math.round(rightZoneLeft(w)) + 'px';
     s.style.right = 'auto';
@@ -5172,13 +5173,13 @@
     Object.assign(toast.style, {
       position:       'relative',   // flex child of the toast stack (bottom-anchored, no overlap)
       width:          '100%',
-      padding:        '8px 32px 8px 12px',
+      padding:        uiPx(8) + 'px ' + uiPx(32) + 'px ' + uiPx(8) + 'px ' + uiPx(12) + 'px',
       background:     c.bg,
       color:          c.text,
       border:         '1px solid ' + c.border,
-      borderRadius:   '6px',
+      borderRadius:   uiPx(6) + 'px',
       fontFamily:     'system-ui, -apple-system, sans-serif',
-      fontSize:       '12px',
+      fontSize:       uiPx(12) + 'px',
       lineHeight:     '1.4',
       boxShadow:      '0 4px 16px rgba(0,0,0,0.5)',
       whiteSpace:     'pre-line',
@@ -5198,15 +5199,15 @@
     dismiss.title = 'Dismiss';
     Object.assign(dismiss.style, {
       position:       'absolute',
-      top:            '4px',
-      right:          '6px',
-      width:          '20px',
-      height:         '20px',
+      top:            uiPx(4) + 'px',
+      right:          uiPx(6) + 'px',
+      width:          uiPx(20) + 'px',
+      height:         uiPx(20) + 'px',
       background:     'transparent',
       color:          c.text,
       border:         'none',
       cursor:         'pointer',
-      fontSize:       '18px',
+      fontSize:       uiPx(18) + 'px',
       lineHeight:     '1',
       padding:        '0',
       opacity:        '0.7',
@@ -9061,7 +9062,7 @@
     var ic = document.createElement('span');
     ic.textContent = '👁';
     ic.title = 'Hover to highlight the ' + (def.unitNoun || def.name) + 's a click would validate; click to pulse';
-    Object.assign(ic.style, { fontSize: '16px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', marginLeft: '10px', pointerEvents: 'auto' });
+    Object.assign(ic.style, { fontSize: uiPx(16) + 'px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', marginLeft: uiPx(10) + 'px', pointerEvents: 'auto' });
     ic.addEventListener('mouseenter', function (e) {
       ic.style.opacity = '1'; ic.style.filter = 'none';
       var objs = []; try { objs = validatorClueObjects(def); } catch (e2) {}
@@ -9230,7 +9231,7 @@
     if (!vb || !ub) return;
     ub.style.bottom = vb.style.bottom || '56px';
     var vbRight = parseFloat(vb.style.right) || 12;
-    ub.style.right  = (vbRight + vb.offsetWidth + 8) + 'px';   // just left of the Validate button
+    ub.style.right  = (vbRight + vb.offsetWidth + uiPx(8)) + 'px';   // just left of the Validate button
   }
   function validatorRefreshUndoButton() {
     var ub = document.getElementById('sp-validate-undo-btn');
@@ -9471,8 +9472,8 @@
     menu.id = 'sp-validate-menu';
     Object.assign(menu.style, {
       position: 'fixed', zIndex: '901',
-      minWidth: '166px', maxWidth: '196px',
-      borderRadius: '8px', padding: '3px', boxSizing: 'border-box',
+      minWidth: uiPx(166) + 'px', maxWidth: validateMenuMaxW() + 'px',
+      borderRadius: uiPx(8) + 'px', padding: uiPx(3) + 'px', boxSizing: 'border-box',
       fontFamily: 'Roboto, Arial, sans-serif',
       boxShadow: '0 4px 14px rgba(0,0,0,0.5)',
     });
@@ -9488,10 +9489,10 @@
       var it = document.createElement('div');
       if (opts.title) it.title = opts.title;
       Object.assign(it.style, {
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '6px 9px', borderRadius: '6px',
+        display: 'flex', alignItems: 'center', gap: uiPx(6) + 'px',
+        padding: uiPx(6) + 'px ' + uiPx(9) + 'px', borderRadius: uiPx(6) + 'px',
         cursor: disabled ? 'default' : 'pointer',
-        fontSize: '12px', fontWeight: '600',
+        fontSize: uiPx(12) + 'px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
       });
       var lbl = document.createElement('span');
@@ -9516,7 +9517,7 @@
       var note = document.createElement('div');
       note.textContent = msg;
       Object.assign(note.style, {
-        padding: '6px 9px', fontSize: '11px', fontStyle: 'italic',
+        padding: uiPx(6) + 'px ' + uiPx(9) + 'px', fontSize: uiPx(11) + 'px', fontStyle: 'italic',
         whiteSpace: 'normal', lineHeight: '1.35',
         userSelect: 'none', opacity: '0.65',
       });
@@ -9527,9 +9528,9 @@
       var row = document.createElement('label');
       row.title = tip;
       Object.assign(row.style, {
-        display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '6px 9px', borderRadius: '6px', cursor: 'pointer',
-        fontSize: '12px', fontWeight: '600',
+        display: 'flex', alignItems: 'center', gap: uiPx(6) + 'px',
+        padding: uiPx(6) + 'px ' + uiPx(9) + 'px', borderRadius: uiPx(6) + 'px', cursor: 'pointer',
+        fontSize: uiPx(12) + 'px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
       });
       row.style.setProperty('color', text, 'important');
@@ -9551,7 +9552,7 @@
     }
     function addSep() {
       var sep = document.createElement('div');
-      Object.assign(sep.style, { height: '1px', margin: '4px 6px' });
+      Object.assign(sep.style, { height: '1px', margin: uiPx(4) + 'px ' + uiPx(6) + 'px' });
       sep.style.setProperty('background-color', border, 'important');
       menu.appendChild(sep);
     }
@@ -9564,9 +9565,9 @@
       b.textContent = label;
       b.title = tip || '';
       Object.assign(b.style, {
-        padding: '7px 9px', margin: '2px 0', borderRadius: '6px',
+        padding: uiPx(7) + 'px ' + uiPx(9) + 'px', margin: uiPx(2) + 'px 0', borderRadius: uiPx(6) + 'px',
         cursor: disabled ? 'default' : 'pointer',
-        fontSize: '12px', fontWeight: '700', textAlign: 'center',
+        fontSize: uiPx(12) + 'px', fontWeight: '700', textAlign: 'center',
         whiteSpace: 'normal', userSelect: 'none',
         opacity: disabled ? '0.4' : '1',
       });
@@ -9588,9 +9589,9 @@
     function addThermoItem(def) {
       var row = document.createElement('div');
       Object.assign(row.style, {
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-        padding: '6px 9px', borderRadius: '6px', cursor: 'pointer',
-        fontSize: '12px', fontWeight: '600',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: uiPx(8) + 'px',
+        padding: uiPx(6) + 'px ' + uiPx(9) + 'px', borderRadius: uiPx(6) + 'px', cursor: 'pointer',
+        fontSize: uiPx(12) + 'px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
       });
       row.style.setProperty('color', text, 'important');
@@ -9601,7 +9602,7 @@
 
       var slowLbl = document.createElement('label');
       slowLbl.title = 'Check this if the thermometers in this puzzle are SLOW (digits along the line may repeat — increase or stay the same — instead of strictly increasing). Auto-detected where possible; override here if that guess is wrong.';
-      Object.assign(slowLbl.style, { display: 'flex', alignItems: 'center', gap: '4px', cursor: 'pointer', flexShrink: '0' });
+      Object.assign(slowLbl.style, { display: 'flex', alignItems: 'center', gap: uiPx(4) + 'px', cursor: 'pointer', flexShrink: '0' });
       var cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = effectiveThermoSlow();
@@ -9674,6 +9675,76 @@
     positionToastStack();
     window.addEventListener('resize', onValidateResize);
   }
+  // ── UI scale ───────────────────────────────────────────────────────────────────
+  // SudokuPad fit-scales its whole layout smoothly with the window, so every fixed px
+  // in OUR floating UI (Validate button + menu, Auto-fill button, toast column) reads
+  // as "wrong size" at any window that isn't the one it was tuned at. We express those
+  // dimensions as a ratio of one live scale unit: the native control buttons' current
+  // width. UI_BASE_BTN (56) is the size the fixed values were originally tuned at, so
+  // uiScale() === 1 reproduces the pre-v3.106 appearance exactly.
+  //
+  // NB the buttons already MEASURED this at load — what they lacked was re-measuring
+  // on resize, so they froze at the load-time size. See spdrSyncUiScale below.
+  var UI_BASE_BTN = 56;
+  function controlButtonSize() {
+    var ref = document.querySelector('[data-control="pen"]') ||
+              document.querySelector('[data-control="corner"]') ||
+              document.querySelector('[data-control="centre"]') ||
+              document.querySelector('[data-control="normal"]');
+    return (ref && ref.offsetWidth > 0) ? ref.offsetWidth : 0;
+  }
+  // Clamped so a very small or very large window can't produce an unusable menu.
+  function uiScale() {
+    var s = controlButtonSize();
+    if (!s) return 1;                  // not built / pre-CSS → design size
+    return Math.max(0.7, Math.min(2, s / UI_BASE_BTN));
+  }
+  function uiPx(designPx) { return Math.round(designPx * uiScale()); }
+  // The validate menu's widest possible width. SINGLE source of truth — both the menu's
+  // own maxWidth and updateValidateGutter's deficit maths call this, so the gutter can
+  // no longer drift out of sync with the menu it's reserving room for (it used to be a
+  // hand-kept `VALIDATE_MENU_MAX_W = 196` constant that had to match the inline style).
+  function validateMenuMaxW() { return uiPx(196); }
+
+  // Re-apply every scale-derived dimension of our floating UI (Validate button + menu,
+  // Auto-fill button, post-run Undo, toast column). Called while SudokuPad's CSS settles
+  // at load AND on every window resize — the latter is what was missing: each button
+  // measured the control-button size at load and then never again, so it froze at that
+  // size while the rest of the page went on fit-scaling smoothly with the window.
+  function spdrSyncUiScale() {
+    var size = controlButtonSize();
+    var vb = document.getElementById('sp-validate-btn');
+    var fb = document.getElementById('sp-fill-single-btn');
+    var ub = document.getElementById('sp-validate-undo-btn');
+    if (vb) {
+      if (size) {
+        vb.style.width  = size + 'px';
+        vb.style.height = size + 'px';
+        vb.style.right  = (12 + size + uiPx(8)) + 'px';   // stays left of the Auto-fill button
+      }
+      vb.style.fontSize     = uiPx(10) + 'px';
+      vb.style.padding      = uiPx(2) + 'px';
+      vb.style.borderRadius = uiPx(8) + 'px';
+    }
+    if (fb) {
+      if (size) { fb.style.width = size + 'px'; fb.style.height = size + 'px'; }
+      fb.style.padding      = uiPx(2) + 'px';
+      fb.style.borderRadius = uiPx(8) + 'px';
+      fsSetButtonLabel(fsState.buttonMode || 'idle');     // its font size is per-label-mode
+    }
+    if (ub) {
+      ub.style.height       = uiPx(36) + 'px';
+      ub.style.padding      = '0 ' + uiPx(12) + 'px';
+      ub.style.borderRadius = uiPx(8) + 'px';
+      ub.style.fontSize     = uiPx(13) + 'px';
+      if (ub.style.display !== 'none') validatorPositionUndoButton();
+    }
+    // The menu's rows bake their px in at build time, so re-render rather than patch.
+    // (Safe here: this only ever runs debounced, never inside a resize dispatch.)
+    if (document.getElementById('sp-validate-menu')) rebuildValidateMenu();
+    positionToastStack();
+  }
+
   // The right edge of the VISIBLE number-pad buttons (Fill/Clear/Clear All, digits, …) —
   // NOT `#controls`'s bounding box, which includes ~90px of container padding + the full-
   // width cage-select/rules row, so anchoring to it leaves a big gap. We scan the button
@@ -9694,7 +9765,7 @@
   // fits before the screen inset. (The reserved gutter keeps the pad far enough left that
   // this always leaves room.)
   function rightZoneLeft(width) {
-    var inset = 12, gap = 8;
+    var inset = 12, gap = uiPx(8);
     var br = controlsButtonsRight() || (window.innerWidth - inset - width);
     var left = br + gap;
     return Math.max(inset, Math.min(left, window.innerWidth - inset - width));
@@ -9704,13 +9775,13 @@
   // the pad sits far from the window edge. Bottom-anchored just above the button row,
   // growing UPWARD; maxHeight clamps it to the space above so a tall menu scrolls.
   function positionValidateMenu(menu, btn) {
-    var gap = 8, vh = window.innerHeight;
+    var gap = uiPx(8), vh = window.innerHeight;
     var br = btn.getBoundingClientRect();
     menu.style.left   = Math.round(rightZoneLeft(menu.offsetWidth)) + 'px';
     menu.style.right  = 'auto';
     menu.style.bottom = (vh - br.top + gap) + 'px';   // sit just above the button row
     menu.style.top    = 'auto';
-    menu.style.maxHeight = Math.max(140, br.top - gap - 8) + 'px';
+    menu.style.maxHeight = Math.max(uiPx(140), br.top - gap - uiPx(8)) + 'px';
     menu.style.overflowY = 'auto';
   }
 
@@ -11449,8 +11520,8 @@
     toast.id = 'sp-fs-toast';
     Object.assign(toast.style, {
       position: 'relative', width: '100%',
-      padding: '10px 12px', background: c.bg, color: c.text, border: '1px solid ' + c.border,
-      borderRadius: '6px', fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: '12px',
+      padding: uiPx(10) + 'px ' + uiPx(12) + 'px', background: c.bg, color: c.text, border: '1px solid ' + c.border,
+      borderRadius: uiPx(6) + 'px', fontFamily: 'system-ui, -apple-system, sans-serif', fontSize: uiPx(12) + 'px',
       lineHeight: '1.4', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
       whiteSpace: 'pre-line', boxSizing: 'border-box', pointerEvents: 'auto',
     });
@@ -11672,17 +11743,17 @@
     if (!btn) return;
     if (mode === 'stop') {
       btn.style.whiteSpace = 'nowrap';
-      btn.style.fontSize   = '15px';
+      btn.style.fontSize   = uiPx(15) + 'px';
       btn.textContent      = 'Stop';
       btn.title            = 'Stop the auto-fill';
     } else if (mode === 'undo') {
       btn.style.whiteSpace = 'nowrap';
-      btn.style.fontSize   = '15px';
+      btn.style.fontSize   = uiPx(15) + 'px';
       btn.textContent      = 'Undo';
       btn.title            = 'Undo the auto-fill (removes the digits it placed). Stays here until you change the puzzle.';
     } else {
-      btn.style.whiteSpace = 'pre-line';   // honour the explicit line breaks
-      btn.style.fontSize   = '9px';        // small enough that 4 lines fit the square
+      btn.style.whiteSpace = 'pre-line';        // honour the explicit line breaks
+      btn.style.fontSize   = uiPx(9) + 'px';    // small enough that 4 lines fit the square
       btn.textContent      = 'Auto-fill\nany single\ncandidate\ncells';
       btn.title            = 'Auto-fill cells that currently have a single valid (non-conflict) candidate';
     }
@@ -11781,8 +11852,8 @@
       right:      '12px',          // right-aligned over the gear
       width:      sizePx + 'px',   // square, like the trio
       height:     sizePx + 'px',
-      padding:    '2px',
-      borderRadius: '8px',
+      padding:    uiPx(2) + 'px',
+      borderRadius: uiPx(8) + 'px',
       cursor:     'pointer',
       fontFamily: 'Roboto, Arial, sans-serif',
       fontWeight: '700',
@@ -11828,19 +11899,10 @@
     });
 
     // Re-measure once the control buttons' CSS has settled (offsetWidth can read
-    // 0 / a pre-CSS value at first paint), so the square ends up the right size.
-    function resize() {
-      var ref = document.querySelector('[data-control="pen"]') ||
-                document.querySelector('[data-control="corner"]') ||
-                document.querySelector('[data-control="centre"]') ||
-                document.querySelector('[data-control="normal"]');
-      if (ref && ref.offsetWidth > 0) {
-        btn.style.width  = ref.offsetWidth + 'px';
-        btn.style.height = ref.offsetWidth + 'px';
-      }
-    }
-    setTimeout(resize, 100);
-    setTimeout(resize, 500);
+    // 0 / a pre-CSS value at first paint). Ongoing tracking is the shared resize
+    // listener in buildValidateButton (spdrSyncUiScale covers this button too).
+    setTimeout(spdrSyncUiScale, 100);
+    setTimeout(spdrSyncUiScale, 500);
   }
 
   // Right-hand gutter for the Validate menu + toasts, sized to EXACTLY what this puzzle
@@ -11851,7 +11913,6 @@
   // reserve just the deficit (+small margin) so the menu clears the pad. So height-bound
   // puzzles with slack don't move, and only width-bound ones shrink — by the minimum.
   // Reserved only while the Validate button is visible; released if the user hides it.
-  var VALIDATE_MENU_MAX_W = 196;             // must match the menu's maxWidth
   var _gutterBodyPrev = null;
   var _gutterBusy = false;
   function _gutterSleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
@@ -11877,14 +11938,18 @@
       b.style.paddingRight = '0px';
       window.dispatchEvent(new Event('resize'));
       await _gutterSleep(200);   // let SudokuPad's fit-scaling settle
-      var inset = 12, gap = 8, margin = 8;
-      var need = gap + VALIDATE_MENU_MAX_W + inset + margin;    // space the menu needs right of the buttons
+      var inset = 12, gap = uiPx(8), margin = uiPx(8);
+      var need = gap + validateMenuMaxW() + inset + margin;     // space the menu needs right of the buttons
       var space0 = window.innerWidth - controlsButtonsRight();
       // slope ≈ 0.83 space gained per px of gutter (measured); use 0.7 to slightly
       // over-reserve so the menu always clears the pad. Cap for safety.
       var pad = space0 >= need ? 0 : Math.min(400, Math.round((need - space0) / 0.7));
       b.style.paddingRight = pad + 'px';
       window.dispatchEvent(new Event('resize'));
+      // Reserving the gutter re-fits the puzzle, which changes the control-button size
+      // our UI scales off — so re-sync once it has settled, or our UI would be sized to
+      // the pre-gutter layout. (No recursion: spdrSyncUiScale never calls back in here.)
+      if (pad > 0) { await _gutterSleep(200); spdrSyncUiScale(); }
     } finally {
       _gutterBusy = false;
     }
@@ -11916,16 +11981,16 @@
     btn.textContent = 'Validate\nConstraints';
     Object.assign(btn.style, {
       position:   'fixed',
-      bottom:     '56px',                        // same row as the Auto-fill button
-      right:      (12 + sizePx + 8) + 'px',      // just LEFT of the Auto-fill button (right:12, sizePx wide)
+      bottom:     '56px',                              // same row as the Auto-fill button (both sit above the fixed-size gear)
+      right:      (12 + sizePx + uiPx(8)) + 'px',      // just LEFT of the Auto-fill button (right:12, sizePx wide)
       width:      sizePx + 'px',
       height:     sizePx + 'px',
-      padding:    '2px',
-      borderRadius: '8px',
+      padding:    uiPx(2) + 'px',
+      borderRadius: uiPx(8) + 'px',
       cursor:     'pointer',
       fontFamily: 'Roboto, Arial, sans-serif',
       fontWeight: '700',
-      fontSize:   '10px',
+      fontSize:   uiPx(10) + 'px',
       lineHeight: '1.15',
       whiteSpace: 'pre-line',                    // honour the explicit line break
       display:    'flex',
@@ -11944,20 +12009,9 @@
     document.body.appendChild(btn);
 
     // Re-measure once the control buttons' CSS has settled (offsetWidth can read 0 at
-    // first paint), so the square ends up the right size and stays left of Auto-fill.
-    function vResize() {
-      var ref = document.querySelector('[data-control="pen"]') ||
-                document.querySelector('[data-control="corner"]') ||
-                document.querySelector('[data-control="centre"]') ||
-                document.querySelector('[data-control="normal"]');
-      if (ref && ref.offsetWidth > 0) {
-        btn.style.width  = ref.offsetWidth + 'px';
-        btn.style.height = ref.offsetWidth + 'px';
-        btn.style.right  = (12 + ref.offsetWidth + 8) + 'px';
-      }
-    }
-    setTimeout(vResize, 100);
-    setTimeout(vResize, 500);
+    // first paint). Ongoing tracking is the shared resize listener below.
+    setTimeout(spdrSyncUiScale, 100);
+    setTimeout(spdrSyncUiScale, 500);
 
     // Post-run Undo button — sits just LEFT of the Validate button, hidden until a
     // validator run removes candidates (see validatorArmUndo / validatorRefreshUndoButton).
@@ -11968,8 +12022,8 @@
     ubtn.textContent = 'Undo';
     Object.assign(ubtn.style, {
       position: 'fixed', bottom: '56px', right: '200px',   // right is recomputed when shown
-      height: '36px', padding: '0 12px', borderRadius: '8px', cursor: 'pointer',
-      fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700', fontSize: '13px',
+      height: uiPx(36) + 'px', padding: '0 ' + uiPx(12) + 'px', borderRadius: uiPx(8) + 'px', cursor: 'pointer',
+      fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700', fontSize: uiPx(13) + 'px',
       lineHeight: '1.2', whiteSpace: 'nowrap', display: 'none',
       alignItems: 'center', justifyContent: 'center', zIndex: '900',
       boxShadow: '0 2px 8px rgba(0,0,0,0.4)', boxSizing: 'border-box',
@@ -11996,11 +12050,19 @@
       updateValidateGutter();
       return true;
     }, 150, 60);
-    var _gutterResizeT = null;
+    // ONE debounced resize handler for both jobs, in order: re-scale our UI to the
+    // window's new control-button size, THEN recompute the gutter — the gutter's
+    // deficit maths reads validateMenuMaxW(), so it must see the new scale, not the
+    // old one. (_gutterBusy skips our own synthetic resizes; the scale is unchanged
+    // during those anyway, so skipping the re-scale with it is correct.)
+    var _uiResizeT = null;
     window.addEventListener('resize', function () {
       if (_gutterBusy) return;
-      clearTimeout(_gutterResizeT);
-      _gutterResizeT = setTimeout(updateValidateGutter, 200);
+      clearTimeout(_uiResizeT);
+      _uiResizeT = setTimeout(function () {
+        spdrSyncUiScale();
+        updateValidateGutter();
+      }, 200);
     });
   }
 

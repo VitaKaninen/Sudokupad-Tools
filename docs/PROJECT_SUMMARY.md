@@ -462,7 +462,8 @@ way so it stays low-maintenance.
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
-  removed v3.104). Architecture, per-validator notes, detection layers, ambiguity policy,
+  removed v3.104). Its on-screen geometry (button, menu, toasts) scales — see "Floating-UI scale"
+  below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
@@ -580,6 +581,29 @@ way so it stays low-maintenance.
   detector; flags board elements that paint but render near-invisible vs the page bg and aren't
   fixed by us (`!important` filter). See the Audit log in
   [`archive/NATIVE_MODE_MIGRATION.md`](archive/NATIVE_MODE_MIGRATION.md) (closed).
+
+### Floating-UI scale (v3.106) — one unit, one re-sync
+
+Our floating UI (Validate button + menu, Auto-fill button, post-run Undo, toast column) is sized
+off ONE live unit so it tracks SudokuPad's own smooth fit-scaling instead of freezing at whatever
+size it read at load.
+
+- `controlButtonSize()` — the native control buttons' current width (`[data-control="pen"]` etc.),
+  `0` when not yet built. `uiScale()` = that ÷ `UI_BASE_BTN` (56 = the size the original fixed px
+  were tuned at, so scale 1 reproduces the pre-v3.106 look), clamped to 0.7–2. `uiPx(n)` = the
+  scaled px for a design-size `n`. **Any new fixed px in this UI goes through `uiPx`.**
+- `validateMenuMaxW()` — single source of truth for the menu's widest width. Both the menu's inline
+  `maxWidth` and `updateValidateGutter`'s deficit maths call it, so the gutter can't drift out of
+  sync with the menu it reserves room for (it replaced a hand-kept `VALIDATE_MENU_MAX_W = 196`).
+- `spdrSyncUiScale()` — re-applies every scale-derived dimension. Called twice at load (while
+  SudokuPad's CSS settles) and from ONE debounced `resize` listener in `buildValidateButton`, which
+  runs it **before** `updateValidateGutter` (the gutter maths must see the new scale). The menu's
+  rows bake px in at build time, so the sync re-renders it via `rebuildValidateMenu` rather than
+  patching. `updateValidateGutter` also calls it once after a non-zero gutter settles — reserving
+  the gutter re-fits the puzzle, which changes the very button size the scale reads.
+- ⚠️ The settings gear is deliberately NOT scaled (fixed 36px at `bottom:12`), so the floating
+  button row's `bottom:56px` and the `right:12px` window inset stay unscaled too — they're anchored
+  to the gear, not to the puzzle.
 
 ### Clue-line read sites (keep in sync)
 Cosmetic **line** clues (whisper/renban/region-sum/palindrome/thermo shafts) are read from the DOM
