@@ -588,23 +588,34 @@ way so it stays low-maintenance.
 ResizeHandler. Anything parented inside that subtree scales smoothly with the window **for free**,
 hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, not arithmetic*.
 
-- `ensureRightColumn()` → `#sp-right-col`, a fixed-width (`RIGHT_COL_W = 200` design px) flex column
-  appended to **`.controls-main`** — the row-direction container holding the digit pad and
-  `.controls-tool`. ⚠️ Not `.controls-buttons`: that is `flex-direction: column`, so appending there
-  stacks *below* the pad, not beside it.
+- `ensureRightColumn()` → `#sp-right-col`, `RIGHT_COL_W = 200` design px, **absolutely positioned
+  inside `.controls-buttons`** (`right/top/bottom: 0`). Space is reserved by `padding-right:
+  RIGHT_COL_W + RIGHT_COL_GAP` on `.controls-buttons` itself, injected by `injectRightColCss()`.
+  ⚠️ **Parent must be `.controls-buttons`, not `.controls-main`** — `.controls-buttons` is the
+  column-direction stack holding `.controls-app`, `.controls-main` *and* `.controls-aux` (Easy
+  Shade), so spanning its full height is what puts our button row level with the Easy Shade row.
+  A column inside `.controls-main` stops one row short, and `.controls-main` is `align-items: start`
+  so it will not even stretch without `align-self`.
 - Column contents, top to bottom: `#sp-toast-stack` → `#sp-validate-menu` (when open) →
   `#sp-validate-undo-btn` (when armed) → `#sp-right-col-buttons`. `justify-content: flex-end` hugs
   them to the bottom so they grow upward. The column is `pointer-events: none`; each child opts back
   in, so empty space never blocks the puzzle.
-- `ensureRightColButtonRow()` → `#sp-right-col-buttons`, holding Validate, Auto-fill and the settings
-  gear as equal `flex: 1 1 0; aspect-ratio: 1/1` items. `styleRightColButton(btn, fontPx)` is their
-  shared look.
+- `ensureRightColButtonRow()` → `#sp-right-col-buttons`, holding Validate and Auto-fill.
+  `styleRightColButton(btn, fontPx)` sizes them to `nativeButtonSize()` — the native control
+  button's `offsetWidth` (64). ⚠️ Size them to that, **not** `flex: 1 1 0`: dividing the column's
+  width between the buttons made them 58px against the natives' 64px.
+- The settings gear + version label live in `#sp-footer-tools` (`ensureFooterTools()`), right-aligned
+  via `margin-left: auto` on `.controls-footer` — SudokuPad's existing ~13px "Created by …" credit
+  line, so they cost no extra vertical space. The gear is 15px there, not a control-button square.
 - **The width is reserved permanently, menu open or closed** — so toggling the menu moves nothing.
-- **There is no gutter code.** Widening `.controls-main` makes SudokuPad scale the controls down and
-  hand the freed space to the board by itself (measured: transform 0.959→0.788, board 626→713).
+- **There is no gutter code.** Widening `.controls-buttons` makes SudokuPad scale the controls down
+  and hand the freed space to the board by itself (measured: transform 0.959→0.788, board 626→713).
   v3.107 deleted `updateValidateGutter`, `releaseValidateGutter`, `controlsButtonsRight`,
   `rightZoneLeft`, `positionValidateMenu`, `positionToastStack` and `onValidateResize` outright,
   along with every `window.dispatchEvent(new Event('resize'))` they relied on.
+- Widening `#controls` also widens SudokuPad's title banner (`.puzzle-header`). To keep the rules
+  block aligned with it, `injectRightColCss` lifts the rules' `max-width: 480px` cap **and** matches
+  the banner's `margin: 0 32px` — lifting the cap alone leaves the rules 64px wider than the banner.
 - ⚠️ **Never use `offsetWidth` to detect the page scale — it is transform-blind** (a native control
   button reads 64 at every window size while its `getBoundingClientRect().width` varies). This
   silently made the whole v3.106 attempt a no-op. Use `getBoundingClientRect()` if you must measure.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.107.0
+// @version      3.108.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.107.0';
+  var SCRIPT_VERSION = '3.108.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5105,7 +5105,7 @@
   // TRANSFORM". Corollary: every px below is a DESIGN px — do not try to scale it
   // in JS, and never measure the page scale with offsetWidth (it is transform-blind).
   //
-  // This column also REPLACES the old body-padding gutter: widening .controls-main
+  // This column also REPLACES the old body-padding gutter: widening .controls-buttons
   // makes SudokuPad scale the controls down and hand the freed space to the board,
   // entirely by itself (measured: transform 0.959→0.788, board 626→713). So there is
   // no deficit maths, no synthetic resize dispatch, and no resize listener here.
@@ -5117,23 +5117,53 @@
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
     if (col && col.isConnected) return col;
-    // .controls-main is the row-direction container (digit pad + .controls-tool).
-    // NB .controls-buttons is flex-direction:COLUMN — appending there stacks below.
-    var main = document.querySelector('#controls .controls-main');
-    if (!main) return null;
+    // Parent is .controls-buttons — the column-direction stack holding .controls-app,
+    // .controls-main (digit pad + tools) AND .controls-aux (Easy Shade). We span its
+    // FULL height so our button row lands level with the Easy Shade row at the bottom.
+    // (A column inside .controls-main can only reach that container's bottom, which is
+    // one row short — and .controls-main is `align-items:start`, so it wouldn't even
+    // stretch without help.)
+    //
+    // Space is reserved by padding-right on .controls-buttons (see injectRightColCss);
+    // we then absolutely position into that reserved strip. The padding is what makes
+    // SudokuPad scale the controls down and grow the board — the reserve still works.
+    var cb = document.querySelector('#controls .controls-buttons');
+    if (!cb) return null;
+    injectRightColCss();
     col = document.createElement('div');
     col.id = 'sp-right-col';
     Object.assign(col.style, {
+      position: 'absolute', right: '0px', top: '0px', bottom: '0px',
+      width: RIGHT_COL_W + 'px',
       display: 'flex', flexDirection: 'column',
       justifyContent: 'flex-end',      // contents hug the bottom, growing upward
       alignItems: 'stretch', gap: '8px',
-      flex: '0 0 ' + RIGHT_COL_W + 'px', width: RIGHT_COL_W + 'px',
-      marginLeft: RIGHT_COL_GAP + 'px',
-      position: 'relative', boxSizing: 'border-box',
+      boxSizing: 'border-box',
       pointerEvents: 'none',           // children opt back in; empty column never blocks the puzzle
     });
-    main.appendChild(col);
+    cb.appendChild(col);
     return col;
+  }
+  // Two rules, both consequences of adding the column:
+  //  1. .controls-buttons reserves the column's strip with padding-right (this is the
+  //     whole space-reservation mechanism — widening it makes SudokuPad scale the
+  //     controls down and hand the freed width to the board) and becomes the
+  //     positioning context the column is absolutely placed into.
+  //  2. Widening #controls lets SudokuPad's title banner (.puzzle-header, no
+  //     max-width) grow — but the rules block underneath is capped at
+  //     `max-width: 480px`, so it stops short and the two stop lining up. Lifting the
+  //     cap alone overshoots: the banner also carries `margin: 0 32px`, so the rules
+  //     would end up 64px WIDER than it. Match that margin and the two align exactly
+  //     (verified: both 498px wide at the same left edge).
+  function injectRightColCss() {
+    if (document.getElementById('sp-right-col-css')) return;
+    var st = document.createElement('style');
+    st.id = 'sp-right-col-css';
+    st.textContent =
+      '#controls .controls-buttons { position: relative; box-sizing: border-box;' +
+      ' padding-right: ' + (RIGHT_COL_W + RIGHT_COL_GAP) + 'px; }\n' +
+      '#controls .puzzle-rules { max-width: none; margin-left: 32px; margin-right: 32px; }';
+    (document.head || document.documentElement).appendChild(st);
   }
 
   // ── Toast stack ────────────────────────────────────────────────────────────
@@ -9414,7 +9444,7 @@
   // an item never clears the player's cell selection.
   //
   // Room for the menu is reserved permanently by the right-hand column
-  // (ensureRightColumn), which is a fixed-width flex child of .controls-main. Opening
+  // (ensureRightColumn), a fixed-width strip reserved inside .controls-buttons. Opening
   // or closing the menu therefore moves NOTHING — the space is already there whether
   // it is showing or not, and SudokuPad's own layout absorbed the reservation when the
   // column was created. There is no positioning maths and no resize listener.
@@ -10925,17 +10955,16 @@
     triggerBtn.id = 'sp-fix-btn';
     triggerBtn.title = 'DarkReader Fix settings';
     triggerBtn.textContent = '⚙';
-    // Third item in the right-hand column's bottom button row (was pinned to the
-    // window corner, which is why it used to be the one button that never scaled).
+    // Lives in .controls-footer, on the same line as SudokuPad's "Created by …"
+    // credit — that row already exists, so the gear costs no extra vertical space.
+    // Sized to the footer's own line height rather than a control button.
     Object.assign(triggerBtn.style, {
-      flex: '1 1 0', aspectRatio: '1 / 1', minWidth: '0',
+      flex: '0 0 auto', width: '15px', height: '15px',
       background: '#313244', color: '#cdd6f4',
-      border: '1px solid #45475a', borderRadius: '8px',
-      cursor: 'pointer', fontSize: '22px',
+      border: '1px solid #45475a', borderRadius: '4px',
+      cursor: 'pointer', fontSize: '11px',
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
       padding: '0', lineHeight: '1', boxSizing: 'border-box',
-      pointerEvents: 'auto',
     });
     spdrFxButton(triggerBtn);   // hover-brighten + active-depress + click flash
     // Save the digit set field and hide the panel.
@@ -10980,12 +11009,31 @@
     });
 
     document.body.appendChild(panel);   // the panel stays window-anchored (position:fixed)
-    // The gear joins the right-hand column's button row. If the controls aren't built
-    // yet, fall back to the body so the settings UI is never unreachable; buildAllUI's
-    // poll re-runs buildSettingsUI paths once the controls exist.
-    var gearRow = ensureRightColButtonRow();
-    if (gearRow) gearRow.appendChild(triggerBtn);
+    // The gear + version label go in the footer. If the controls aren't built yet,
+    // fall back to the body so the settings UI is never unreachable; buildAllUI polls
+    // and re-homes it as soon as the footer exists.
+    var tools = ensureFooterTools();
+    if (tools) tools.appendChild(triggerBtn);
     else document.body.appendChild(triggerBtn);
+  }
+
+  // The footer strip that carries our version label + settings gear, right-aligned on
+  // SudokuPad's existing "Created by …" credit line (.controls-footer, ~13px tall and
+  // already there — so this costs no extra vertical space). Inside #controls, so it
+  // scales with everything else. margin-left:auto pushes it right of the centred credit.
+  function ensureFooterTools() {
+    var tools = document.getElementById('sp-footer-tools');
+    if (tools && tools.isConnected) return tools;
+    var foot = document.querySelector('#controls .controls-footer');
+    if (!foot) return null;
+    tools = document.createElement('div');
+    tools.id = 'sp-footer-tools';
+    Object.assign(tools.style, {
+      display: 'flex', alignItems: 'center', gap: '6px',
+      marginLeft: 'auto', flex: '0 0 auto',
+    });
+    foot.appendChild(tools);
+    return tools;
   }
 
   function buildEasyRegionShadeButton() {
@@ -11261,27 +11309,29 @@
     return true;
   }
 
+  // Version label — sits immediately LEFT of the settings gear on the footer credit
+  // line (see ensureFooterTools). In-flow there, so it scales with the page instead of
+  // being pinned to the window corner. Returns false until the footer exists so
+  // buildAllUI's poll can retry.
   function buildVersionLabel() {
-    if (document.getElementById('sp-version-label')) return;
+    if (document.getElementById('sp-version-label')) return true;
+    var tools = ensureFooterTools();
+    if (!tools) return false;
     var label = document.createElement('div');
     label.id = 'sp-version-label';
     Object.assign(label.style, {
-      position:      'fixed',
-      // Sits to the left of the 36px ⚙ button (right:12px) with an 8px gap.
-      // bottom:24px vertically centres the label in the button's 36px height.
-      bottom:        '24px',
-      right:         '56px',   // 12px margin + 36px button + 8px gap
       color:         '#6c7086',
       fontSize:      '10px',
       fontFamily:    'system-ui, -apple-system, sans-serif',
       lineHeight:    '1.2',
       textAlign:     'right',
       pointerEvents: 'none',
-      zIndex:        '900',   // below the native dialog scrim (z 1000) so it dims with the page
       whiteSpace:    'nowrap',
+      flex:          '0 0 auto',
     });
     label.textContent = 'v' + SCRIPT_VERSION;
-    document.body.appendChild(label);
+    tools.insertBefore(label, tools.firstChild);   // always left of the gear
+    return true;
   }
 
   // Auto-dismiss SudokuPad's start gate — the "Start Puzzle" / "Resume Puzzle"
@@ -11793,17 +11843,33 @@
     row = document.createElement('div');
     row.id = 'sp-right-col-buttons';
     Object.assign(row.style, {
-      display: 'flex', flexDirection: 'row', alignItems: 'stretch',
+      display: 'flex', flexDirection: 'row', alignItems: 'flex-end',
+      justifyContent: 'flex-start',    // left-aligned under the menu
       gap: '8px', width: '100%', pointerEvents: 'auto',
+      marginBottom: '2.4px',           // matches the native buttons' margin, so our row's
+                                       // baseline lines up exactly with the Easy Shade row
     });
     col.appendChild(row);          // last child = bottom of the column
     return row;
   }
-  // Shared look for the three column buttons: square-ish flex items that share the
-  // row's width evenly. All px here are DESIGN px — the #controls transform scales them.
+  // The native control buttons' DESIGN size (layout px, before the #controls
+  // transform). offsetWidth is transform-blind, which is exactly what we want here:
+  // it returns the same 64 at every window size, so our buttons match the natives
+  // pixel-for-pixel and both are then scaled together by the transform.
+  function nativeButtonSize() {
+    var ref = document.querySelector('[data-control="pen"]') ||
+              document.querySelector('[data-control="corner"]') ||
+              document.querySelector('[data-control="centre"]') ||
+              document.querySelector('[data-control="normal"]');
+    return (ref && ref.offsetWidth > 0) ? ref.offsetWidth : 64;
+  }
+  // Shared look for the column's buttons: an exact square match for a native control
+  // button (NOT flex-sized — dividing the column's width three ways is what made them
+  // 58px against the natives' 64px). All px here are DESIGN px.
   function styleRightColButton(btn, fontPx) {
+    var s = nativeButtonSize();
     Object.assign(btn.style, {
-      flex: '1 1 0', aspectRatio: '1 / 1', minWidth: '0',
+      flex: '0 0 auto', width: s + 'px', height: s + 'px',
       padding: '2px', borderRadius: '8px', cursor: 'pointer',
       fontFamily: 'Roboto, Arial, sans-serif', fontWeight: '700',
       fontSize: (fontPx || 10) + 'px', lineHeight: '1.15',
@@ -11892,19 +11958,19 @@
 
   function buildAllUI() {
     suppressStartDialog();
-    buildVersionLabel();
-    // These three now live in the right-hand column, so they must wait for
-    // SudokuPad's .controls-main to exist (poll → they return false until it does).
+    // All of these live inside #controls now, so they must wait for SudokuPad to
+    // build it (each returns false until its target container exists).
+    poll(buildVersionLabel, 100, 100);
     poll(buildFillSingleButton, 100, 100);
     poll(buildValidateButton, 100, 100);
     buildSettingsUI();
     // The gear is built by buildSettingsUI, which falls back to the body if the
-    // controls weren't ready. Re-home it into the column as soon as that exists.
+    // footer wasn't ready. Re-home it as soon as the footer exists.
     poll(function () {
-      var row  = ensureRightColButtonRow();
-      var gear = document.getElementById('sp-fix-btn');
-      if (!row || !gear) return false;
-      if (gear.parentElement !== row) row.appendChild(gear);
+      var tools = ensureFooterTools();
+      var gear  = document.getElementById('sp-fix-btn');
+      if (!tools || !gear) return false;
+      if (gear.parentElement !== tools) tools.appendChild(gear);
       return true;
     }, 100, 100);
     // Selection-border offset observer is feature-independent of DarkReader
