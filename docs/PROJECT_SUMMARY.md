@@ -468,7 +468,12 @@ way so it stays low-maintenance.
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
   `reorderCornerCell`/`startCornerReflowPatch` (corner), `fixCenterTspan`/`fixCornerText` (validity
   colours).
-- **Settings UI:** `buildSettingsUI`, `buildSection`. Sections are either **master** (a top-level
+- **Settings UI:** `buildSettingsUI` (panel scaffolding, the action-buttons/digit-set area, Reset
+  all, open/close) + one extracted builder per panel section (v3.105):
+  `buildRegionBordersSection` / `buildDigitsSection` / `buildPencilmarksSection` /
+  `buildObjectShadingSection` / `buildKropkiSection` / `buildLabelBgSection` /
+  `buildCellShadingSection` / `buildCellSelectionSection` — each returns `buildSection({…})`; grep
+  the builder name to land on that section's config. Sections are either **master** (a top-level
   on/off checkbox = `enabledKey`; **collapses** its sub-content when unchecked — only the header
   stays) or **master-less** (`noMasterCheckbox:true` — header + reset only; subsection checkboxes
   stand alone). Master-less: **Region borders**, **Given / placed digits**, **Pencilmarks**. Section

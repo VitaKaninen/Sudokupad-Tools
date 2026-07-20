@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.104.0
+// @version      3.105.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.104.0';
+  var SCRIPT_VERSION = '3.105.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -10118,60 +10118,9 @@
     }
   }
 
-  function buildSettingsUI() {
-    var panel = document.createElement('div');
-    panel.id = 'sp-fix-panel';
-    // Panel = flex column with non-scrolling header on top and a scrollable
-    // content div below. Scrollbar lives on the content div so it only spans
-    // the content area, never overlapping the title.
-    Object.assign(panel.style, {
-      display: 'none', position: 'fixed', bottom: '56px', right: '12px',
-      width: '340px', maxHeight: '80vh',
-      flexDirection: 'column',
-      background: '#1e1e2e', color: '#cdd6f4',
-      border: '1px solid #45475a', borderRadius: '10px',
-      fontFamily: 'system-ui, -apple-system, sans-serif',
-      fontSize: '13px', lineHeight: '1.4',
-      boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-      zIndex: '999999',
-      overflow: 'hidden',   // clip rounded corners
-    });
-
-    var header = document.createElement('div');
-    Object.assign(header.style, {
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-      padding: '7px 14px', background: '#313244',
-      borderBottom: '1px solid #45475a',
-      flexShrink: '0',
-    });
-    var title = document.createElement('span');
-    title.textContent = 'DarkReader Fix';
-    Object.assign(title.style, { fontWeight: '600', fontSize: '16px' });
-    var closeBtn = document.createElement('button');
-    closeBtn.type = 'button'; closeBtn.textContent = '×';
-    Object.assign(closeBtn.style, {
-      background: '#1e1e2e', color: '#a6adc8',
-      border: '1px solid #45475a', borderRadius: '5px',
-      width: '26px', height: '26px', cursor: 'pointer',
-      fontSize: '16px', padding: '0', lineHeight: '1',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      flexShrink: '0',
-    });
-    closeBtn.addEventListener('click', function () { panel.style.display = 'none'; });
-    header.appendChild(title); header.appendChild(closeBtn);
-    panel.appendChild(header);
-
-    // Scrollable content container — every section below goes in here so the
-    // scrollbar starts under the header instead of running the panel's full height.
-    var content = document.createElement('div');
-    Object.assign(content.style, {
-      overflowY: 'auto',
-      flex: '1 1 auto',
-      minHeight: '0',   // required for flex children to actually scroll
-    });
-    panel.appendChild(content);
-
-    content.appendChild(buildSection({
+  // Settings panel — "Region borders" section (extracted from buildSettingsUI, v3.105).
+  function buildRegionBordersSection() {
+    return buildSection({
       label: 'Region borders',
       desc: 'Borders around the puzzle\'s regions (boxes, cages, shape groups) and its cell gridlines.',
       hasColor: false,
@@ -10250,9 +10199,12 @@
           opt.appendChild(makeWidthRow('regionBorderCellWidth'));
         }, 'regCell', 'Highlight the thin built-in grid lines'));
       },
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Given / placed digits" section (extracted from buildSettingsUI, v3.105).
+  function buildDigitsSection() {
+    return buildSection({
       label: 'Given / placed digits',
       desc: 'The puzzle\'s given clue digits and the full-sized digits you place.',
       hasColor: false,
@@ -10288,9 +10240,12 @@
           function (opt) { opt.appendChild(makeColorRow('Color', 'userDigitColor', 'userDigitOpacity')); },
           'userDigit', 'Highlight the digits you have placed'));
       },
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Pencilmarks" section (extracted from buildSettingsUI, v3.105).
+  function buildPencilmarksSection() {
+    return buildSection({
       label: 'Pencilmarks',
       desc: 'The small candidate digits you pencil into cells — centre marks and corner marks.',
       hasColor: false,
@@ -10332,9 +10287,12 @@
           opt.appendChild(makeSubCheckbox('cornerMoveInvalidEnd', 'Move invalid digits to the end'));
         }, 'cornerMarks', 'Highlight the corner pencilmarks'));
       },
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Object shading" section (extracted from buildSettingsUI, v3.105).
+  function buildObjectShadingSection() {
+    return buildSection({
       enabledKey: 'underlayEnabled',
       label: 'Object shading',
       desc: 'Shape backgrounds, cage fills, lines (thermos, palindromes, etc.), and their outlines.',
@@ -10432,9 +10390,12 @@
 
         updateMode();
       },
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Kropki dots" section (extracted from buildSettingsUI, v3.105).
+  function buildKropkiSection() {
+    return buildSection({
       enabledKey: 'kropkiFixEnabled',
       label: 'Kropki dots',
       desc: 'The white/black Kropki dots between cells.',
@@ -10540,9 +10501,12 @@
         blCb.addEventListener('change', updateSizeDim);
         wlCb.addEventListener('change', updateSizeDim);
       },
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Label background" section (extracted from buildSettingsUI, v3.105).
+  function buildLabelBgSection() {
+    return buildSection({
       enabledKey: 'labelBgEnabled',
       label: 'Label background',
       desc: 'The background box behind text labels (cage sums, little-killer clues, etc.).',
@@ -10551,9 +10515,12 @@
       colorKey: 'labelBgColor',
       opacityKey: 'labelBgOpacity',
       resetKeys: ['labelBgColor','labelBgOpacity'],
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Cell shading" section (extracted from buildSettingsUI, v3.105).
+  function buildCellShadingSection() {
+    return buildSection({
       enabledKey: 'cellColorsOpacityEnabled',
       label: 'Cell shading',
       desc: 'Cells with a background color (e.g. ones you shade with the Color tool).',
@@ -10563,9 +10530,12 @@
       subBuilder: function (wrap) {
         wrap.appendChild(makeRangeRow({ key: 'cellColorsOpacity', label: 'Opacity', min: 0, max: 1, step: 0.05 }));
       },
-    }));
+    });
+  }
 
-    content.appendChild(buildSection({
+  // Settings panel — "Cell selection" section (extracted from buildSettingsUI, v3.105).
+  function buildCellSelectionSection() {
+    return buildSection({
       label: 'Cell selection',
       desc: 'The outline drawn around the cells you currently have selected.',
       hilite: 'selection', hiliteTitle: 'Highlight the selection border (select cells first)',
@@ -10614,7 +10584,77 @@
           },
         }));
       },
-    }));
+    });
+  }
+
+  function buildSettingsUI() {
+    var panel = document.createElement('div');
+    panel.id = 'sp-fix-panel';
+    // Panel = flex column with non-scrolling header on top and a scrollable
+    // content div below. Scrollbar lives on the content div so it only spans
+    // the content area, never overlapping the title.
+    Object.assign(panel.style, {
+      display: 'none', position: 'fixed', bottom: '56px', right: '12px',
+      width: '340px', maxHeight: '80vh',
+      flexDirection: 'column',
+      background: '#1e1e2e', color: '#cdd6f4',
+      border: '1px solid #45475a', borderRadius: '10px',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      fontSize: '13px', lineHeight: '1.4',
+      boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+      zIndex: '999999',
+      overflow: 'hidden',   // clip rounded corners
+    });
+
+    var header = document.createElement('div');
+    Object.assign(header.style, {
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      padding: '7px 14px', background: '#313244',
+      borderBottom: '1px solid #45475a',
+      flexShrink: '0',
+    });
+    var title = document.createElement('span');
+    title.textContent = 'DarkReader Fix';
+    Object.assign(title.style, { fontWeight: '600', fontSize: '16px' });
+    var closeBtn = document.createElement('button');
+    closeBtn.type = 'button'; closeBtn.textContent = '×';
+    Object.assign(closeBtn.style, {
+      background: '#1e1e2e', color: '#a6adc8',
+      border: '1px solid #45475a', borderRadius: '5px',
+      width: '26px', height: '26px', cursor: 'pointer',
+      fontSize: '16px', padding: '0', lineHeight: '1',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      flexShrink: '0',
+    });
+    closeBtn.addEventListener('click', function () { panel.style.display = 'none'; });
+    header.appendChild(title); header.appendChild(closeBtn);
+    panel.appendChild(header);
+
+    // Scrollable content container — every section below goes in here so the
+    // scrollbar starts under the header instead of running the panel's full height.
+    var content = document.createElement('div');
+    Object.assign(content.style, {
+      overflowY: 'auto',
+      flex: '1 1 auto',
+      minHeight: '0',   // required for flex children to actually scroll
+    });
+    panel.appendChild(content);
+
+    content.appendChild(buildRegionBordersSection());
+
+    content.appendChild(buildDigitsSection());
+
+    content.appendChild(buildPencilmarksSection());
+
+    content.appendChild(buildObjectShadingSection());
+
+    content.appendChild(buildKropkiSection());
+
+    content.appendChild(buildLabelBgSection());
+
+    content.appendChild(buildCellShadingSection());
+
+    content.appendChild(buildCellSelectionSection());
 
     // Action buttons section
     var actionSection = document.createElement('div');
