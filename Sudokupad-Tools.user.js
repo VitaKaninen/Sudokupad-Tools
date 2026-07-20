@@ -2438,7 +2438,7 @@
   //
   // What QUALIFIES a region for recolour (v3.21 — was "any hidden unique cage that
   // overlaps a grey cell", which wrongly grabbed e.g. a hidden-unique MAIN DIAGONAL
-  // and recoloured stray objects sitting in its cells — pbwqsppuho). A region is
+  // and recoloured stray objects sitting in its cells). A region is
   // recoloured ONLY when it is a deliberately-shaded full no-repeat region:
   //   1. SIZE — exactly `settings.digitSet.length` cells (the count of digits used
   //      in the puzzle, user-confirmed/scanned). Drops sub-size cages (3-cell
@@ -8930,7 +8930,7 @@
   }
 
   // Fallback for ARROWS DRAWN AS GENERIC COSMETICS (cp.arrowSums empty even
-  // though the puzzle visibly has one — e.g. test puzzle pbwqsppuho). Read
+  // though the puzzle visibly has one — an all-cosmetic puzzle). Read
   // what's rendered: the shaft is a `marker-end` #arrows path (the exact
   // attribute the thermo detector EXCLUDES, so the two stay disjoint) whose
   // START point is inside the grid at the edge of a near-full-cell circular

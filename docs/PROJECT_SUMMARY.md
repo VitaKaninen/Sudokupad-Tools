@@ -310,7 +310,7 @@ way so it stays low-maintenance.
   colours up to 4, >4 spread proper so no two touching alike. Shared by both shaded-region paths;
   region borders/fill deliberately do NOT use it). **Qualification rules (v3.21, contiguity dropped
   v3.22 — narrowed from "any model region overlapping a grey cell", which wrongly grabbed a
-  hidden-unique MAIN DIAGONAL and recoloured stray objects in its cells, `pbwqsppuho`):** a region
+  hidden-unique MAIN DIAGONAL and recoloured stray objects in its cells):** a region
   is recoloured ONLY when it is a *deliberately-shaded full no-repeat region* — (1) **size** exactly
   `settings.digitSet.length` (drops sub-size cages — a cage ≠ a region); (2) **fully + consistently
   shaded** (EVERY cell carries a shade rect of one colour, ≤24/channel spread — a partly-shaded
@@ -321,7 +321,7 @@ way so it stays low-maintenance.
   (barely shaded), so contiguity was redundant + the only rule that could wrongly reject a real
   non-contiguous region. `computeDomShadedRegionMap` reads each cell's shade from the **attribute**
   fill (gray + real), then tests every model region against the three rules; the flood-fill fallback
-  applies the size rule per connected grey component. So `pbwqsppuho` (red region = real colour →
+  applies the size rule per connected grey component. So a feature-sampler puzzle (red region = real colour →
   left alone; diagonal = only 2/9 shaded → skipped) recolours **nothing**, while `zax289niwv` (4
   full-size grey hidden-unique cages) is unchanged. **Seam fix (v3.22):** `applyCrispEdges` sets
   `shape-rendering:crispEdges` on shaded **axis-aligned square-cornered** rects (skips rotated
@@ -709,28 +709,26 @@ fill pass stays `#arrows`-only.
 - **DR** — DarkReader.
 
 ## Testing setup
-- **Primary test puzzle — https://sudokupad.app/pbwqsppuho** (9×9, "Untitled") — a one-grid feature
-  sampler the user built for testing; test a feature here first. Source preserved in-repo (the
-  published link can expire): [`test-puzzle.sudokumaker.json`](test-puzzle.sudokumaker.json) (import
-  into sudokumaker.app to edit; editable URL in
-  [`test-puzzle.sudokumaker-url.txt`](test-puzzle.sudokumaker-url.txt)). It packs in:
-  - **Kropki / edge clues** — Ratio + Difference dots and XV (`X`/`V`). Drawn as labelled
-    `rect.textbg` *rounded rects*, **not** `<circle>` (the renderer has zero `<circle>` — don't use
-    circle-count as a proxy; see [Kropki detection](LESSONS_LEARNED.md)).
-  - **Cell & region shading** — many translucent colours incl. a two-colour split cell and a large
-    inset red region (`#e7141433`) → Cell shading, object-shading dedupe, multi-colour region
-    fill/border.
-  - **Cages** — killer cages (one with custom red text + green border) over standard box cages.
-  - **Lines** — thermo, arrow (bulb + arrowhead), between/lockout lines with circle & diamond
-    endpoints, whisper (min-difference), region-sum, palindrome/renban-style; varied colours &
-    widths.
-  - **Outer clues + diagonal** — little killer (diagonal), sandwich, X-sum, plus a thin diagonal line.
-  - **Extras** — quadruple circle, cosmetic circles/squares, cosmetic text (`~`, `:`, digits incl.
-    `456`), and baked-in pencilmarks, a placed value, and conflict highlights.
-- **Second test puzzle — https://sudokupad.app/3x3zm2co6o** (9×9) — built in **f-puzzles**,
-  converted via the marktekfan penpa-import tool. Complements puzzle 1: uses **native** f-puzzles
-  constraints (4 Kropki, 1 Arrow, X-diagonal/`sudokuX`, 33 cages) **plus** cosmetics, where puzzle 1
-  was all-cosmetic — so it exercises different render paths. Editable f-puzzles `?load=` source +
+
+### Test puzzles
+⚠️ **Every puzzle listed here has a rules block.** That is a hard requirement, not a detail: a
+rules-less puzzle hides a whole class of layout (the rules block is what bounds `#controls`'
+shrink-to-fit width — see `applyControlsWidthCap`) and makes UI work look correct when it is not.
+**Never test UI/layout on a puzzle with no rules text.**
+
+- **https://sudokupad.app/pdnc0ckv87** — "Junk Drawer" by Sotehr. **7×7 Squishdoku** (overlapping
+  3×3 boxes), long rules (~880 chars), cages + lines + overlays. Feature-dense *and* a non-9×9 grid,
+  so the board/controls proportions differ from the usual case.
+- **https://sudokupad.app/bdiaxwjnxc** — "Rupees" by Sotehr. 9×9, long rules (~850 chars), whisper +
+  modulo lines, cages, overlays **and** underlays. The densest ruleset of the three.
+- **https://sudokupad.app/n7a6oi1gyy** — "Banksy Wor-King at Queen's Mews" by olima. 9×9, **short**
+  rules (~190 chars), anti-king + whisper + thermo. The user flags this one as **laying out
+  differently** from the other two — check every UI/layout change against both it and a long-rules
+  puzzle, since they do not always give the same result.
+- **f-puzzles render-path puzzle — https://sudokupad.app/3x3zm2co6o** (9×9) — built in **f-puzzles**,
+  converted via the marktekfan penpa-import tool. Kept for its **native** f-puzzles constraints
+  (4 Kropki, 1 Arrow, X-diagonal/`sudokuX`, 33 cages) **plus** cosmetics — an all-cosmetic puzzle
+  exercises different render paths. Editable f-puzzles `?load=` source +
   play/short links preserved in [`test-puzzle2.fpuzzles-url.txt`](test-puzzle2.fpuzzles-url.txt).
   Notable render paths it covers:
   - **Native Kropki render as `rect.feature-kropki`** (not cosmetic `textbg`), on cell borders →

@@ -397,7 +397,7 @@ coordinates are `[row+0.5, col+0.5]` (RC order) — the OPPOSITE of `cp.thermos`
 (verified against the rendered shaft on `3x3zm2co6o`); the reader swaps to CR and reuses
 `expandLineChain` for compressed straight runs. Two-cell pill bulbs (`width>1.2` = a two-digit
 total) are skipped — safe under-detection. `getArrowsFromDOM` (cosmetic-only puzzles, `cp.arrowSums`
-empty — e.g. test puzzle `pbwqsppuho`): shaft = a **`marker-end`** `#arrows` path (the exact
+empty — i.e. an all-cosmetic puzzle): shaft = a **`marker-end`** `#arrows` path (the exact
 attribute the thermo DOM detector excludes, so the two stay disjoint) whose start is IN-grid
 (rejects little-killer shafts, which start outside) at the EDGE (~1 radius) of a near-full-cell
 circular rect in `#overlay` **or** `#underlay` (any fill — cosmetic bulbs are hollow white / tinted;
