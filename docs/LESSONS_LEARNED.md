@@ -419,3 +419,41 @@ this. Judge the fix by whether a **plain load with no window resize** lands on t
 right numbers (cap 562 / pad 352 / banner+rules 498 on a 9×9), at more than one
 viewport width — "resizing the window fixes it" is the tell that load order, not
 geometry, is wrong.
+
+## The empty band right of the controls is SudokuPad's `App.resize`, not ours (2026-07-20)
+
+**Measured A/B, same puzzle (`bdiaxwjnxc`), same 1208×771 viewport: gap 135px with the
+userscript DISABLED, 125px with it enabled.** Our column makes it slightly *smaller*.
+Don't chase it in our code.
+
+**The mechanism** — `P.resize` in `sudokupad.app/script.js` (v0.611.0):
+
+```js
+let minAspect = 1.7, maxAspect = 2.1;
+aspect = Math.min(2.1, Math.max(1.7, gameW / gameH));      // landscape
+let w = Math.min(gameW, gameH * aspect), h = w / aspect;
+let boardSize = Math.min(w, h);                            // == h in landscape
+// controls region: width = w - boardSize, height = boardSize
+// scale = min(1.3, scaleToFit(controlsBounds, region, {h: minMargin, v: 5 * minMargin}))
+//   minMargin = boardSize * 0.05
+```
+
+Three consequences, all load-bearing:
+1. **The board is WIDTH-bound, not height-bound**, whenever `gameW/gameH < 1.7`:
+   `boardSize = gameW / 1.7`. So narrowing the window shrinks the board immediately,
+   even though the band on the right is empty. That is why "no matter how I size the
+   window there is always a gap".
+2. **The controls region is a hard 41% of the width** (`w − w/1.7`), but the controls are
+   scaled to fit it with a **5×minMargin vertical inset**, so they are nearly always
+   height-bound and paint only ~70% of the width they were handed. The unpainted
+   remainder *is* the gap. Nothing reclaims it — `boardSize` was computed first and
+   never looks at what the controls actually used.
+3. **It differs per puzzle because `controlsBounds.height` includes the rules text.**
+   Longer rules → taller block → smaller scale → less painted width → bigger gap.
+   (`bdiaxwjnxc` ~850 chars of rules vs `n7a6oi1gyy` ~190.) Our
+   `.puzzle-rules { max-width: none }` actually *helps* here: wider rules wrap shorter.
+
+**The only lever is overriding `App.resize` itself** — there is no CSS fix, because the
+numbers are computed in JS from `bounds('.game')` and written as inline `left`/`top`/
+`transform`. Removing the 1.7 clamp (board bound by height instead) is what would let
+the window be narrowed ~110px with nothing shrinking.
