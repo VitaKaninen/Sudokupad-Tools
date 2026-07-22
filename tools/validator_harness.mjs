@@ -302,6 +302,20 @@ check('walk: adjacent circles yield no segment',
 check('walk: ambiguous 3-way junction is refused, not guessed',
   segOf(walk([['0,1', '1,1', '1,0'], ['1,1', '1,2']],
     { '0,1': 1, '1,0': 1, '1,2': 1 }, '0,1', '1,1')), null);
+// …but that must be a REAL T, not one manufactured by hiding a stroke from the graph.
+// `2ad4183iyn` R5C8: the 4th stub lives on a 2-cell connector stroke carrying only ONE
+// circle. Feed every chain to the graph and the cell is a plain crossing again, so the
+// vertical resolves; hold the connector out and it degrades to a refused T-junction.
+const bigStrokes = [
+  ['0,1', '1,1', '2,1'],            // a stroke running horizontally through the junction
+  ['1,0', '1,1'],                   // another stroke arriving from the north, ending there
+];
+const connector = ['1,1', '1,2'];   // the short connector south — only ONE circle on it
+const connCircles = { '1,0': 1, '1,2': 1, '0,1': 1, '2,1': 1 };
+check('walk: a 1-circle connector stroke still counts toward the graph',
+  segOf(walk(bigStrokes.concat([connector]), connCircles, '1,0', '1,1')), '1,0 1,1 1,2');
+check('walk: dropping that stroke fakes a T-junction and loses the line (v3.121 bug)',
+  segOf(walk(bigStrokes, connCircles, '1,0', '1,1')), null);
 
 // ── Dutch-whisper / lockout collision (v3.120, f9a2chdekr + u0cs9m2qmx) ─────
 // A lockout line states the gap between its DIAMONDS, which trips the Dutch cue.

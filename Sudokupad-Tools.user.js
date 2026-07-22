@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.121.0
+// @version      3.122.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.121.0';
+  var SCRIPT_VERSION = '3.122.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7705,13 +7705,24 @@
   }
   // The between-line SEGMENTS a validator acts on. Shared by the compute and the menu
   // eyeball, so the preview can't drift from what runs.
-  // FALLBACK: a chain carrying fewer than two circles (no circle layer readable, or
-  // markers we couldn't parse) is emitted UNCHANGED — the pre-v3.120 behaviour, so a
-  // puzzle whose markers we can't read is never made worse — and is kept out of the
-  // graph so it can't disturb the walks of chains that do have circles.
+  //
+  // EVERY CLASSIFIED CHAIN FEEDS THE GRAPH — the fallback is decided globally, never
+  // per chain (v3.122). Deciding it per chain was a real defect: a short connector
+  // stroke carrying fewer than two circles was held OUT of the graph, which silently
+  // lowered a neighbouring cell's degree and turned a plain crossing into a fake
+  // T-junction, so a genuine between line was refused. `2ad4183iyn` R5C8 — the drawn
+  // step R4C8-R5C8 lives on a 2-cell stroke with one circle on it, and dropping that
+  // stroke cost the vertical R4C8-R5C8-R6C8. The stroke is part of the picture whether
+  // or not it happens to carry circles of its own, so the graph must see it.
+  // Fallbacks, in order:
+  //   • no circles found ANYWHERE → every chain emitted unchanged (the pre-v3.120
+  //     behaviour, so a puzzle whose markers we can't read is never made worse);
+  //   • otherwise walk, then emit unchanged any chain the walks never touched (a
+  //     chain with no circle anywhere near it still gets its old treatment).
   function betweenSegments(lines) {
     var circleSet = getCellCircleKeySet();
-    var walkable = [], out = [], seen = {};
+    var chains = (lines || []).filter(function (k) { return k && k.length >= 2; });
+    var out = [], seen = {};
     function emit(seg) {
       if (!seg || seg.length < 3 || seg[0] === seg[seg.length - 1]) return;
       var sig = seg.join(' ');
@@ -7720,18 +7731,21 @@
       seen[seg.slice().reverse().join(' ')] = 1;         // either drawn direction is one clue
       out.push(seg);
     }
-    (lines || []).forEach(function (keys) {
-      if (!keys || keys.length < 2) return;
-      var n = 0;
-      keys.forEach(function (k) { if (circleSet[k]) n++; });
-      if (n >= 2) walkable.push(keys); else emit(keys);
-    });
-    var adj = lineStepGraph(walkable);
+    var adj = lineStepGraph(chains);
+    var anyCircle = Object.keys(adj).some(function (k) { return circleSet[k]; });
+    if (!anyCircle) { chains.forEach(emit); return out; }
+    var touched = {};
     Object.keys(adj).forEach(function (start) {
       if (!circleSet[start]) return;
       Object.keys(adj[start]).forEach(function (next) {
-        emit(walkBetweenSegment(adj, circleSet, start, next));
+        var seg = walkBetweenSegment(adj, circleSet, start, next);
+        if (!seg) return;
+        seg.forEach(function (k) { touched[k] = 1; });
+        emit(seg);
       });
+    });
+    chains.forEach(function (keys) {
+      if (!keys.some(function (k) { return touched[k]; })) emit(keys);
     });
     return out;
   }

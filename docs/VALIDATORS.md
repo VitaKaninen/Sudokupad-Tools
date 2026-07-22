@@ -626,6 +626,17 @@ so ordinary L-shaped lines still work); (3) else → **refuse the whole walk** �
 genuinely leaves open is never guessed at. Walks start from every circle and run outward on each
 incident stub; either direction yields the same clue (de-duped).
 
+**Every classified chain feeds the graph; the fallback is decided globally, never per chain
+(v3.122).** Gating it per chain was a real defect: a short connector stroke carrying <2 circles was
+held *out* of the graph, which lowered a neighbouring cell's degree and turned a plain crossing into a
+**fake T-junction**, so rule (3) refused a genuine line. `2ad4183iyn` **R5C8** — the drawn step
+R4C8–R5C8 lives on a 2-cell stroke with one circle on it, and excluding that stroke cost the vertical
+R4C8–R5C8–R6C8. A stroke is part of the picture whether or not it carries circles of its own. With the
+global gate the puzzle yields **58 segments, 0 refused walks, all 116 drawn steps covered, 0 solution
+violations**; per-chain gating gave 57 with one step orphaned. Fallbacks now: no circles found
+*anywhere* → every chain emitted unchanged; otherwise walk, then emit unchanged any chain the walks
+never touched.
+
 Circles come from `getCellCenteredCircles` — the **shared circle reader** (v3.120) for cell-centred,
 near-cell-sized, near-circular `#overlay`/`#underlay` rects (SudokuPad draws every round marker as a
 rounded `<rect>`, rx ≈ w/2, never an `<svg:circle>`); `getArrowsFromDOM` and the eyeball read the same
