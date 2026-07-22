@@ -487,3 +487,16 @@ reserve the menu strip and rebalance the board) while the banner/rules keep thei
 Their 32px left margin left-anchors them, so the extra width opens up on the right — exactly
 where the menu's strip is. A fixed pixel cap (not `max-width: none`) also keeps #controls'
 shrink-to-fit max-content bounded, which is what avoids the old full-window-width load flash.
+
+**The Killer Calculator needed a separate pin (v3.117).** `.killercalc-onscreen` (native
+`tool-calculator.css`) is `position: absolute; left: -8rem; width: 18rem; margin-left: 50%`
+— i.e. centred on #controls' LIVE width, not a flow block, so the max-width pin above does
+not reach it and opening the menu slid it right by half the cap growth (measured: cap
+495→562 on `xnu5mij9ie`, killercalc +26 screen px = 67/2 × the 0.781 controls scale).
+`updateKillercalcOffset` counter-translates it by `(cap − collapsedCap)/2` — 0 whenever the
+menu is closed, so its native resting position is untouched. **Verified by DOM audit that
+this is the ONLY optional #controls child that centres on #controls width:** the only
+`*-onscreen` panel class is `killercalc-onscreen`, and `.puzzle-title`/`.puzzle-author`
+(`left: 50%`) centre within `.puzzle-header`, which is itself pinned — so they ride it and
+stay put. `.controls-info` (the header/rules wrapper) still widens, but it is an invisible
+block whose pinned children don't move, so nothing visible shifts.

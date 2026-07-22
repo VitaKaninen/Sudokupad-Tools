@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.116.0
+// @version      3.117.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.116.0';
+  var SCRIPT_VERSION = '3.117.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5292,6 +5292,13 @@
     // and writes nothing. The −64 is SudokuPad's own `margin: 0 32px` on both blocks.
     var contentMaxW = pad + RIGHT_COL_GAP + collapsedRightColW() - 64;
     if (updateContentWidthCss(contentMaxW)) changed = true;   // only ever after a real cap is in place
+    // Native SudokuPad centres the Killer Calculator on #controls' LIVE width
+    // (`.killercalc-onscreen { margin-left: 50% }`), so widening #controls for the menu
+    // slides it right by half the growth — the last thing that still moved. It is
+    // absolute + centred, not a flow block, so the max-width pin above doesn't reach it;
+    // instead we translate it back by exactly half the cap growth (0 when collapsed, so
+    // its native collapsed position is untouched). cap == collapsed cap → shift 0.
+    updateKillercalcOffset((cap - (contentMaxW + 64)) / 2);
     applyStaticColWidths();      // keep our buttons pinned to the column's LEFT edge
     centerControlsFooter();      // credit line → centred on Check, not on #controls
     if (changed) syncAppResizeSoon();   // a width changed → the rules reflowed → re-run App.resize
@@ -5428,6 +5435,29 @@
       '#controls .puzzle-rules { max-width: ' + w + 'px; margin-left: 32px; margin-right: 32px; }' +
       '#controls .puzzle-header { max-width: ' + w + 'px; }';
     return true;
+  }
+
+  // Counter-translate the Killer Calculator so the validate menu never slides it. Native
+  // centres it on #controls' live width (margin-left: 50%), so opening the menu (which
+  // widens #controls by `2 * shift`) pushes it right by `shift`; we translate it back by
+  // the same amount. `shift` is 0 whenever the menu is closed (cap == collapsed cap), so
+  // this rule is inert in the common case and never disturbs its native resting position.
+  // #controls .killercalc-onscreen out-specifies the native `.killercalc-onscreen` rule,
+  // so no !important is needed; the design-px translate scales with the #controls transform.
+  var lastKcShift = null;
+  function updateKillercalcOffset(shift) {
+    shift = Math.round(shift * 100) / 100;
+    if (shift === lastKcShift) return;
+    lastKcShift = shift;
+    var st = document.getElementById('sp-killercalc-offset-css');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'sp-killercalc-offset-css';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    st.textContent = shift
+      ? '#controls .killercalc-onscreen { transform: translateX(-' + shift + 'px); }'
+      : '';
   }
 
   // ── Toast stack ────────────────────────────────────────────────────────────
