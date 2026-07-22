@@ -593,19 +593,28 @@ about — and prompting "digit ‘0’ found in puzzle" would **leak it**. So `a
 prompts and is named, as before. Net: 9x9 + fogged 0 → no prompt, 1-9; 7x7 Squishdoku + fogged 0 →
 no prompt, 1-9; 7x7 non-Squishdoku → still prompts (on size), zero not mentioned.
 
-## Planned — between-line validator (not yet built)
+## Between-line validator
 
-**PLANNED — Between-line validator (agreed 2026-06-21, not yet built; joins Run-all).** A between
-line: every non-endpoint cell on the line must hold a digit *strictly between* the two endpoint
-("bulb") values. **Algorithm (proven complete — covers solved bulbs, narrow & wide candidate ranges
-in one path):** read bulb A's candidate set (`minA`,`maxA`) and bulb B's (`minB`,`maxB`); a line
-digit is *possible* iff it lies in the open interval `(minA…maxB)` **OR** `(maxA…minB)` (union of
-the two cross-scenarios); remove from each line cell every centre candidate outside **both**
-intervals. This automatically (a) excludes a solved bulb's own digit from the line (a digit can
-never be strictly between itself), (b) permits mid-range bulb candidates on the line, (c) handles
-the "trapped value" case a naive global-min/max interval gets wrong — e.g. bulb {5} & {2..8} → line
-excludes 1,2,5,8,9 (keeps 3,4,6,7). **Never touches bulb candidates** (player's job). **Detection is
-the open question** — between vs. lockout lines render similarly (path + 2 endpoint circles,
-opposite rules); user to supply sample puzzles so we can find a reliable DOM discriminator before
-trusting detection (under-detect rather than mis-apply). Will register as another
-`constraintValidators()` entry (`getBetweenLines` detector + `computeBetweenLineRemovals`).
+**Between-line validator (v3.119 — algorithm agreed 2026-06-21, built 2026-07-22; joins Run-all).**
+A between line: every non-endpoint cell must hold a digit *strictly between* the two endpoint
+("bulb") values. Endpoints = the line's **first and last cell** (native chain ends or cosmetic
+wayPoint ends — where the circles sit), uniform across sources. **Algorithm** (`betweenDigitAllowed`
+— a pure helper, harness-tested): read bulb A's candidate set (`minA`,`maxA`) and bulb B's
+(`minB`,`maxB`); a line digit is possible iff it lies in the open interval spanned by `(minA,maxB)`
+**OR** by `(maxA,minB)` (union of the two cross-scenarios — which bulb is the low end is unknown);
+remove from each interior cell every centre candidate outside **both**. This one test (a) excludes a
+solved bulb's own digit (never strictly between itself), (b) permits mid-range bulb candidates on the
+line, (c) handles the "trapped value" case a naive global min/max interval gets wrong — bulb {5} &
+{2..8} → keeps 3,4,6,7 (excludes 1,2,5,8,9). `computeBetweenLineRemovals` is **single-pass** (interior
+cells constrain neither each other nor the bulbs; bulbs are never modified — the player's job, so no
+fixpoint). **Detection (`classifyBetweenLines`) — the old "between vs lockout" open question is now
+resolved by the native payload:** f-puzzles stores a between line as a first-class `betweenline`
+constraint (mapped `betweenline → 'between'` in `FPUZ_LINE_CONSTRAINTS`), **distinct** from lockout's
+`lockoutline`, so `nativeLinesFor('between')` is confident and unambiguous. A readable payload with no
+between key vetoes to `none` (keys are exhaustive). For scl/ctc/js-object puzzles (no payload —
+53 of the 99 catalogued `between_line` puzzles), it falls to a rules **cue** (`BETWEEN_CUE_RE` —
+"between … circles/bulbs/endpoints/attached", catalog-measured phrasings) gated exactly like renban,
+with a **lockout guard** (`BETWEEN_LOCKOUT_RE` — "lie outside", "must not be between", "lockout")
+that forces `ambiguous` when lockout phrasing co-occurs, so the opposite rule is never mis-applied.
+**Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages), `hg0yh5uke9` (between + cosmetic
+renban); non-native scl `2ad4183iyn`, `xm3e3npmmk`, `swtm07rplk`.

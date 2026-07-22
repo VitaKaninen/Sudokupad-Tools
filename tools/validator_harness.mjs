@@ -69,9 +69,12 @@ const NAMES = [
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
+  'BETWEEN_CUE_RE', 'BETWEEN_CLAUSE_RE', 'BETWEEN_LOCKOUT_RE',
   'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'ENTROPIC_SET_RE',
   'ENTROPIC_LINEISH_RE', 'ENTROPIC_CLAUSE_RE', 'hasEntropicCue',
   'MODULAR_CUE_RE', 'MODULAR_SET_RE', 'MODULAR_CLAUSE_RE', 'hasModularCue',
+  // between-line interval maths
+  'betweenDigitAllowed',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -181,6 +184,38 @@ checkTrue('region-sum cue: "each 3x3 box" spans the size (bl168ah6g9)',
 // Zipper
 checkTrue('zipper cue: equal distance from the center',
   F.ZIPPER_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
+// Between lines (v3.119: real catalog phrasings from the 53 non-native between_line puzzles)
+checkTrue('between cue: numerically between the digits in the circles (xm3e3npmmk)',
+  F.BETWEEN_CUE_RE.test('digits along a line must be numerically between the digits in circles at each end'));
+checkTrue('between cue: lie strictly between the digits in the attached circles (swtm07rplk)',
+  F.BETWEEN_CUE_RE.test('digits along a grey line must lie strictly between the digits in the attached circles'));
+checkTrue('between cue: value must be between the values in those circles (2ad4183iyn)',
+  F.BETWEEN_CUE_RE.test('the value of a digit on a line between two circles must be between the two values of the digits in those circles'));
+checkFalse('between cue: sandwich "between the 1 and the 9" has no circle/bulb noun',
+  F.BETWEEN_CUE_RE.test('the clue is the sum of the digits between the 1 and the 9 in that row'));
+// Lockout guard: renders like a between line but forbids the interior from lying
+// between the ends — must be caught so the between validator refuses to auto-claim.
+checkTrue('lockout guard: "lie outside the range" set by the diamonds',
+  F.BETWEEN_LOCKOUT_RE.test('digits on the line must lie outside the range set by the two diamond ends'));
+checkTrue('lockout guard: "must not be between" the endpoints',
+  F.BETWEEN_LOCKOUT_RE.test('the digits on the line must not be between the two endpoint values'));
+checkFalse('lockout guard: a plain between clue is NOT lockout',
+  F.BETWEEN_LOCKOUT_RE.test('digits along a line must be numerically between the digits in the circles'));
+
+// ── between-line interval maths (the plan's worked "trapped value" example) ──
+// bulb {5} & {2..8}: keeps 3,4,6,7; excludes 1,2,5,8,9 (a digit is never strictly
+// between itself, and the two cross-intervals are (5..8) and (2..5)).
+const betKeep = [1,2,3,4,5,6,7,8,9].filter((d) => F.betweenDigitAllowed(5, 5, 2, 8, d));
+check('between: {5} & {2..8} keeps 3,4,6,7', betKeep, [3,4,6,7]);
+// Both bulbs solved 3 & 6 → strictly between = 4,5.
+check('between: {3} & {6} keeps 4,5',
+  [1,2,3,4,5,6,7,8,9].filter((d) => F.betweenDigitAllowed(3, 3, 6, 6, d)), [4,5]);
+// Extremes 1 & 9 → everything strictly between.
+check('between: {1} & {9} keeps 2..8',
+  [1,2,3,4,5,6,7,8,9].filter((d) => F.betweenDigitAllowed(1, 1, 9, 9, d)), [2,3,4,5,6,7,8]);
+// Equal solved bulbs {5} & {5} → nothing can be strictly between (contradiction).
+check('between: {5} & {5} keeps nothing',
+  [1,2,3,4,5,6,7,8,9].filter((d) => F.betweenDigitAllowed(5, 5, 5, 5, d)), []);
 // Entropic (v3.85 ANTI traps + v3.88 described-set gated on a line-ish noun)
 checkTrue('entropic cue: named', F.hasEntropicCue('entropic lines: every run of three cells contains a low, a medium and a high digit'));
 // The ANTI guard is applied in classifyEntropicLines, ONE LAYER ABOVE the cue —

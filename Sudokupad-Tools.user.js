@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.118.0
+// @version      3.119.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.118.0';
+  var SCRIPT_VERSION = '3.119.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6141,8 +6141,9 @@
 
   // ══════════════════════════════════════════════════════════════════════════
   //  Validate Constraints — remove candidates that no constraint can satisfy.
-  //  For now this validates KROPKI dots only (black = 2:1 ratio, white =
-  //  consecutive); XV / quadruples / cages are planned but not implemented.
+  //  Many independent validators (see constraintValidators() for the registry):
+  //  Kropki, cages, little killers, thermos, whispers, XV, sum arrows, between
+  //  lines, and the cue-detected line family. Quadruples are not yet implemented.
   //  It only ever REMOVES centre candidates — never adds — so a player's prior
   //  eliminations are preserved.
   // ══════════════════════════════════════════════════════════════════════════
@@ -7250,7 +7251,7 @@
   // f-puzzles constraint key → our internal line type.
   var FPUZ_LINE_CONSTRAINTS = {
     whispers: 'whisper', regionsumline: 'regionsum', entropicline: 'entropic',
-    renbanline: 'renban', thermometer: 'thermo'
+    renbanline: 'renban', thermometer: 'thermo', betweenline: 'between'
   };
   function getNativeLineClues() {
     var d = getRawPuzzleJson();
@@ -7531,6 +7532,46 @@
   var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
   var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
   function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE); }
+
+  // Between lines: every non-endpoint cell holds a digit STRICTLY between the two
+  // endpoint ("bulb") circle values. In f-puzzles a between line is a first-class
+  // `betweenline` constraint (mapped to 'between' in FPUZ_LINE_CONSTRAINTS), so a
+  // native payload identifies it outright and unambiguously — the primary path,
+  // and the clean discriminator from lockout lines (a DISTINCT `lockoutline` key)
+  // that render almost identically (path + 2 endpoint markers, opposite rules).
+  // For scl/ctc/js-object puzzles (no payload — >½ of catalogued between puzzles)
+  // we fall back to a rules CUE. Catalog-measured phrasings (2026-07-22 survey of
+  // the 53 non-native between_line puzzles): "digits along a line must be
+  // (numerically|strictly) between the digits in the circles", "…lie strictly
+  // between the digits in the attached circles", "the value of a digit on a line
+  // between two circles must be between the two values…". The common, reliable
+  // token is "between" sitting within a short window of a circle/bulb/endpoint
+  // noun. Cue-gated exactly like renban: colour alone can't discriminate (blue is
+  // ALSO region-sum's; the endpoints are what make it a between line).
+  var BETWEEN_CUE_RE = /\bbetween[- ]lines?\b|\bbetween\b[^.]{0,50}\b(?:circles?|bulbs?|endpoints?|attached)\b|\b(?:circles?|bulbs?|endpoints?)\b[^.]{0,50}\bbetween\b/;
+  // Named-colour clause trigger for the multi-colour legend layer.
+  var BETWEEN_CLAUSE_RE = /between|attached\s+circles?|bulbs?|endpoints?/;
+  // Lockout collision guard — lockout lines forbid the interior from lying between
+  // the diamonds ("must lie OUTSIDE", "cannot be between", "not … between", the
+  // word "lockout"). When such phrasing co-occurs with the between cue and there
+  // is NO authoritative native key, refuse to auto-claim (→ ambiguous, player
+  // selects) rather than risk applying the opposite rule. Under-detect, never
+  // mis-apply — the standing validator contract.
+  var BETWEEN_LOCKOUT_RE = /lockout|lie\s+outside|outside\s+the\s+(?:range|values?|interval)|(?:must\s+not|cannot|can't|may\s+not|never)\b[^.]{0,30}\bbetween\b|\bnot\b[^.]{0,20}\bbetween\b/;
+  function classifyBetweenLines() {
+    // f-puzzles native `betweenline` is authoritative — confident, no guessing.
+    var nat = nativeLinesFor('between');
+    var cos = getCosmeticLines();
+    if (nat) return { mode: 'confident', lines: nat, allLines: cos };
+    // A readable payload with NO between key = the puzzle genuinely has none
+    // (constraint keys are exhaustive) — veto before the cue can false-positive.
+    if (hasNativePayload()) return { mode: 'none', lines: [], allLines: cos };
+    // No payload (scl/ctc/js-object): fall to the cue stack.
+    var res = classifyCueLines(BETWEEN_CUE_RE, BETWEEN_CLAUSE_RE, null);
+    if (res.mode === 'confident' && BETWEEN_LOCKOUT_RE.test(getPuzzleRulesBlob()))
+      return { mode: 'ambiguous', lines: [], allLines: res.allLines };
+    return res;
+  }
 
   // Entropic lines: every run of THREE consecutive cells on the line holds one LOW,
   // one MID and one HIGH digit — equal thirds of the digit set.
@@ -9175,6 +9216,73 @@
     return { removals: removals, arrowCount: units.length, emptiedCells: emptied };
   }
 
+  // ── Between-line validator ─────────────────────────────────────────────────
+  // Every non-endpoint cell on the line must hold a digit STRICTLY between the two
+  // endpoint ("bulb") values. Endpoints = the line's first and last cell (where
+  // the circles sit) for both native and cosmetic lines. Bulb candidates are NEVER
+  // touched (the player's job) — only interior centre candidates are removed.
+  //
+  // Which bulb is the low end is unknown, so a line digit d is POSSIBLE iff it lies
+  // in the open interval spanned by (minA,maxB) OR the one spanned by (maxA,minB) —
+  // the union of the two cross-scenarios. This one test covers solved bulbs, narrow
+  // and wide candidate ranges, and the "trapped value" case a naive global min/max
+  // interval gets wrong: bulb {5} & {2..8} → keeps 3,4,6,7 (excludes 1,2,5,8,9),
+  // because (5..8)∪(2..5) = {3,4,6,7} and a digit can never be strictly between
+  // itself. Pure helper so the harness can regression-test the interval maths.
+  function betweenDigitAllowed(minA, maxA, minB, maxB, d) {
+    var lo1 = Math.min(minA, maxB), hi1 = Math.max(minA, maxB);
+    var lo2 = Math.min(maxA, minB), hi2 = Math.max(maxA, minB);
+    return (d > lo1 && d < hi1) || (d > lo2 && d < hi2);
+  }
+  // Independent of every other validator; single-pass (interior cells constrain
+  // neither each other nor the bulbs, and bulbs are never modified, so there is no
+  // fixpoint to iterate).
+  function computeBetweenLineRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyBetweenLines();
+    if (cls.mode === 'none') return { noBetween: true };
+    var resolved = resolveCueValidatorLines(cls, unitFilter);
+    if (resolved.needSelection) return { noBetween: true, needSelection: true };
+    var lines = resolved.lines;
+    if (!lines || lines.length === 0) return { noBetween: true };
+
+    var values = st.values, fullSet = st.fullSet;
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (values[key] != null) return new Set([values[key]]);
+      if (work[key]) return work[key];
+      return fullSet;                                    // empty bulb → unconstrained
+    }
+    function minOf(s) { return Math.min.apply(null, Array.from(s)); }
+    function maxOf(s) { return Math.max.apply(null, Array.from(s)); }
+
+    var removals = [], seen = {};
+    lines.forEach(function (keys) {
+      if (!keys || keys.length < 3) return;              // need 2 bulbs + ≥1 interior
+      var aSet = cellSet(keys[0]), bSet = cellSet(keys[keys.length - 1]);
+      if (aSet.size === 0 || bSet.size === 0) return;
+      var minA = minOf(aSet), maxA = maxOf(aSet), minB = minOf(bSet), maxB = maxOf(bSet);
+      for (var i = 1; i < keys.length - 1; i++) {
+        var key = keys[i];
+        if (values[key] != null || !work[key]) continue; // solved / empty interior untouched
+        Array.from(work[key]).forEach(function (d) {     // snapshot: set mutates in loop
+          if (!betweenDigitAllowed(minA, maxA, minB, maxB, d)) {
+            work[key].delete(d);
+            var sk = key + '/' + d;
+            if (!seen[sk]) { seen[sk] = 1; removals.push({ cellKey: key, digit: String(d) }); }
+          }
+        });
+      }
+    });
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+
+    return { removals: removals, betweenCount: lines.length, emptiedCells: emptied };
+  }
+
   // Worker: remove a specific list of centre candidates via SudokuPad's own
   // candidates op (one undo group). Mirrors _removeInvalidPencilmarksInternal but
   // takes an explicit [{cellKey,digit}] list instead of scanning .conflict marks.
@@ -9309,6 +9417,8 @@
       { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum arrows',
         detect: function () { return getSumArrows().length > 0; },
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
+      { name: 'between', unitNoun: 'between line', menuLabel: 'Between lines',
+        classify: classifyBetweenLines, compute: computeBetweenLineRemovals, countKey: 'betweenCount', noneKey: 'noBetween' },
       { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines',
         classify: classifyRenbanLines, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
       { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines',
