@@ -595,19 +595,53 @@ no prompt, 1-9; 7x7 non-Squishdoku → still prompts (on size), zero not mention
 
 ## Between-line validator
 
-**Between-line validator (v3.119 — algorithm agreed 2026-06-21, built 2026-07-22; joins Run-all).**
+**Between-line validator (v3.119 — algorithm agreed 2026-06-21, built 2026-07-22; joins Run-all;
+circles + segmentation v3.120).**
 A between line: every non-endpoint cell must hold a digit *strictly between* the two endpoint
-("bulb") values. Endpoints = the line's **first and last cell** (native chain ends or cosmetic
-wayPoint ends — where the circles sit), uniform across sources. **Algorithm** (`betweenDigitAllowed`
-— a pure helper, harness-tested): read bulb A's candidate set (`minA`,`maxA`) and bulb B's
-(`minB`,`maxB`); a line digit is possible iff it lies in the open interval spanned by `(minA,maxB)`
-**OR** by `(maxA,minB)` (union of the two cross-scenarios — which bulb is the low end is unknown);
-remove from each interior cell every centre candidate outside **both**. This one test (a) excludes a
-solved bulb's own digit (never strictly between itself), (b) permits mid-range bulb candidates on the
-line, (c) handles the "trapped value" case a naive global min/max interval gets wrong — bulb {5} &
-{2..8} → keeps 3,4,6,7 (excludes 1,2,5,8,9). `computeBetweenLineRemovals` is **single-pass** (interior
-cells constrain neither each other nor the bulbs; bulbs are never modified — the player's job, so no
-fixpoint). **Detection (`classifyBetweenLines`) — the old "between vs lockout" open question is now
+("bulb") values. Endpoints = the **segment's** first and last cell — where the circles sit.
+
+**A drawn chain is not a clue: the circle-to-circle SEGMENT is (v3.120, `betweenSegments` /
+`splitBetweenLineAtCircles`).** Setters routinely thread several circles onto one polyline —
+`2ad4183iyn` ("41 Circles") draws 11 chains (one 35 cells long) that are really **57** independent
+3-cell between lines; its row-1 chain alone is 4 clues, not 1. Validating the chain whole treats real
+endpoints as interior cells and applies the rule across them. So every classified chain is split at
+each circle it passes through, and each consecutive circle pair becomes its own clue.
+Circles come from `getCellCenteredCircles` — the **shared bulb reader** (v3.120) for cell-centred,
+near-cell-sized, near-circular `#overlay`/`#underlay` rects (SudokuPad draws every round marker as a
+rounded `<rect>`, rx ≈ w/2, never an `<svg:circle>`); `getArrowsFromDOM` reads the same fn so the two
+can't drift. Centre-on-cell-centre excludes Kropki/XV dots (cell border) and quadruples (grid corner);
+rx ≈ w/2 excludes lockout **diamonds** (rotated rects). **Fallbacks, both deliberate:** <2 circles
+found on a chain → the chain unchanged (the pre-v3.120 behaviour, so a puzzle whose markers we can't
+read is never made worse); a run past the *last* circle has no second bulb → dropped, never validated
+against a guessed endpoint. `unitFilter` ("validate selection only") is applied to the **segments**,
+so selecting one circle-to-circle run of a long line checks exactly that run.
+
+**Algorithm — both directions (v3.120).** *Interiors* (`betweenDigitAllowed`, a pure harness-tested
+helper): read bulb A's candidate set (`minA`,`maxA`) and bulb B's (`minB`,`maxB`); a line digit is
+possible iff it lies in the open interval spanned by `(minA,maxB)` **OR** by `(maxA,minB)` (union of
+the two cross-scenarios — which bulb is the low end is unknown); remove from each interior cell every
+centre candidate outside **both**. This one test (a) excludes a solved bulb's own digit (never
+strictly between itself), (b) permits mid-range bulb candidates on the line, (c) handles the "trapped
+value" case a naive global min/max interval gets wrong — bulb {5} & {2..8} → keeps 3,4,6,7 (excludes
+1,2,5,8,9).
+*Bulbs* (`betweenBulbDigitAllowed` + `betweenInteriorsFeasible`, **new in v3.120** — v3.119 left
+circles alone as "the player's job", which left provable eliminations on the board). A circle digit
+`d` survives only if **some** value `b` of the opposite circle leaves the interiors an assignment they
+can all satisfy at once inside `(min(d,b), max(d,b))`. **The simultaneity is load-bearing and a
+per-cell interval test cannot see it** — reported case: interiors `{5,7}` and `{5,7}` in one row,
+circles `{1,3,6,8,9}` and `{1,3,6,8}`. Each interior alone can take 5 inside `(1,6)`, so a per-cell
+check says 6 is fine; but they *must differ*, so the interval seats only one of them and **6 is
+impossible in either circle** (6 is neither below 5 nor above 7). Feasibility is therefore a
+fewest-options-first **backtracking search** over the interior cells under `makeMustDiffer`, exact and
+cheap (≤7 cells over ≤9 digits); on a node-budget overrun it answers *feasible* — under-remove, never
+mis-apply. `computeBetweenLineRemovals` is consequently **iterated to a fixpoint** (v3.119 was
+single-pass): a narrowed bulb tightens the interior interval, a narrowed interior kills a bulb
+candidate, and segments sharing a circle propagate through it. Fog + ambiguous-selection masking are
+honoured on bulbs exactly as on interiors.
+The **menu eyeball** previews the segments with a ring drawn on both endpoint circles
+(`{type:'between',keys}` in `spdrHi.showObjects`), not a bare polyline through them.
+
+**Detection (`classifyBetweenLines`) — the old "between vs lockout" open question is now
 resolved by the native payload:** f-puzzles stores a between line as a first-class `betweenline`
 constraint (mapped `betweenline → 'between'` in `FPUZ_LINE_CONSTRAINTS`), **distinct** from lockout's
 `lockoutline`, so `nativeLinesFor('between')` is confident and unambiguous. A readable payload with no
@@ -617,4 +651,30 @@ between key vetoes to `none` (keys are exhaustive). For scl/ctc/js-object puzzle
 with a **lockout guard** (`BETWEEN_LOCKOUT_RE` — "lie outside", "must not be between", "lockout")
 that forces `ambiguous` when lockout phrasing co-occurs, so the opposite rule is never mis-applied.
 **Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages), `hg0yh5uke9` (between + cosmetic
-renban); non-native scl `2ad4183iyn`, `xm3e3npmmk`, `swtm07rplk`.
+renban); non-native scl `2ad4183iyn` (**the segmentation case** — 11 chains → 57 segments),
+`xm3e3npmmk`, `swtm07rplk`.
+
+### Lockout lines vs the Dutch whisper (v3.120)
+
+No lockout validator yet, but lockout lines had to be taught to the **Dutch whisper** classifier: a
+lockout rule states the gap between its two **diamonds**, not between neighbours along the line —
+`f9a2chdekr` ("Lockout Lines"): *"two connected diamonds must contain numbers with a difference of at
+least 4, and all digits on the line … must lie strictly outside the range"* — and that phrasing trips
+`DUTCH_CUE_RE` head-on. With one line colour, the cue layer then **confidently** claimed every lockout
+line and applied the ≥4 neighbour rule, a different constraint entirely. Two guards in
+`classifyDutchWhisperLines`, cheapest first:
+
+1. `DUTCH_LOCKOUT_RE` (`lockout` / `lie (strictly) outside` / `outside the range|values|interval`) in
+   the rules → **`none` outright**, not `ambiguous`: the ≥4 belongs to the diamonds, so there is no
+   Dutch whisper here to hand-select.
+2. `dropNativeLockoutLines` — the f-puzzles payload *declares* the chains (`lockout` **and**
+   `lockoutline`, both now mapped to type `'lockout'` in `FPUZ_LINE_CONSTRAINTS`); drop exactly those,
+   either drawn direction, and collapse to `none` if nothing survives. Covers a lockout puzzle whose
+   prose never says "lockout"/"outside". Verified on `f9a2chdekr`: `cp.lines` is empty, the DOM chains
+   match the declared `lockout` chains cell-for-cell.
+
+**Catalog-measured (2026-07-22):** of 118 puzzles matching `DUTCH_CUE_RE`, only **2** also match the
+lockout phrasing and **both are pure lockout puzzles** (`f9a2chdekr`, `u0cs9m2qmx`) — no real Dutch
+whisper is lost. Note `u0cs9m2qmx`'s rules confirm the segmentation model independently: *"A diamond
+terminates a line segment."* — the same circle-splits-the-line rule the between validator now applies,
+so a future lockout validator should reuse `splitBetweenLineAtCircles` against a **diamond** reader.

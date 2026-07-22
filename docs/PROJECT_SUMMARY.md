@@ -467,7 +467,12 @@ way so it stays low-maintenance.
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
-  removed v3.104). Its button, menu and toasts live in the right-hand column — see "The right-hand
+  removed v3.104). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
+  cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
+  rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector *and* the between-line
+  endpoint circles, so add new circle consumers here rather than re-deriving the geometry. Between
+  lines additionally split each drawn chain at its circles (`betweenSegments` /
+  `splitBetweenLineAtCircles`) — a chain threading N circles is N−1 clues. Its button, menu and toasts live in the right-hand column — see "The right-hand
   column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).

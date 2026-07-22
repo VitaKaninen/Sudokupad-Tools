@@ -64,7 +64,7 @@ const NAMES = [
   'isGermanWhisperColor',
   // cue / clause regexes + composite cues
   'WHISPER_CUE_RE', 'WHISPERISH_RE', 'SELF_DEDUCTION_RE',
-  'DUTCH_CUE_RE', 'DUTCH_CLAUSE_RE',
+  'DUTCH_CUE_RE', 'DUTCH_CLAUSE_RE', 'DUTCH_LOCKOUT_RE',
   'RENBAN_CUE_RE', 'RENBAN_CLAUSE_RE',
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
@@ -73,8 +73,9 @@ const NAMES = [
   'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'ENTROPIC_SET_RE',
   'ENTROPIC_LINEISH_RE', 'ENTROPIC_CLAUSE_RE', 'hasEntropicCue',
   'MODULAR_CUE_RE', 'MODULAR_SET_RE', 'MODULAR_CLAUSE_RE', 'hasModularCue',
-  // between-line interval maths
-  'betweenDigitAllowed',
+  // between-line interval maths + bulb pruning + circle segmentation
+  'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
+  'splitBetweenLineAtCircles',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -216,6 +217,80 @@ check('between: {1} & {9} keeps 2..8',
 // Equal solved bulbs {5} & {5} → nothing can be strictly between (contradiction).
 check('between: {5} & {5} keeps nothing',
   [1,2,3,4,5,6,7,8,9].filter((d) => F.betweenDigitAllowed(5, 5, 5, 5, d)), []);
+
+// ── between-line BULB pruning (v3.120) ──────────────────────────────────────
+// The reported board: a straight 4-cell between line in one row — circles at the
+// ends, two interior cells both pencilled {5,7}. Interiors share a row, so they
+// must differ; the circles hold {1,3,6,8,9} and {1,3,6,8}.
+const rowDiffers = () => true;           // both interiors in one row → always distinct
+const twoFives = [[5,7],[5,7]];
+// 6 in a circle is impossible: 6 is neither below 5 nor above 7, so whichever end
+// it takes, one interior has nowhere to go. THE BUG THIS FIXES — the old validator
+// never touched circles, so 6 survived on the board.
+checkFalse('between bulb: 6 impossible against interiors {5,7}+{5,7}',
+  F.betweenBulbDigitAllowed(6, [1,3,6,8], twoFives, rowDiffers));
+// The survivors are exactly the digits that can be the low (<5) or high (>7) end.
+check('between bulb: {1,3,6,8,9} keeps 1,3,8,9',
+  [1,3,6,8,9].filter((d) => F.betweenBulbDigitAllowed(d, [1,3,6,8], twoFives, rowDiffers)),
+  [1,3,8,9]);
+check('between bulb: {1,3,6,8} keeps 1,3,8',
+  [1,3,6,8].filter((d) => F.betweenBulbDigitAllowed(d, [1,3,6,8,9], twoFives, rowDiffers)),
+  [1,3,8]);
+// DISTINCTNESS IS LOAD-BEARING: drop the must-differ relation and 6 comes back
+// (interval (1,6) offers 5 to each interior separately). This case is the reason
+// the feasibility test is a backtracking search and not a per-cell interval check.
+checkTrue('between bulb: without distinctness 6 would survive (why the search exists)',
+  F.betweenBulbDigitAllowed(6, [1,3,6,8], twoFives, () => false));
+// One interior only → no distinctness to exploit; 6 IS possible (6 with an 8 end
+// leaves 7 for the single interior).
+checkTrue('between bulb: single interior {5,7} allows 6',
+  F.betweenBulbDigitAllowed(6, [1,3,6,8], [[5,7]], rowDiffers));
+// A bulb digit with no partner at all — 5 against an opposite bulb of {6} can only
+// span (5,6), which holds no digit.
+checkFalse('between bulb: 5 vs {6} spans an empty interval',
+  F.betweenBulbDigitAllowed(5, [6], [[1,2,3,4,5,6,7,8,9]], rowDiffers));
+// Feasibility directly: (1,6) can seat one {5,7} cell but never two distinct ones.
+checkTrue('interiors feasible: one {5,7} inside (1,6)',
+  F.betweenInteriorsFeasible([[5,7]], rowDiffers, 1, 6));
+checkFalse('interiors feasible: two distinct {5,7} inside (1,6)',
+  F.betweenInteriorsFeasible(twoFives, rowDiffers, 1, 6));
+checkTrue('interiors feasible: two distinct {5,7} inside (3,8)',
+  F.betweenInteriorsFeasible(twoFives, rowDiffers, 3, 8));
+
+// ── splitting a drawn chain at its circles (v3.120) ─────────────────────────
+// `2ad4183iyn` ("41 Circles"): one row-long chain with circles in c1,c3,c5,c7,c9 is
+// FOUR independent between lines, not one nine-cell line.
+const row0 = [0,1,2,3,4,5,6,7,8].map((c) => `${c},0`);
+const circ41 = {}; [0,2,4,6,8].forEach((c) => { circ41[`${c},0`] = 1; });
+check('split: 9-cell chain with 5 circles → 4 segments',
+  F.splitBetweenLineAtCircles(row0, circ41).map((s) => s.join(' ')),
+  ['0,0 1,0 2,0', '2,0 3,0 4,0', '4,0 5,0 6,0', '6,0 7,0 8,0']);
+// Circles only at the ends → the whole chain, one clue (the ordinary case).
+check('split: circles at the ends only → unchanged',
+  F.splitBetweenLineAtCircles(row0, { '0,0': 1, '8,0': 1 }).map((s) => s.join(' ')),
+  [row0.join(' ')]);
+// FALLBACK — fewer than two circles readable → the chain unchanged (pre-v3.120
+// behaviour), never a guessed endpoint.
+check('split: no circles found → chain unchanged (fallback)',
+  F.splitBetweenLineAtCircles(row0, {}).map((s) => s.join(' ')), [row0.join(' ')]);
+check('split: one circle found → chain unchanged (fallback)',
+  F.splitBetweenLineAtCircles(row0, { '4,0': 1 }).map((s) => s.join(' ')), [row0.join(' ')]);
+// A run PAST the last circle has no second bulb → dropped, never validated.
+check('split: tail beyond the last circle is dropped',
+  F.splitBetweenLineAtCircles(row0, { '0,0': 1, '4,0': 1 }).map((s) => s.join(' ')),
+  ['0,0 1,0 2,0 3,0 4,0']);
+
+// ── Dutch-whisper / lockout collision (v3.120, f9a2chdekr + u0cs9m2qmx) ─────
+// A lockout line states the gap between its DIAMONDS, which trips the Dutch cue.
+checkTrue('dutch cue fires on lockout diamond phrasing (the false positive)',
+  F.DUTCH_CUE_RE.test('two connected diamonds must contain numbers with a difference of at least 4'));
+checkTrue('dutch lockout guard: "lie strictly outside the range" (f9a2chdekr)',
+  F.DUTCH_LOCKOUT_RE.test('all digits on the line connecting them must lie strictly outside the range defined by those two numbers'));
+checkTrue('dutch lockout guard: the word lockout (u0cs9m2qmx)',
+  F.DUTCH_LOCKOUT_RE.test('lockout lines: digits on blue lines can not be between or equal to the digits in the diamonds'));
+// …and a genuine Dutch whisper must NOT be demoted by it.
+checkFalse('dutch lockout guard: a real Dutch whisper is untouched',
+  F.DUTCH_LOCKOUT_RE.test('dutch whisper line: digits along an orange line differ by at least 4'));
 // Entropic (v3.85 ANTI traps + v3.88 described-set gated on a line-ish noun)
 checkTrue('entropic cue: named', F.hasEntropicCue('entropic lines: every run of three cells contains a low, a medium and a high digit'));
 // The ANTI guard is applied in classifyEntropicLines, ONE LAYER ABOVE the cue —

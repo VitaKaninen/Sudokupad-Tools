@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.119.0
+// @version      3.120.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.119.0';
+  var SCRIPT_VERSION = '3.120.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4298,7 +4298,8 @@
     // 0-indexed): {type:'dot',a,b} (marker on the shared border), {type:'line'|
     // 'diag',keys} (polyline through cell centres), {type:'thermo',edges,root} (a
     // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb
-    // marker + polyline), {type:'cage',keys} (merged perimeter of the cell set).
+    // marker + polyline), {type:'between',keys} (polyline + a ring on BOTH endpoint
+    // circles), {type:'cage',keys} (merged perimeter of the cell set).
     function showObjects(objs) {
       ensure();
       clearSvg();
@@ -4346,6 +4347,7 @@
         else if (o.type === 'cage') cagePerimeter(o.keys || []);
         else if (o.type === 'dot') { var a = centre(o.a), b = centre(o.b); if (a && b) marker({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, cellPx * 0.16); }
         else if (o.type === 'arrow') { polyline([o.circle].concat(o.shaft || [])); marker(centre(o.circle), cellPx * 0.34); }
+        else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { marker(centre(bk[0]), cellPx * 0.34); marker(centre(bk[bk.length - 1]), cellPx * 0.34); } }
         else if (o.type === 'thermo') { (o.edges || []).forEach(function (e) { seg(centre(e[0]), centre(e[1])); }); marker(centre(o.root), cellPx * 0.30); }
       });
       if (osvg.firstChild) flash(osvg); else osvg.style.display = 'none';
@@ -7249,9 +7251,15 @@
     return m ? (+m[2] - 1) + ',' + (+m[1] - 1) : null;
   }
   // f-puzzles constraint key → our internal line type.
+  // `lockout`/`lockoutline` is read NOT to validate lockout lines (no validator yet)
+  // but as NEGATIVE evidence: a lockout line renders like a between line and its
+  // rules text ("the diamonds must differ by at least 4") trips the DUTCH WHISPER
+  // cue, so knowing which chains the puzzle DECLARES as lockout is what keeps them
+  // out of both. f-puzzles has used both spellings; map each to one type.
   var FPUZ_LINE_CONSTRAINTS = {
     whispers: 'whisper', regionsumline: 'regionsum', entropicline: 'entropic',
-    renbanline: 'renban', thermometer: 'thermo', betweenline: 'between'
+    renbanline: 'renban', thermometer: 'thermo', betweenline: 'between',
+    lockout: 'lockout', lockoutline: 'lockout'
   };
   function getNativeLineClues() {
     var d = getRawPuzzleJson();
@@ -7573,6 +7581,81 @@
     return res;
   }
 
+  // ── Cell-centred CIRCLE markers (shared bulb reader, v3.120) ────────────────
+  // Near-cell-sized, near-CIRCULAR `#overlay`/`#underlay` rects whose centre lands on
+  // a CELL CENTRE. SudokuPad draws every round marker as a rounded <rect> (rx ≈ w/2),
+  // never an <svg:circle>, so this one shape covers arrow bulbs, between-line
+  // endpoint circles and thermo bulbs alike. The centre-on-cell-centre gate is what
+  // keeps Kropki/XV dots (cell BORDER) and quadruple circles (grid CORNER) out;
+  // diamonds (rotated rects, rx = 0) fail the circularity gate.
+  // DOM, not the model: cosmetic model arrays can be stored TRANSPOSED relative to
+  // what is rendered (the v3.83 lesson), and the DOM shares the lines' coordinate
+  // space. Returns [{ cx, cy, r, key }] in SVG pixel space.
+  function getCellCenteredCircles(cs) {
+    var out = [];
+    if (!cs) return out;
+    var N = detectGridSize();
+    document.querySelectorAll('#overlay rect, #underlay rect').forEach(function (r) {
+      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
+      var rx = parseFloat(r.getAttribute('rx') || 0);
+      if (w < cs * 0.55 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;   // near-full-cell only
+      if (Math.abs(rx - w / 2) > w * 0.15) return;                                // must be circular
+      var cx = parseFloat(r.getAttribute('x') || 0) + w / 2;
+      var cy = parseFloat(r.getAttribute('y') || 0) + h / 2;
+      var col = Math.round(cx / cs - 0.5), row = Math.round(cy / cs - 0.5);
+      if (col < 0 || col >= N || row < 0 || row >= N) return;
+      if (Math.abs(cx - (col + 0.5) * cs) > cs * 0.2 ||
+          Math.abs(cy - (row + 0.5) * cs) > cs * 0.2) return;   // centred on a cell (not a quadruple)
+      out.push({ cx: cx, cy: cy, r: w / 2, key: col + ',' + row });
+    });
+    return out;
+  }
+  // The same circles as a { "col,row": 1 } set.
+  function getCellCircleKeySet() {
+    var set = {};
+    getCellCenteredCircles(getGridCellSize()).forEach(function (c) { set[c.key] = 1; });
+    return set;
+  }
+
+  // Split one DRAWN chain into the independent between lines it actually contains.
+  // A between line's constraint runs from one circle to the NEXT circle along the
+  // path, so a setter who threads several circles onto one polyline has drawn
+  // several clues: `2ad4183iyn` ("41 Circles") draws a row-long line with circles in
+  // c1,c3,c5,c7,c9 — FOUR between lines, not one. Validating that as a single clue
+  // treats real endpoints as interior cells and applies the rule across them.
+  // FALLBACK: fewer than two circles found on the chain (no circle layer readable, or
+  // markers we couldn't parse) → the whole chain unchanged, i.e. the pre-v3.120
+  // behaviour. A run past the LAST circle is dropped rather than validated against a
+  // guessed second bulb — never invent an endpoint.
+  function splitBetweenLineAtCircles(keys, circleSet) {
+    var at = [];
+    for (var i = 0; i < keys.length; i++) if (circleSet[keys[i]]) at.push(i);
+    if (at.length < 2) return [keys];
+    var out = [];
+    for (var j = 1; j < at.length; j++) out.push(keys.slice(at[j - 1], at[j] + 1));
+    return out;
+  }
+  // The between-line SEGMENTS a validator acts on: every classified chain split at
+  // its circles, de-duped (either drawn direction is the same clue). Shared by the
+  // compute and the menu eyeball, so the preview can't drift from what runs.
+  // A segment needs two DISTINCT bulbs and ≥1 interior cell to say anything.
+  function betweenSegments(lines) {
+    var circles = getCellCircleKeySet();
+    var out = [], seen = {};
+    (lines || []).forEach(function (keys) {
+      if (!keys || keys.length < 3) return;
+      splitBetweenLineAtCircles(keys, circles).forEach(function (seg) {
+        if (seg.length < 3 || seg[0] === seg[seg.length - 1]) return;
+        var sig = seg.join(' ');
+        if (seen[sig]) return;
+        seen[sig] = 1;
+        seen[seg.slice().reverse().join(' ')] = 1;
+        out.push(seg);
+      });
+    });
+    return out;
+  }
+
   // Entropic lines: every run of THREE consecutive cells on the line holds one LOW,
   // one MID and one HIGH digit — equal thirds of the digit set.
   //
@@ -7849,9 +7932,46 @@
   // whispers"). Leading \b before 4 so a cell reference "…r4c2…" can't trip it.
   var DUTCH_CUE_RE = /(dutch\s+whisper)|(differ(?:ence|s)?[^.]{0,30}?(?:by|of)?\s*(?:at least|a minimum of|minimum of|of at least)?\s*\b(?:4|four)\b)|(minimum difference of (?:4|four))/;
   var DUTCH_CLAUSE_RE = /dutch|differ(?:ence|s)?[^.]{0,30}?\b(?:4|four)\b/;
+  // LOCKOUT-LINE COLLISION (v3.120). A lockout line's rules state the gap between
+  // its two DIAMONDS, not between neighbours along the line — "two connected
+  // diamonds must contain numbers with a difference of at least 4, and all digits on
+  // the line … must lie strictly outside the range" (`f9a2chdekr`, the reported
+  // puzzle) — and that phrasing trips DUTCH_CUE_RE head-on. With one line colour the
+  // cue layer then CONFIDENTLY claimed every lockout line and applied the ≥4
+  // neighbour rule, which is simply a different constraint. Two guards, cheapest
+  // first:
+  //   • the rules carry lockout phrasing → NONE outright (not ambiguous: the ≥4
+  //     belongs to the diamonds, so there is no Dutch whisper here to hand-select).
+  //   • the payload DECLARES lockout chains → drop exactly those lines, which also
+  //     covers a lockout puzzle whose prose never says "lockout"/"outside".
+  // Catalog-measured (2026-07-22): of 118 puzzles matching DUTCH_CUE_RE only 2 also
+  // match the lockout phrasing, and BOTH are pure lockout puzzles (`f9a2chdekr`,
+  // `u0cs9m2qmx`) — no real Dutch whisper is lost. Under-detect, never mis-apply.
+  var DUTCH_LOCKOUT_RE = /lockout|lie\s+(?:strictly\s+)?outside|outside\s+the\s+(?:range|values?|interval)/;
   function classifyDutchWhisperLines() {
     // No native f-puzzles key for Dutch whispers (always cosmetic) → cue/colour only.
-    return classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null);
+    var res = classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null);
+    if (res.mode === 'none') return res;
+    if (DUTCH_LOCKOUT_RE.test(getPuzzleRulesBlob()))
+      return { mode: 'none', lines: [], allLines: res.allLines };
+    return dropNativeLockoutLines(res);
+  }
+  // Remove any chain the f-puzzles payload DECLARES to be a lockout line from a
+  // classification (either drawn direction counts as the same chain). Nothing left →
+  // the whole classification collapses to NONE, so the menu row disappears.
+  function dropNativeLockoutLines(res) {
+    if (res.mode !== 'confident') return res;
+    var lock = nativeLinesFor('lockout');
+    if (!lock) return res;
+    var sigs = {};
+    lock.forEach(function (keys) {
+      sigs[keys.join(' ')] = 1;
+      sigs[keys.slice().reverse().join(' ')] = 1;
+    });
+    var kept = res.lines.filter(function (keys) { return !sigs[keys.join(' ')]; });
+    if (kept.length === res.lines.length) return res;
+    if (kept.length === 0) return { mode: 'none', lines: [], allLines: res.allLines };
+    return { mode: 'confident', lines: kept, allLines: res.allLines };
   }
 
   // ── Renban validator ──────────────────────────────────────────────────────
@@ -9043,20 +9163,9 @@
     var N = detectGridSize();
     function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
 
-    var bulbs = [];
-    document.querySelectorAll('#overlay rect, #underlay rect').forEach(function (r) {
-      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
-      var rx = parseFloat(r.getAttribute('rx') || 0);
-      if (w < cs * 0.55 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;   // near-full-cell only
-      if (Math.abs(rx - w / 2) > w * 0.15) return;                                // must be circular
-      var cx = parseFloat(r.getAttribute('x') || 0) + w / 2;
-      var cy = parseFloat(r.getAttribute('y') || 0) + h / 2;
-      var col = Math.round(cx / cs - 0.5), row = Math.round(cy / cs - 0.5);
-      if (!inGrid(col, row)) return;
-      if (Math.abs(cx - (col + 0.5) * cs) > cs * 0.2 ||
-          Math.abs(cy - (row + 0.5) * cs) > cs * 0.2) return;   // centred on a cell (not a quadruple)
-      bulbs.push({ cx: cx, cy: cy, r: w / 2, key: col + ',' + row });
-    });
+    // Arrow bulbs are ordinary cell-centred circles — same reader the between-line
+    // endpoint circles use, so the two can't drift apart (v3.120).
+    var bulbs = getCellCenteredCircles(cs);
     if (bulbs.length === 0) return [];
 
     var arrowsLayer = document.getElementById('arrows');
@@ -9218,9 +9327,16 @@
 
   // ── Between-line validator ─────────────────────────────────────────────────
   // Every non-endpoint cell on the line must hold a digit STRICTLY between the two
-  // endpoint ("bulb") values. Endpoints = the line's first and last cell (where
-  // the circles sit) for both native and cosmetic lines. Bulb candidates are NEVER
-  // touched (the player's job) — only interior centre candidates are removed.
+  // endpoint ("bulb") values. Endpoints = the SEGMENT's first and last cell, where
+  // the circles sit — see betweenSegments: one drawn chain that threads several
+  // circles is several independent between lines (v3.120).
+  // BOTH DIRECTIONS ARE VALIDATED (v3.120): interior candidates outside the endpoint
+  // interval, and endpoint (circle) candidates no assignment of the interior can
+  // support. Bulbs used to be left alone as "the player's job", which left provable
+  // eliminations on the board — reported case: interiors {5,7} and {5,7} in one row
+  // with circles {1,3,6,8,9} and {1,3,6,8}. 6 is impossible in EITHER circle (6 is
+  // neither below 5 nor above 7, so whichever end it took, one interior would have
+  // nowhere to go), yet it survived.
   //
   // Which bulb is the low end is unknown, so a line digit d is POSSIBLE iff it lies
   // in the open interval spanned by (minA,maxB) OR the one spanned by (maxA,minB) —
@@ -9234,51 +9350,138 @@
     var lo2 = Math.min(maxA, minB), hi2 = Math.max(maxA, minB);
     return (d > lo1 && d < hi1) || (d > lo2 && d < hi2);
   }
-  // Independent of every other validator; single-pass (interior cells constrain
-  // neither each other nor the bulbs, and bulbs are never modified, so there is no
-  // fixpoint to iterate).
+  // Can the interior cells hold digits inside the OPEN interval (lo,hi) ALL AT ONCE?
+  // `sets` = one ascending candidate array per interior cell, `differs(i,j)` = true
+  // when ordinary Sudoku forbids interior cells i and j sharing a digit. A plain
+  // fewest-options-first backtrack — a between line's interior is short (≤ 7 cells
+  // over ≤ 9 digits), so this is exact and costs nothing.
+  //
+  // THE DISTINCTNESS IS THE WHOLE POINT, and it is what a min/max interval test can
+  // never see. Interiors {5,7} and {5,7} in one row against the interval (1,6): each
+  // cell on its own can take 5, so a per-cell test says "fine" — but they cannot BOTH
+  // be 5, so the interval is actually impossible, which is what rules 6 out of the
+  // bulb that produced it. Pure (no board reads) so the harness can test it.
+  // On a node-budget overrun it answers FEASIBLE — under-remove, never mis-apply.
+  function betweenInteriorsFeasible(sets, differs, lo, hi) {
+    var opts = sets.map(function (s) {
+      return s.filter(function (v) { return v > lo && v < hi; });
+    });
+    for (var i = 0; i < opts.length; i++) if (opts[i].length === 0) return false;
+    var order = opts.map(function (_, n) { return n; })
+                    .sort(function (a, b) { return opts[a].length - opts[b].length; });
+    var val = new Array(opts.length), budget = 20000;
+    function place(n) {
+      if (n === order.length) return true;
+      if (--budget < 0) return true;
+      var self = order[n];
+      for (var k = 0; k < opts[self].length; k++) {
+        var v = opts[self][k], ok = true;
+        for (var m = 0; m < n; m++) {
+          var prev = order[m];
+          if (val[prev] === v && differs(self, prev)) { ok = false; break; }
+        }
+        if (!ok) continue;
+        val[self] = v;
+        if (place(n + 1)) return true;
+      }
+      return false;
+    }
+    return place(0);
+  }
+  // Is digit `d` still possible in ONE bulb (circle) of a between line? Only if some
+  // value of the OPPOSITE bulb brackets an interval the interiors can all satisfy at
+  // once. `other` = the opposite bulb's candidate array, `sets`/`differs` as above.
+  // Pure helper, harness-testable.
+  function betweenBulbDigitAllowed(d, other, sets, differs) {
+    for (var i = 0; i < other.length; i++) {
+      var b = other[i];
+      if (betweenInteriorsFeasible(sets, differs, Math.min(d, b), Math.max(d, b))) return true;
+    }
+    return false;
+  }
+  // Independent of every other validator, but ITERATED TO A FIXPOINT since v3.120:
+  // now that bulbs are pruned too the two directions feed each other — a narrowed
+  // bulb tightens the interior interval, and a narrowed interior can kill a bulb
+  // candidate — and segments that share a circle propagate through it.
   function computeBetweenLineRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
     var cls = classifyBetweenLines();
     if (cls.mode === 'none') return { noBetween: true };
-    var resolved = resolveCueValidatorLines(cls, unitFilter);
+    // unitFilter is applied to the SEGMENTS, not the drawn chains: after the v3.120
+    // split a segment IS the clue, so "validate selection only" must judge each one
+    // on its own (selecting one circle-to-circle run of a long line checks that run).
+    var resolved = resolveCueValidatorLines(cls, null);
     if (resolved.needSelection) return { noBetween: true, needSelection: true };
-    var lines = resolved.lines;
-    if (!lines || lines.length === 0) return { noBetween: true };
+    var lines = betweenSegments(resolved.lines);
+    if (unitFilter) lines = lines.filter(function (keys) { return unitFilter(keys); });
+    if (lines.length === 0) return { noBetween: true };
+    var masked = resolved.masked, selection = resolved.selection;
+    var isFogged = getFogTester();
+    var mustDiffer = makeMustDiffer();
 
     var values = st.values, fullSet = st.fullSet;
     var work = {};
     Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    // A cell's READABLE candidates — a fogged cell reads as the full set (hidden
+    // marks must never force a removal), else its value / working marks / full set.
     function cellSet(key) {
+      if (isFogged && isFogged(key)) return fullSet;
       if (values[key] != null) return new Set([values[key]]);
       if (work[key]) return work[key];
       return fullSet;                                    // empty bulb → unconstrained
     }
-    function minOf(s) { return Math.min.apply(null, Array.from(s)); }
-    function maxOf(s) { return Math.max.apply(null, Array.from(s)); }
+    // May we DELETE candidates from cell C? Never from a fogged cell; when masked
+    // (ambiguous hand-selection), only from cells inside the selection.
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    function asc(s) { return Array.from(s).sort(function (a, b) { return a - b; }); }
 
-    var removals = [], seen = {};
-    lines.forEach(function (keys) {
-      if (!keys || keys.length < 3) return;              // need 2 bulbs + ≥1 interior
-      var aSet = cellSet(keys[0]), bSet = cellSet(keys[keys.length - 1]);
-      if (aSet.size === 0 || bSet.size === 0) return;
-      var minA = minOf(aSet), maxA = maxOf(aSet), minB = minOf(bSet), maxB = maxOf(bSet);
-      for (var i = 1; i < keys.length - 1; i++) {
-        var key = keys[i];
-        if (values[key] != null || !work[key]) continue; // solved / empty interior untouched
-        Array.from(work[key]).forEach(function (d) {     // snapshot: set mutates in loop
-          if (!betweenDigitAllowed(minA, maxA, minB, maxB, d)) {
-            work[key].delete(d);
-            var sk = key + '/' + d;
-            if (!seen[sk]) { seen[sk] = 1; removals.push({ cellKey: key, digit: String(d) }); }
-          }
+    var removals = [], seen = {}, changed = true, guard = 0;
+    function drop(key, d) {
+      work[key].delete(d);
+      var sk = key + '/' + d;
+      if (!seen[sk]) { seen[sk] = 1; removals.push({ cellKey: key, digit: String(d) }); }
+      changed = true;
+    }
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lines.forEach(function (keys) {
+        var aKey = keys[0], bKey = keys[keys.length - 1];
+        var aSet = cellSet(aKey), bSet = cellSet(bKey);
+        if (aSet.size === 0 || bSet.size === 0) return;
+        var inner = keys.slice(1, -1);
+        var innerSets = inner.map(function (k) { return asc(cellSet(k)); });
+        if (innerSets.some(function (s) { return s.length === 0; })) return;
+        function differs(i, j) { return mustDiffer(inner[i], inner[j]); }
+
+        // 1. INTERIORS — d survives iff it lies in one of the two cross-intervals.
+        var minA = Math.min.apply(null, asc(aSet)), maxA = Math.max.apply(null, asc(aSet));
+        var minB = Math.min.apply(null, asc(bSet)), maxB = Math.max.apply(null, asc(bSet));
+        inner.forEach(function (key) {
+          if (values[key] != null || !work[key] || !mayRemove(key)) return;   // solved / empty / protected
+          Array.from(work[key]).forEach(function (d) {   // snapshot: set mutates in loop
+            if (!betweenDigitAllowed(minA, maxA, minB, maxB, d)) drop(key, d);
+          });
         });
-      }
-    });
+
+        // 2. BULBS — re-read the interiors first, step 1 may just have shrunk them.
+        var live = inner.map(function (k) { return asc(cellSet(k)); });
+        [[aKey, bSet], [bKey, aSet]].forEach(function (pair) {
+          var key = pair[0], other = asc(pair[1]);
+          if (values[key] != null || !work[key] || !mayRemove(key)) return;
+          Array.from(work[key]).forEach(function (d) {
+            if (!betweenBulbDigitAllowed(d, other, live, differs)) drop(key, d);
+          });
+        });
+      });
+    }
 
     var emptied = 0;
-    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
 
     return { removals: removals, betweenCount: lines.length, emptiedCells: emptied };
   }
@@ -9365,6 +9568,11 @@
   //      half-checked). Line validators: reuse resolveCueValidatorLines + one of the
   //      shared engines (computeBandLineRemovals / computeWhisperLikeRemovals) — a
   //      new line type is usually a near-clone of an existing one.
+  //      A DRAWN CHAIN IS NOT ALWAYS ONE CLUE (v3.120): if the constraint is bounded
+  //      by markers (between-line circles, lockout diamonds), a setter may thread
+  //      several onto one polyline — split it (betweenSegments /
+  //      splitBetweenLineAtCircles + getCellCenteredCircles) and apply unitFilter to
+  //      the SEGMENTS, or the rule gets applied across real endpoints.
   //   2. Detection, one of two shapes (the menu lists only detected validators;
   //      re-evaluated per menu open so late model loads / SPA navigation stay correct):
   //        • LINE validators → a `classify` field = your classify*Lines() fn.
@@ -9478,6 +9686,16 @@
       case 'little killer': getLittleKillers().forEach(function (lk) { out.push({ type: 'diag', keys: lk.keys }); }); break;
       case 'thermo':        getThermos().forEach(function (t) { out.push({ type: 'thermo', edges: t.edges, root: t.root, keys: t.keys }); }); break;
       case 'sum arrow':     getSumArrows().forEach(function (a) { out.push({ type: 'arrow', circle: a.circle, shaft: a.shaft }); }); break;
+      // Between lines get their own case (v3.120) rather than the generic line
+      // branch: what a click validates is the SEGMENTS (one drawn chain threading
+      // several circles is several clues), and the endpoint CIRCLES are now part of
+      // what the run alters, so the preview rings them instead of drawing a bare
+      // polyline through them. Same betweenSegments() the compute reads.
+      case 'between':
+        var bcls = validatorClassify(def);
+        if (bcls && bcls.mode === 'confident')
+          betweenSegments(bcls.lines).forEach(function (seg) { out.push({ type: 'between', keys: seg }); });
+        break;
       default:
         // Only CONFIDENTLY-identified lines are validated on a plain click, so those
         // are the only ones previewed. Ambiguous → nothing (a click removes nothing).
