@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.122.0
+// @version      3.123.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.122.0';
+  var SCRIPT_VERSION = '3.123.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -270,6 +270,8 @@
     kropkiConsecLabelRotate:      false,  // rotate that label 90° when dot is on a horizontal border
     kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
+
+    zipperCenterDotEnabled:       true,   // draw the fold centre on zipper lines the setter left unmarked
 
     selectionBorderEnabled:       true,    // "Border" subsection: restyle the selection cage stroke (colour/opacity/width) + grow/offset
     selectionColor:               '#3399ff',
@@ -729,7 +731,7 @@
     darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); disambiguateShadedColors(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); disambiguateShadedColors(svg); drawZipperCenterDots(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -2199,6 +2201,7 @@
     fixAllKropkiClueShapes(svg);
     rebuildKropkiLabels(svg);
     disambiguateShadedColors(svg);
+    drawZipperCenterDots(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
     scheduleAutoShade();   // auto-enable Shaded mode if this puzzle has extra regions
@@ -2229,6 +2232,7 @@
       var el = node.nodeType === 1 ? node : node.parentElement;   // text nodes: judge by parent
       if (!el || !el.closest) return 'full';
       if (el.getAttribute && el.getAttribute('data-spdr-kropki-label')) return 'none';
+      if (el.getAttribute && el.getAttribute('data-spdr-zipper-dot') != null) return 'none';
       if (el.closest('[data-spdr-region-split]')) return 'none';
       if (el.closest('#cell-candidates, #cell-pencilmarks, #cell-highlights')) return 'none';
       if (el.closest('#cell-values')) return 'digits';
@@ -2241,7 +2245,7 @@
       var work = pendingWork;
       pendingWork = 0;
       if (work & WORK_FULL) {
-        fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); scheduleAutoShade();
+        fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); drawZipperCenterDots(svg); scheduleAutoShade();
       } else if (work & WORK_DIGITS) {
         fixAllUserDigits(svg);
       }
@@ -4299,7 +4303,8 @@
     // 'diag',keys} (polyline through cell centres), {type:'thermo',edges,root} (a
     // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb ring +
     // polyline + an arrowhead chevron at the tip), {type:'between',keys} (polyline + a
-    // ring on BOTH endpoint circles), {type:'cage',keys} (merged perimeter of the cell
+    // ring on BOTH endpoint circles), {type:'zipper',keys} (polyline + a disc at the
+    // fold centre), {type:'cage',keys} (merged perimeter of the cell
     // set). Rings on 'arrow'/'between' MATCH the drawn circle's real centre + radius
     // when one is there (see ringCell), so the highlight lands on the clue.
     function showObjects(objs) {
@@ -4327,6 +4332,16 @@
         c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y); c.setAttribute('r', rPx);
         c.setAttribute('fill', 'none'); c.setAttribute('stroke', STROKE); c.setAttribute('stroke-width', '3'); c.setAttribute('stroke-opacity', '1');
         c.style.cssText = 'fill:none !important;stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
+        osvg.appendChild(c);
+      }
+      // Solid disc — a POINT rather than a region, so it doesn't read as "this cell".
+      // Used for the zipper fold centre, which often lands on an edge or a corner.
+      function disc(pt, rPx) {
+        if (!pt) return;
+        var c = document.createElementNS(NS, 'circle');
+        c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y); c.setAttribute('r', rPx);
+        c.setAttribute('fill', STROKE); c.setAttribute('fill-opacity', '1');
+        c.style.cssText = 'fill:' + STROKE + ' !important;fill-opacity:1 !important;';
         osvg.appendChild(c);
       }
       function polyline(keys) { for (var i = 1; i < keys.length; i++) seg(centre(keys[i - 1]), centre(keys[i])); }
@@ -4358,9 +4373,12 @@
       }
       // Chevron at p2 pointing away from p1 — the arrowhead the shaft polyline alone
       // never showed, so a sum arrow reads as an arrow and its direction is visible.
+      // `spread` is the HALF-angle off the shaft, so the angle BETWEEN the two legs
+      // is 2·spread: π/4 gives the 90° head SudokuPad draws on its own arrows (the
+      // old 0.42 rad made a 48° head that read as a different, narrower arrowhead).
       function arrowHead(p1, p2, sizePx) {
         if (!p1 || !p2) return;
-        var ang = Math.atan2(p2.y - p1.y, p2.x - p1.x), spread = 0.42;
+        var ang = Math.atan2(p2.y - p1.y, p2.x - p1.x), spread = Math.PI / 4;
         seg(p2, { x: p2.x + Math.cos(ang + Math.PI - spread) * sizePx, y: p2.y + Math.sin(ang + Math.PI - spread) * sizePx });
         seg(p2, { x: p2.x + Math.cos(ang + Math.PI + spread) * sizePx, y: p2.y + Math.sin(ang + Math.PI + spread) * sizePx });
       }
@@ -4375,6 +4393,23 @@
           if (ak.length > 1) arrowHead(centre(ak[ak.length - 2]), centre(ak[ak.length - 1]), cellPx * 0.30);
         }
         else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { ringCell(bk[0], cellPx * 0.34); ringCell(bk[bk.length - 1], cellPx * 0.34); } }
+        // Zipper: the FOLD CENTRE is what the clue turns on, so mark it — a
+        // Kropki-sized disc at the middle cell (odd chain) or at the midpoint
+        // between the two middle cells (even chain: an edge, or a corner where the
+        // line turns). Same fold computeZipperRemovals uses.
+        else if (o.type === 'zipper') {
+          var zk = o.keys || [];
+          polyline(zk);
+          if (zk.length > 1) {
+            var zL = zk.length, zc;
+            if (zL % 2 === 1) zc = centre(zk[(zL - 1) / 2]);
+            else {
+              var za = centre(zk[zL / 2 - 1]), zb = centre(zk[zL / 2]);
+              zc = (za && zb) ? { x: (za.x + zb.x) / 2, y: (za.y + zb.y) / 2 } : null;
+            }
+            disc(zc, cellPx * 0.11);
+          }
+        }
         else if (o.type === 'thermo') { (o.edges || []).forEach(function (e) { seg(centre(e[0]), centre(e[1])); }); marker(centre(o.root), cellPx * 0.30); }
       });
       if (osvg.firstChild) flash(osvg); else osvg.style.display = 'none';
@@ -7286,6 +7321,7 @@
   var FPUZ_LINE_CONSTRAINTS = {
     whispers: 'whisper', regionsumline: 'regionsum', entropicline: 'entropic',
     renbanline: 'renban', thermometer: 'thermo', betweenline: 'between',
+    zipperline: 'zipper',
     lockout: 'lockout', lockoutline: 'lockout'
   };
   function getNativeLineClues() {
@@ -7561,12 +7597,18 @@
   // Zipper lines: fold the line at its centre — every pair of cells equidistant
   // from the centre sums to one constant total S; for an odd-length line the lone
   // centre cell IS S. Cue = "zipper", or "equal distance from the cent(re)" /
-  // "equidistant … cent(re)" phrasing. Cue-gated like renban (no native key, and
-  // its colour — often blue/purple — collides with other cosmetic lines). Clause
-  // trigger for the named-colour layer: zipper / equidistant / equal distance.
+  // "equidistant … cent(re)" phrasing. Clause trigger for the named-colour layer:
+  // zipper / equidistant / equal distance.
+  //
+  // f-puzzles DOES declare zipper lines natively (`zipperline`, same {lines:[…]}
+  // shape as the other constraint keys — confirmed on `2nnlhao8xm`, `4qt4n1bnz3`,
+  // `philip-newman/20240427-zippee-ki-yay`), so layer 0 applies here like it does to
+  // renban/whisper. It is RARE (3 of the catalog's 64 zipper puzzles carry the key;
+  // most f-puzzles zippers are flattened to plain `line` entries with no
+  // fromConstraint label), so the cue+colour ladder below stays load-bearing.
   var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
   var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
-  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE); }
+  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE, 'zipper'); }
 
   // Between lines: every non-endpoint cell holds a digit STRICTLY between the two
   // endpoint ("bulb") circle values. In f-puzzles a between line is a first-class
@@ -7642,6 +7684,127 @@
     var set = {};
     getCellCenteredCircles(getGridCellSize()).forEach(function (c) { set[c.key] = 1; });
     return set;
+  }
+
+  // ── Zipper fold-centre dot (v3.123) ─────────────────────────────────────────
+  // A zipper line folds at its geometric centre, and that centre is the one thing
+  // the drawing doesn't show: most setters mark it with a small circle (`k9mm1xgca5`
+  // "The Zip that Zips the Zips" marks every one; `w9gvte9pxw` "Aad-van-ced Zippers"
+  // marks two of three), but plenty mark none at all (`2nnlhao8xm`, `4qt4n1bnz3`),
+  // leaving the solver to count cells every time they read the clue. Where a
+  // CONFIDENTLY-classified zipper has no cosmetic object at its centre, draw one.
+  //
+  // It must read as part of the clue, not as an extra constraint, so it takes the
+  // LINE's own colour and a diameter of twice the line's stroke width.
+  //
+  // GEOMETRY = the validator's fold, exactly (computeZipperRemovals pairs keys[i]
+  // with keys[L-1-i]): an ODD-length chain centres on its middle cell; an EVEN one
+  // on the midpoint between the two middle cells — a cell EDGE for a straight line,
+  // a grid CORNER where the line turns there. Setters draw it the same way: that
+  // puzzle stores a 4-cell circle (R2C6/R2C7/R3C6/R3C7) for a chain that folds on a
+  // corner, and 2-cell circles for edge folds.
+  //
+  // Colour + width come from the DOM <path>, read AFTER fixAllLines has run, so the
+  // dot tracks the line's ON-SCREEN colour (object shading rewrites the stroke) and
+  // its real rendered width — the model's `thickness` is in units we'd have to
+  // guess at, and the model can be stored transposed (the v3.83 trap). A chain with
+  // no matching DOM path is SKIPPED: under-draw, never guess a colour.
+  function zipperLineDomPaths(cs) {
+    var out = [];
+    if (!cs) return out;
+    var N = detectGridSize();
+    function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
+    LINE_DOM_LAYER_IDS.forEach(function (id) {
+      var layer = document.getElementById(id);
+      if (!layer) return;
+      layer.querySelectorAll('path').forEach(function (p) {
+        if (!isLineCluePath(p)) return;
+        var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
+        if (!nums) return;
+        var wp = [];
+        for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
+        if (wp.length < 2) return;
+        var keys = expandLineChain(wp);
+        if (keys.length < 2 || !keys.every(inGrid)) return;
+        out.push({ el: p, keys: keys });
+      });
+    });
+    return out;
+  }
+  // Every SMALL cosmetic shape in #overlay/#underlay as its centre point, in SVG
+  // user space. Deliberately looser than getCellCenteredCircles (which demands a
+  // near-cell-sized circle centred on a cell): a zipper centre marker is typically
+  // 0.4 cells across and may sit on a cell EDGE or a grid CORNER, and it needn't be
+  // a circle — any object the setter put there means "the centre is marked".
+  function smallCosmeticMarkerPoints(cs) {
+    var out = [];
+    if (!cs) return out;
+    document.querySelectorAll('#overlay rect, #underlay rect, #overlay circle, #underlay circle').forEach(function (el) {
+      if (el.getAttribute('data-spdr-zipper-dot') != null) return;     // our own dot
+      var cx, cy, w, h;
+      if (el.tagName.toLowerCase() === 'circle') {
+        var r = parseFloat(el.getAttribute('r') || 0);
+        cx = parseFloat(el.getAttribute('cx') || 0); cy = parseFloat(el.getAttribute('cy') || 0);
+        w = h = r * 2;
+      } else {
+        w = parseFloat(el.getAttribute('width') || 0); h = parseFloat(el.getAttribute('height') || 0);
+        cx = parseFloat(el.getAttribute('x') || 0) + w / 2;
+        cy = parseFloat(el.getAttribute('y') || 0) + h / 2;
+      }
+      if (!(w > 0) || !(h > 0) || w > cs * 0.85 || h > cs * 0.85) return;   // clue-sized markers only
+      out.push({ x: cx, y: cy });
+    });
+    return out;
+  }
+  function drawZipperCenterDots(svg) {
+    if (!svg) svg = document.getElementById('svgrenderer');
+    if (!svg) return;
+    svg.querySelectorAll('[data-spdr-zipper-dot]').forEach(function (el) { el.remove(); });
+    if (!settings.zipperCenterDotEnabled) return;
+    var cs = getGridCellSize();
+    if (!cs) return;
+    var cls;
+    try { cls = classifyZipperLines(); } catch (e) { return; }
+    if (!cls || cls.mode !== 'confident' || !cls.lines || cls.lines.length === 0) return;
+
+    // Chain → the <path> that draws it. Both orientations: the classifier's chain
+    // and the path's own point order can run opposite ways.
+    var byChain = {};
+    zipperLineDomPaths(cs).forEach(function (info) {
+      var fwd = info.keys.join(' '), rev = info.keys.slice().reverse().join(' ');
+      if (!byChain[fwd]) byChain[fwd] = info;
+      if (!byChain[rev]) byChain[rev] = info;
+    });
+    var marks = smallCosmeticMarkerPoints(cs);
+    var NS = 'http://www.w3.org/2000/svg';
+    var TOL = cs * 0.3;                       // "already marked" radius around the fold point
+
+    cls.lines.forEach(function (keys) {
+      if (!keys || keys.length < 2) return;
+      var info = byChain[keys.join(' ')];
+      if (!info || !info.el.parentNode) return;
+      function ctr(k) { var p = String(k).split(','); return [(+p[0] + 0.5) * cs, (+p[1] + 0.5) * cs]; }
+      var L = keys.length, cx, cy;
+      if (L % 2 === 1) { var m = ctr(keys[(L - 1) / 2]); cx = m[0]; cy = m[1]; }
+      else { var a = ctr(keys[L / 2 - 1]), b = ctr(keys[L / 2]); cx = (a[0] + b[0]) / 2; cy = (a[1] + b[1]) / 2; }
+      if (marks.some(function (p) { return Math.abs(p.x - cx) < TOL && Math.abs(p.y - cy) < TOL; })) return;
+
+      var st = window.getComputedStyle(info.el);
+      var col = st.stroke, w = parseFloat(st.strokeWidth);
+      if (!col || col === 'none' || !isFinite(w) || w <= 0) return;
+      var dot = document.createElementNS(NS, 'circle');
+      dot.setAttribute('data-spdr-zipper-dot', '1');
+      dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
+      dot.setAttribute('r', w);                                        // diameter = 2× the line width
+      dot.setAttribute('pointer-events', 'none');
+      dot.style.setProperty('fill', col, 'important');
+      var op = parseFloat(st.strokeOpacity);
+      if (isFinite(op) && op < 1) dot.style.setProperty('fill-opacity', String(op), 'important');
+      info.el.parentNode.appendChild(dot);
+      // A dot we just drew must itself count as "marked" — two zippers can share a
+      // fold point (crossing lines), and the second must not double-paint it.
+      marks.push({ x: cx, y: cy });
+    });
   }
 
   // ── Between lines: THE DRAWN POLYLINE IS NOT THE CLUE (v3.121) ──────────────
@@ -9771,7 +9934,7 @@
   }
   // Clue-object descriptors for spdrHi.showObjects: {type:'dot',a,b},
   // {type:'line'|'diag',keys}, {type:'cage',keys}, {type:'arrow',circle,shaft},
-  // {type:'thermo',edges,root}.
+  // {type:'thermo',edges,root}, {type:'between',keys}, {type:'zipper',keys}.
   function validatorClueObjects(def) {
     var out = [];
     switch (def.name) {
@@ -9790,6 +9953,14 @@
         var bcls = validatorClassify(def);
         if (bcls && bcls.mode === 'confident')
           betweenSegments(bcls.lines).forEach(function (seg) { out.push({ type: 'between', keys: seg }); });
+        break;
+      // Zipper gets its own case so the preview shows the FOLD CENTRE (a bare
+      // polyline hides the one thing the clue is about). Same classify() the
+      // compute reads, so the preview can't drift from what runs.
+      case 'zipper':
+        var zcls = validatorClassify(def);
+        if (zcls && zcls.mode === 'confident')
+          (zcls.lines || []).forEach(function (keys) { out.push({ type: 'zipper', keys: keys }); });
         break;
       default:
         // Only CONFIDENTLY-identified lines are validated on a plain click, so those
@@ -11206,6 +11377,17 @@
     });
   }
 
+  // Settings panel — "Zipper centre dots" section (v3.123).
+  function buildZipperSection() {
+    return buildSection({
+      enabledKey: 'zipperCenterDotEnabled',
+      label: 'Zipper centre dots',
+      desc: 'Mark the fold point of a zipper line the setter left unmarked, in the line’s own colour. Lines that already carry a centre marker are left alone.',
+      hasColor: false,
+      resetKeys: ['zipperCenterDotEnabled'],
+    });
+  }
+
   // Settings panel — "Label background" section (extracted from buildSettingsUI, v3.105).
   function buildLabelBgSection() {
     return buildSection({
@@ -11351,6 +11533,8 @@
     content.appendChild(buildObjectShadingSection());
 
     content.appendChild(buildKropkiSection());
+
+    content.appendChild(buildZipperSection());
 
     content.appendChild(buildLabelBgSection());
 

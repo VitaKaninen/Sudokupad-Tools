@@ -508,6 +508,21 @@ Both iterate to a fixpoint, honour fog per-cell, follow the emptied-cell→red-c
 in `constraintValidators()`; `detect: parityDetected`/`zipperDetected`; ambiguous-detection ⚠ menu
 notes wired like renban/region-sum.
 
+**Zipper layer 0 (v3.123):** f-puzzles DOES declare zipper lines natively — key `zipperline`, same
+`{lines:[[ "R3C6", … ]]}` shape as the other constraint keys (confirmed on `2nnlhao8xm`,
+`4qt4n1bnz3`, `philip-newman/20240427-zippee-ki-yay`), so `zipperline: 'zipper'` is in
+`FPUZ_LINE_CONSTRAINTS` and `classifyZipperLines` passes `'zipper'` as `nativeType`. It is **rare**
+— 3 of the catalog's 64 zipper-tagged puzzles carry the key; the rest of the f-puzzles ones are
+flattened to plain `line` entries with no `fromConstraint` label to read — so the cue+colour ladder
+stays load-bearing and this is purely additive precision.
+
+**Zipper eyeball = polyline + a disc at the FOLD CENTRE (v3.123).** A bare polyline hides the one
+thing a zipper is about, so `{type:'zipper',keys}` draws a Kropki-sized filled disc (`disc()` in
+`showObjects`, `cellPx*0.11`) at the fold point — the middle cell on an odd chain, the midpoint of
+the two middle cells on an even one (a cell EDGE when the line runs straight through, a grid CORNER
+where it turns). Same fold `computeZipperRemovals` uses. The *rendering* counterpart that adds a
+permanent centre dot to unmarked zippers is `drawZipperCenterDots` — see PROJECT_SUMMARY.
+
 ## Entropic-line validator
 
 **Entropic-line validator (v3.85; digit-set gate + Squishdoku v3.86 — cue-gated cosmetic line, same

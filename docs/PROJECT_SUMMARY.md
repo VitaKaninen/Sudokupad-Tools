@@ -478,13 +478,23 @@ way so it stays low-maintenance.
   column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).
+- **Zipper centre dot (v3.123):** `drawZipperCenterDots` (+ helpers `zipperLineDomPaths`,
+  `smallCosmeticMarkerPoints`) — a *rendering* feature, not a validator: where a confidently
+  classified zipper line has no cosmetic object at its fold centre, it injects a
+  `[data-spdr-zipper-dot]` `<circle>` in the line's own rendered colour, diameter = 2× the line's
+  stroke width. Runs at the tail of the render pipeline (`applySettings`, `startLabelRectPatch`,
+  the observer's `flushFixes` WORK_FULL branch) so it reads the stroke **after** `fixAllLines` has
+  shaded it; its own nodes are classified `'none'` in `classifyAddedNode` so they can't re-trigger a
+  sweep. Fold geometry is identical to `computeZipperRemovals` (odd chain → middle cell; even →
+  midpoint of the two middle cells, i.e. a cell edge or a grid corner). Setting:
+  `zipperCenterDotEnabled`.
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
   `reorderCornerCell`/`startCornerReflowPatch` (corner), `fixCenterTspan`/`fixCornerText` (validity
   colours).
 - **Settings UI:** `buildSettingsUI` (panel scaffolding, the action-buttons/digit-set area, Reset
   all, open/close) + one extracted builder per panel section (v3.105):
   `buildRegionBordersSection` / `buildDigitsSection` / `buildPencilmarksSection` /
-  `buildObjectShadingSection` / `buildKropkiSection` / `buildLabelBgSection` /
+  `buildObjectShadingSection` / `buildKropkiSection` / `buildZipperSection` / `buildLabelBgSection` /
   `buildCellShadingSection` / `buildCellSelectionSection` — each returns `buildSection({…})`; grep
   the builder name to land on that section's config. Sections are either **master** (a top-level
   on/off checkbox = `enabledKey`; **collapses** its sub-content when unchecked — only the header
