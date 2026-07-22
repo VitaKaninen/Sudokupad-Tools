@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.114.0
+// @version      3.115.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.114.0';
+  var SCRIPT_VERSION = '3.115.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5153,6 +5153,16 @@
     if (col) col.style.width = rightColW() + 'px';
     updateRightColCss();
     applyControlsWidthCap();
+    // Opening/closing the validate menu re-caps #controls, which reflows the rules
+    // block to a new WIDTH — and therefore a new HEIGHT. SudokuPad's own App.resize
+    // (P.resize; see LESSONS_LEARNED "empty band right of the controls") scales the
+    // control block to fit a region whose height is BOARD-derived but whose *fit* is
+    // bounded by controlsBounds.height = the rules block. It only recomputes on a
+    // window resize, so until then the gear/version/credit line sit at the stale
+    // pre-reflow scale (gap at the bottom when the menu opens; content pushed off the
+    // bottom when it closes) — "resizing the window fixes it". Re-run it ourselves by
+    // firing the same resize event, on rAF so the rules reflow has settled first.
+    requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
   }
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
@@ -11353,9 +11363,9 @@
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
-    // Mode indicator. Only shown on puzzles that have shaded regions, where the
-    // button cycles Both / Regions / Shaded. On normal puzzles the border glow
-    // alone conveys on/off, so this stays hidden.
+    // Mode indicator. Shown whenever a mode is active, naming the current step of the
+    // 4-state cycle (Regions / Extra / Both). On the off state it stays hidden and the
+    // border glow alone conveys on/off.
     var modeLbl = document.createElement('div');
     Object.assign(modeLbl.style, {
       fontSize: '9px', fontWeight: '700', lineHeight: '1', letterSpacing: '0.3px',
@@ -11469,6 +11479,73 @@
       hideCard();
     }, true);
 
+    // ── Hover explainer ───────────────────────────────────────────────────────
+    // A read-only popover listing the four cycle states with the current one picked
+    // out in the accent colour. Shown on hover, hidden on leave; suppressed while the
+    // opacity card is open so the two never overlap above the button.
+    var MODE_INFO = [
+      ['Off',     'no automatic shading'],
+      ['Regions', 'shade the main regions — the 3×3 boxes, or a variant’s irregular regions'],
+      ['Extra',   'shade only the extra regions — windows, cages and the like that use every digit once'],
+      ['Both',    'shade the main regions and the extra regions'],
+    ];
+    var hoverInfo = document.createElement('div');
+    hoverInfo.id = 'sp-easy-shade-info';
+    Object.assign(hoverInfo.style, {
+      position:   'fixed',
+      display:    'none',
+      background: '#1e1e2e',
+      border:     '1px solid ' + borderCol,
+      borderRadius: borderRad,
+      padding:    '10px 12px',
+      zIndex:     '999998',
+      maxWidth:   '260px',
+      boxShadow:  '0 4px 16px rgba(0,0,0,0.5)',
+      fontFamily: 'system-ui, -apple-system, sans-serif',
+      fontSize:   '11px',
+      lineHeight: '1.45',
+      pointerEvents: 'none',
+    });
+    document.body.appendChild(hoverInfo);
+
+    function currentModeIndex() {
+      var reg = !!settings.regionColorFillEnabled, shd = !!settings.shadedRegionColorEnabled;
+      return (reg && shd) ? 3 : (shd ? 2 : (reg ? 1 : 0));
+    }
+    function renderHoverInfo() {
+      while (hoverInfo.firstChild) hoverInfo.removeChild(hoverInfo.firstChild);
+      var head = document.createElement('div');
+      head.textContent = 'Easy Shade — click to cycle:';
+      Object.assign(head.style, { color: accentCol, fontWeight: '700', marginBottom: '6px' });
+      hoverInfo.appendChild(head);
+      var cur = currentModeIndex();
+      MODE_INFO.forEach(function (m, i) {
+        var row = document.createElement('div');
+        row.style.marginTop = i ? '3px' : '0';
+        var name = document.createElement('span');
+        name.textContent = m[0];
+        Object.assign(name.style, { fontWeight: '700', color: i === cur ? accentCol : '#cdd6f4' });
+        var rest = document.createElement('span');
+        rest.textContent = ' — ' + m[1];
+        rest.style.color = i === cur ? '#cdd6f4' : '#a6adc8';
+        row.appendChild(name); row.appendChild(rest);
+        hoverInfo.appendChild(row);
+      });
+    }
+    function positionHoverInfo() {
+      var r = btn.getBoundingClientRect();
+      hoverInfo.style.bottom = (window.innerHeight - r.top + 8) + 'px';
+      hoverInfo.style.right  = (window.innerWidth  - r.right)  + 'px';
+      hoverInfo.style.top    = 'auto';
+      hoverInfo.style.left   = 'auto';
+    }
+    btn.addEventListener('mouseenter', function () {
+      if (card.style.display !== 'none') return;   // opacity card is open — don't overlap it
+      renderHoverInfo(); positionHoverInfo();
+      hoverInfo.style.display = 'block';
+    });
+    btn.addEventListener('mouseleave', function () { hoverInfo.style.display = 'none'; });
+
     // ── Toggle style ──────────────────────────────────────────────────────────
     function applyToggleStyle() {
       var reg    = !!settings.regionColorFillEnabled;
@@ -11483,9 +11560,11 @@
         btn.style.setProperty('box-shadow', 'none',                    'important');
         hideCard();
       }
-      // Mode indicator — only meaningful on puzzles with shaded regions.
-      if (active && puzzleHasShadedRegions()) {
-        modeLbl.textContent = (reg && shd) ? 'Both' : (reg ? 'Regions' : 'Shaded');
+      // Mode indicator — shown whenever a mode is active, so the 4-state cycle is
+      // legible even on puzzles with no extra regions (where Extra/Both paint nothing
+      // extra but the state still advances).
+      if (active) {
+        modeLbl.textContent = (reg && shd) ? 'Both' : (reg ? 'Regions' : 'Extra');
         modeLbl.style.display = 'block';
       } else {
         modeLbl.style.display = 'none';
@@ -11502,16 +11581,21 @@
     btn.addEventListener('click', function () {
       var reg = !!settings.regionColorFillEnabled;
       var shd = !!settings.shadedRegionColorEnabled;
-      if (puzzleHasShadedRegions()) {
-        // 4-state cycle: off → Shaded → Regions → Both → off.
-        if      (!reg && !shd) { reg = false; shd = true;  }
-        else if (!reg &&  shd) { reg = true;  shd = false; }
-        else if ( reg && !shd) { reg = true;  shd = true;  }
-        else                   { reg = false; shd = false; }
-      } else {
-        // No shaded regions — simple on/off of region colours.
-        reg = !reg; shd = false;
-      }
+      // 4-state cycle, ALWAYS available (independent of puzzleHasShadedRegions):
+      //   off → Regions → Extra → Both → off.
+      //   Regions = fill the main regions (3×3 boxes, or a variant's irregular regions).
+      //   Extra   = shade only the puzzle's extra regions (windows/cages that use every
+      //             digit once).
+      //   Both    = both of the above.
+      // The Extra/Both states still advance on puzzles with NO extra regions — nothing
+      // extra paints, but the mode indicator changes so the state is visible (the earlier
+      // behaviour collapsed to a plain on/off there, which is what "the second mode never
+      // becomes active" was).
+      if      (!reg && !shd) { reg = true;  shd = false; }   // → Regions
+      else if ( reg && !shd) { reg = false; shd = true;  }   // → Extra
+      else if (!reg &&  shd) { reg = true;  shd = true;  }   // → Both
+      else                   { reg = false; shd = false; }   // → off
+      hoverInfo.style.display = 'none';   // the click reveals the opacity card; don't stack the two
       settings.regionColorFillEnabled   = reg;
       settings.shadedRegionColorEnabled = shd;
       saveSettings(settings); applySettings();
