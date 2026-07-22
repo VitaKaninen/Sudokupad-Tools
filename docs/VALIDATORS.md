@@ -600,21 +600,41 @@ circles + segmentation v3.120).**
 A between line: every non-endpoint cell must hold a digit *strictly between* the two endpoint
 ("bulb") values. Endpoints = the **segment's** first and last cell — where the circles sit.
 
-**A drawn chain is not a clue: the circle-to-circle SEGMENT is (v3.120, `betweenSegments` /
-`splitBetweenLineAtCircles`).** Setters routinely thread several circles onto one polyline —
-`2ad4183iyn` ("41 Circles") draws 11 chains (one 35 cells long) that are really **57** independent
-3-cell between lines; its row-1 chain alone is 4 clues, not 1. Validating the chain whole treats real
-endpoints as interior cells and applies the rule across them. So every classified chain is split at
-each circle it passes through, and each consecutive circle pair becomes its own clue.
-Circles come from `getCellCenteredCircles` — the **shared bulb reader** (v3.120) for cell-centred,
+**THE DRAWN POLYLINE IS NOT THE CLUE (v3.120 → rebuilt v3.121; `betweenSegments` / `lineStepGraph` /
+`walkBetweenSegment`).** Two separate facts, learned in that order:
+
+1. Setters thread several circles onto one stroke. `2ad4183iyn` ("41 Circles") stores 12 polylines
+   (one 35 cells long) that are really **57** independent 3-cell between lines; its row-1 stroke alone
+   is 4 clues. Validating a stroke whole treats real endpoints as interior cells.
+2. **v3.120 split each stroke at its circles, and that was still wrong** — the strokes' *turns* are an
+   artifact of how the setter dragged the mouse, not of which cells are joined. **R8C5** of that
+   puzzle is a 4-way crossing whose two strokes each *turn* there (one arrives from R9C5 and leaves
+   west, the other arrives from R8C6 and leaves north); what is *rendered* is a plus, and the clues a
+   solver reads are the straight vertical R7C5–R8C5–R9C5 and horizontal R8C4–R8C5–R8C6. The v3.120
+   split produced the two L-turns and **missed the vertical entirely**.
+
+**Settled by evidence, not taste** — that puzzle publishes its solution, so each reading was scored
+against it: **straight-through satisfies all 57 segments; following stroke order violates 14 of them.**
+(The same check caught that the scl `lines` array is stored **transposed** relative to what is
+rendered — the v3.83 trap again. The DOM is the truth, and `getCosmeticLines` already prefers it here
+because `cp.lines` is empty. *Any* future analysis of a scl payload must transpose or read the DOM.)
+
+So segments come from a **walk over the drawn-step graph**, not from the strokes. At each interior
+cell, entered from `prev`: (1) a drawn neighbour opposite `prev` exists → continue **straight** (this
+is what resolves crossings); (2) else exactly one other neighbour → take it (an unambiguous **bend**,
+so ordinary L-shaped lines still work); (3) else → **refuse the whole walk** — a junction the picture
+genuinely leaves open is never guessed at. Walks start from every circle and run outward on each
+incident stub; either direction yields the same clue (de-duped).
+
+Circles come from `getCellCenteredCircles` — the **shared circle reader** (v3.120) for cell-centred,
 near-cell-sized, near-circular `#overlay`/`#underlay` rects (SudokuPad draws every round marker as a
-rounded `<rect>`, rx ≈ w/2, never an `<svg:circle>`); `getArrowsFromDOM` reads the same fn so the two
-can't drift. Centre-on-cell-centre excludes Kropki/XV dots (cell border) and quadruples (grid corner);
-rx ≈ w/2 excludes lockout **diamonds** (rotated rects). **Fallbacks, both deliberate:** <2 circles
-found on a chain → the chain unchanged (the pre-v3.120 behaviour, so a puzzle whose markers we can't
-read is never made worse); a run past the *last* circle has no second bulb → dropped, never validated
-against a guessed endpoint. `unitFilter` ("validate selection only") is applied to the **segments**,
-so selecting one circle-to-circle run of a long line checks exactly that run.
+rounded `<rect>`, rx ≈ w/2, never an `<svg:circle>`); `getArrowsFromDOM` and the eyeball read the same
+fn so they can't drift. Centre-on-cell-centre excludes Kropki/XV dots (cell border) and quadruples
+(grid corner); rx ≈ w/2 excludes lockout **diamonds** (rotated rects). **Fallback:** a chain carrying
+<2 circles is emitted unchanged (the pre-v3.120 behaviour, so a puzzle whose markers we can't read is
+never made worse) and kept out of the graph so it can't disturb the walks of chains that do have
+circles. `unitFilter` ("validate selection only") is applied to the **segments**, so selecting one
+circle-to-circle run of a long line checks exactly that run.
 
 **Algorithm — both directions (v3.120).** *Interiors* (`betweenDigitAllowed`, a pure harness-tested
 helper): read bulb A's candidate set (`minA`,`maxA`) and bulb B's (`minB`,`maxB`); a line digit is
@@ -638,8 +658,15 @@ mis-apply. `computeBetweenLineRemovals` is consequently **iterated to a fixpoint
 single-pass): a narrowed bulb tightens the interior interval, a narrowed interior kills a bulb
 candidate, and segments sharing a circle propagate through it. Fog + ambiguous-selection masking are
 honoured on bulbs exactly as on interiors.
-The **menu eyeball** previews the segments with a ring drawn on both endpoint circles
-(`{type:'between',keys}` in `spdrHi.showObjects`), not a bare polyline through them.
+The **menu eyeball** previews the segments with a ring on both endpoint circles
+(`{type:'between',keys}` in `spdrHi.showObjects`), not a bare polyline through them. The ring
+**matches the drawn circle** — `ringCell` looks the cell up in `getCellCenteredCircles` and uses its
+real centre and radius (+2px so the highlight clears the drawn stroke rather than hiding inside it),
+falling back to a fixed `cellPx*0.34` only where no plain circle is found. v3.120 always drew the
+fixed ring, which visibly sat *near* the clue rather than on it. Sum arrows use the same `ringCell`
+for their bulb **and** now draw an **arrowhead chevron** at the shaft tip (`arrowHead`), so the
+preview reads as an arrow and shows its direction. Thermo bulbs deliberately keep the plain marker —
+matching geometry is applied where it pays, not everywhere.
 
 **Detection (`classifyBetweenLines`) — the old "between vs lockout" open question is now
 resolved by the native payload:** f-puzzles stores a between line as a first-class `betweenline`
@@ -677,4 +704,4 @@ line and applied the ≥4 neighbour rule, a different constraint entirely. Two g
 lockout phrasing and **both are pure lockout puzzles** (`f9a2chdekr`, `u0cs9m2qmx`) — no real Dutch
 whisper is lost. Note `u0cs9m2qmx`'s rules confirm the segmentation model independently: *"A diamond
 terminates a line segment."* — the same circle-splits-the-line rule the between validator now applies,
-so a future lockout validator should reuse `splitBetweenLineAtCircles` against a **diamond** reader.
+so a future lockout validator should reuse `betweenSegments`' graph walk against a **diamond** reader.

@@ -75,7 +75,7 @@ const NAMES = [
   'MODULAR_CUE_RE', 'MODULAR_SET_RE', 'MODULAR_CLAUSE_RE', 'hasModularCue',
   // between-line interval maths + bulb pruning + circle segmentation
   'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
-  'splitBetweenLineAtCircles',
+  'lineStepGraph', 'reflectCellKey', 'walkBetweenSegment',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -257,28 +257,51 @@ checkFalse('interiors feasible: two distinct {5,7} inside (1,6)',
 checkTrue('interiors feasible: two distinct {5,7} inside (3,8)',
   F.betweenInteriorsFeasible(twoFives, rowDiffers, 3, 8));
 
-// ── splitting a drawn chain at its circles (v3.120) ─────────────────────────
-// `2ad4183iyn` ("41 Circles"): one row-long chain with circles in c1,c3,c5,c7,c9 is
-// FOUR independent between lines, not one nine-cell line.
+// ── walking segments off the drawn-step graph (v3.121) ──────────────────────
+// The clue is NOT the stored polyline: a between line continues STRAIGHT through a
+// crossing. Scored against `2ad4183iyn`'s published solution, straight-through
+// satisfies all 57 segments while following the stroke order violates 14.
+const walk = (chains, circles, start, next) =>
+  F.walkBetweenSegment(F.lineStepGraph(chains), circles, start, next);
+const segOf = (s) => (s === null ? null : s.join(' '));
+
+check('reflect: straight continuation east', F.reflectCellKey('4,7', '3,7'), '5,7');
+check('reflect: straight continuation north', F.reflectCellKey('4,7', '4,8'), '4,6');
+
+// `2ad4183iyn` R8C5 = "4,7", a 4-way crossing whose two stored strokes each TURN
+// there (R9C5→west, R8C6→north). Walking it must yield the STRAIGHT vertical and
+// horizontal lines — the vertical is the segment the v3.120 split missed.
+const crossChains = [
+  ['4,8', '4,7', '3,7'],            // stroke 1: comes up from R9C5, turns west
+  ['5,7', '4,7', '4,6'],            // stroke 2: comes from R8C6, turns north
+];
+const crossCircles = { '4,8': 1, '4,6': 1, '3,7': 1, '5,7': 1 };
+check('walk: crossing gives the straight VERTICAL (the missed R8C5 segment)',
+  segOf(walk(crossChains, crossCircles, '4,8', '4,7')), '4,8 4,7 4,6');
+check('walk: crossing gives the straight HORIZONTAL',
+  segOf(walk(crossChains, crossCircles, '3,7', '4,7')), '3,7 4,7 5,7');
+
+// One row-long chain threading five circles → each circle-to-circle run is a clue.
 const row0 = [0,1,2,3,4,5,6,7,8].map((c) => `${c},0`);
 const circ41 = {}; [0,2,4,6,8].forEach((c) => { circ41[`${c},0`] = 1; });
-check('split: 9-cell chain with 5 circles → 4 segments',
-  F.splitBetweenLineAtCircles(row0, circ41).map((s) => s.join(' ')),
-  ['0,0 1,0 2,0', '2,0 3,0 4,0', '4,0 5,0 6,0', '6,0 7,0 8,0']);
-// Circles only at the ends → the whole chain, one clue (the ordinary case).
-check('split: circles at the ends only → unchanged',
-  F.splitBetweenLineAtCircles(row0, { '0,0': 1, '8,0': 1 }).map((s) => s.join(' ')),
-  [row0.join(' ')]);
-// FALLBACK — fewer than two circles readable → the chain unchanged (pre-v3.120
-// behaviour), never a guessed endpoint.
-check('split: no circles found → chain unchanged (fallback)',
-  F.splitBetweenLineAtCircles(row0, {}).map((s) => s.join(' ')), [row0.join(' ')]);
-check('split: one circle found → chain unchanged (fallback)',
-  F.splitBetweenLineAtCircles(row0, { '4,0': 1 }).map((s) => s.join(' ')), [row0.join(' ')]);
-// A run PAST the last circle has no second bulb → dropped, never validated.
-check('split: tail beyond the last circle is dropped',
-  F.splitBetweenLineAtCircles(row0, { '0,0': 1, '4,0': 1 }).map((s) => s.join(' ')),
-  ['0,0 1,0 2,0 3,0 4,0']);
+check('walk: threaded chain splits at each circle',
+  segOf(walk([row0], circ41, '2,0', '3,0')), '2,0 3,0 4,0');
+check('walk: walking the other way gives the same clue reversed',
+  segOf(walk([row0], circ41, '4,0', '3,0')), '4,0 3,0 2,0');
+// An ordinary between line with circles only at its ends is returned whole.
+check('walk: circles at the ends only → the whole chain is one clue',
+  segOf(walk([row0], { '0,0': 1, '8,0': 1 }, '0,0', '1,0')), row0.join(' '));
+// A genuine BEND (degree 2, no straight continuation) is followed, not refused.
+check('walk: an L-shaped line follows its lone bend',
+  segOf(walk([['0,0', '1,0', '1,1']], { '0,0': 1, '1,1': 1 }, '0,0', '1,0')), '0,0 1,0 1,1');
+// Two circles side by side have no interior → nothing to constrain.
+check('walk: adjacent circles yield no segment',
+  segOf(walk([['0,0', '1,0']], { '0,0': 1, '1,0': 1 }, '0,0', '1,0')), null);
+// A junction with no straight continuation and >2 stubs is genuinely open — refuse
+// rather than guess which pair the setter meant (under-detect, never mis-apply).
+check('walk: ambiguous 3-way junction is refused, not guessed',
+  segOf(walk([['0,1', '1,1', '1,0'], ['1,1', '1,2']],
+    { '0,1': 1, '1,0': 1, '1,2': 1 }, '0,1', '1,1')), null);
 
 // ── Dutch-whisper / lockout collision (v3.120, f9a2chdekr + u0cs9m2qmx) ─────
 // A lockout line states the gap between its DIAMONDS, which trips the Dutch cue.

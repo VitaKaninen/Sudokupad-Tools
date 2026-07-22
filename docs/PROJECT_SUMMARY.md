@@ -469,10 +469,12 @@ way so it stays low-maintenance.
   `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
   removed v3.104). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
-  rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector *and* the between-line
-  endpoint circles, so add new circle consumers here rather than re-deriving the geometry. Between
-  lines additionally split each drawn chain at its circles (`betweenSegments` /
-  `splitBetweenLineAtCircles`) — a chain threading N circles is N−1 clues. Its button, menu and toasts live in the right-hand column — see "The right-hand
+  rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
+  circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than
+  re-deriving the geometry. Between lines derive their clues by **walking the drawn-step graph**
+  between circles (`betweenSegments` / `lineStepGraph` / `walkBetweenSegment`, v3.121) instead of
+  trusting stroke order — a stroke threading N circles is N−1 clues, and a line continues *straight*
+  through a crossing even where the stored polyline turns there. Its button, menu and toasts live in the right-hand column — see "The right-hand
   column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).

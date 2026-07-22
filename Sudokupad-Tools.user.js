@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.120.0
+// @version      3.121.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.120.0';
+  var SCRIPT_VERSION = '3.121.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4297,9 +4297,11 @@
     // a dot, a cage as its outline. Object descriptors (cell keys are "col,row",
     // 0-indexed): {type:'dot',a,b} (marker on the shared border), {type:'line'|
     // 'diag',keys} (polyline through cell centres), {type:'thermo',edges,root} (a
-    // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb
-    // marker + polyline), {type:'between',keys} (polyline + a ring on BOTH endpoint
-    // circles), {type:'cage',keys} (merged perimeter of the cell set).
+    // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb ring +
+    // polyline + an arrowhead chevron at the tip), {type:'between',keys} (polyline + a
+    // ring on BOTH endpoint circles), {type:'cage',keys} (merged perimeter of the cell
+    // set). Rings on 'arrow'/'between' MATCH the drawn circle's real centre + radius
+    // when one is there (see ringCell), so the highlight lands on the clue.
     function showObjects(objs) {
       ensure();
       clearSvg();
@@ -4341,13 +4343,38 @@
         });
       }
       var scale = Math.sqrt(m.a * m.a + m.b * m.b), cellPx = cs * scale;
+      // MATCH THE DRAWN CIRCLE (v3.121). A fixed cellPx*0.34 ring is our own circle
+      // sitting near the clue, not on it — obvious when the puzzle's circles are a
+      // different size. Where a real cell-centred circle exists at this cell, ring it
+      // at ITS centre and radius (+2px so the highlight clears the drawn stroke
+      // instead of hiding inside it); otherwise fall back to the fixed radius, so a
+      // marker that isn't a plain circle still gets highlighted.
+      var circleAt = {};
+      try { getCellCenteredCircles(cs).forEach(function (c) { circleAt[c.key] = c; }); } catch (e) {}
+      function ringCell(key, fallbackRPx) {
+        var c = circleAt[key];
+        if (c) marker(S(c.cx, c.cy), c.r * scale + 2);
+        else marker(centre(key), fallbackRPx);
+      }
+      // Chevron at p2 pointing away from p1 — the arrowhead the shaft polyline alone
+      // never showed, so a sum arrow reads as an arrow and its direction is visible.
+      function arrowHead(p1, p2, sizePx) {
+        if (!p1 || !p2) return;
+        var ang = Math.atan2(p2.y - p1.y, p2.x - p1.x), spread = 0.42;
+        seg(p2, { x: p2.x + Math.cos(ang + Math.PI - spread) * sizePx, y: p2.y + Math.sin(ang + Math.PI - spread) * sizePx });
+        seg(p2, { x: p2.x + Math.cos(ang + Math.PI + spread) * sizePx, y: p2.y + Math.sin(ang + Math.PI + spread) * sizePx });
+      }
       (objs || []).forEach(function (o) {
         if (!o) return;
         if (o.type === 'line' || o.type === 'diag') polyline(o.keys || []);
         else if (o.type === 'cage') cagePerimeter(o.keys || []);
         else if (o.type === 'dot') { var a = centre(o.a), b = centre(o.b); if (a && b) marker({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, cellPx * 0.16); }
-        else if (o.type === 'arrow') { polyline([o.circle].concat(o.shaft || [])); marker(centre(o.circle), cellPx * 0.34); }
-        else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { marker(centre(bk[0]), cellPx * 0.34); marker(centre(bk[bk.length - 1]), cellPx * 0.34); } }
+        else if (o.type === 'arrow') {
+          var ak = [o.circle].concat(o.shaft || []);
+          polyline(ak); ringCell(o.circle, cellPx * 0.34);
+          if (ak.length > 1) arrowHead(centre(ak[ak.length - 2]), centre(ak[ak.length - 1]), cellPx * 0.30);
+        }
+        else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { ringCell(bk[0], cellPx * 0.34); ringCell(bk[bk.length - 1], cellPx * 0.34); } }
         else if (o.type === 'thermo') { (o.edges || []).forEach(function (e) { seg(centre(e[0]), centre(e[1])); }); marker(centre(o.root), cellPx * 0.30); }
       });
       if (osvg.firstChild) flash(osvg); else osvg.style.display = 'none';
@@ -7617,40 +7644,93 @@
     return set;
   }
 
-  // Split one DRAWN chain into the independent between lines it actually contains.
-  // A between line's constraint runs from one circle to the NEXT circle along the
-  // path, so a setter who threads several circles onto one polyline has drawn
-  // several clues: `2ad4183iyn` ("41 Circles") draws a row-long line with circles in
-  // c1,c3,c5,c7,c9 — FOUR between lines, not one. Validating that as a single clue
-  // treats real endpoints as interior cells and applies the rule across them.
-  // FALLBACK: fewer than two circles found on the chain (no circle layer readable, or
-  // markers we couldn't parse) → the whole chain unchanged, i.e. the pre-v3.120
-  // behaviour. A run past the LAST circle is dropped rather than validated against a
-  // guessed second bulb — never invent an endpoint.
-  function splitBetweenLineAtCircles(keys, circleSet) {
-    var at = [];
-    for (var i = 0; i < keys.length; i++) if (circleSet[keys[i]]) at.push(i);
-    if (at.length < 2) return [keys];
-    var out = [];
-    for (var j = 1; j < at.length; j++) out.push(keys.slice(at[j - 1], at[j] + 1));
-    return out;
+  // ── Between lines: THE DRAWN POLYLINE IS NOT THE CLUE (v3.121) ──────────────
+  // A between line's constraint runs from one circle to the NEXT circle, so a setter
+  // who threads several circles onto one stroke has drawn several clues:
+  // `2ad4183iyn` ("41 Circles") stores 12 polylines (one 35 cells long) that are
+  // really 57 three-cell between lines. But splitting each stroke AT its circles
+  // (v3.120) is still wrong, because the strokes' TURNS are an artifact of how the
+  // setter dragged the mouse, not of which cells are joined:
+  //   R8C5 of that puzzle is a 4-way crossing. Its two stored polylines each TURN
+  //   there (one comes up from R9C5 and leaves west, the other comes from R8C6 and
+  //   leaves north) — but what is RENDERED is a plus, and the clues a solver reads
+  //   are the straight vertical R7C5-R8C5-R9C5 and horizontal R8C4-R8C5-R8C6.
+  // PROVEN, NOT GUESSED — scored against that puzzle's own published solution:
+  // straight-through satisfies all 57 segments; following the stroke order violates
+  // 14 of them. (The check also caught that its scl `lines` array is stored
+  // TRANSPOSED vs what is rendered — the v3.83 trap again; the DOM is the truth, and
+  // getCosmeticLines already prefers it here because `cp.lines` is empty.)
+  //
+  // So segments come from a WALK over the drawn-step graph, not from the strokes.
+  // At each interior cell, entered from `prev`:
+  //   1. a drawn neighbour OPPOSITE prev exists → continue straight (crossings);
+  //   2. else exactly one other neighbour → take it (an unambiguous bend);
+  //   3. else → refuse the whole walk. A junction the picture genuinely leaves open
+  //      is never guessed at — under-detect, never mis-apply.
+  // Cells are "col,row"; reflection works for diagonal steps too.
+  function lineStepGraph(chains) {
+    var adj = {};
+    (chains || []).forEach(function (ch) {
+      for (var i = 1; i < ch.length; i++) {
+        var a = ch[i - 1], b = ch[i];
+        if (a === b) continue;
+        (adj[a] = adj[a] || {})[b] = 1;
+        (adj[b] = adj[b] || {})[a] = 1;
+      }
+    });
+    return adj;
   }
-  // The between-line SEGMENTS a validator acts on: every classified chain split at
-  // its circles, de-duped (either drawn direction is the same clue). Shared by the
-  // compute and the menu eyeball, so the preview can't drift from what runs.
-  // A segment needs two DISTINCT bulbs and ≥1 interior cell to say anything.
+  function reflectCellKey(cur, prev) {
+    var c = String(cur).split(','), p = String(prev).split(',');
+    return (2 * +c[0] - +p[0]) + ',' + (2 * +c[1] - +p[1]);
+  }
+  // One between line, walked from circle `start` outwards through `next`. Returns the
+  // cell chain (circle … circle) or null when the walk hits an ambiguous junction, a
+  // revisit, or lands on an adjacent circle (no interior → nothing to constrain).
+  function walkBetweenSegment(adj, circleSet, start, next) {
+    var seg = [start], on = {}, prev = start, cur = next, guard = 0;
+    on[start] = 1;
+    while (!circleSet[cur]) {
+      if (on[cur] || ++guard > 400) return null;         // revisit / runaway → refuse
+      seg.push(cur); on[cur] = 1;
+      var nb = adj[cur] || {}, keys = Object.keys(nb);
+      var opp = reflectCellKey(cur, prev), nx = null;
+      if (nb[opp]) nx = opp;                             // 1. straight wins
+      else if (keys.length === 2) nx = (keys[0] === prev) ? keys[1] : keys[0];   // 2. lone bend
+      if (!nx) return null;                              // 3. ambiguous junction
+      prev = cur; cur = nx;
+    }
+    seg.push(cur);
+    return seg.length >= 3 ? seg : null;
+  }
+  // The between-line SEGMENTS a validator acts on. Shared by the compute and the menu
+  // eyeball, so the preview can't drift from what runs.
+  // FALLBACK: a chain carrying fewer than two circles (no circle layer readable, or
+  // markers we couldn't parse) is emitted UNCHANGED — the pre-v3.120 behaviour, so a
+  // puzzle whose markers we can't read is never made worse — and is kept out of the
+  // graph so it can't disturb the walks of chains that do have circles.
   function betweenSegments(lines) {
-    var circles = getCellCircleKeySet();
-    var out = [], seen = {};
+    var circleSet = getCellCircleKeySet();
+    var walkable = [], out = [], seen = {};
+    function emit(seg) {
+      if (!seg || seg.length < 3 || seg[0] === seg[seg.length - 1]) return;
+      var sig = seg.join(' ');
+      if (seen[sig]) return;
+      seen[sig] = 1;
+      seen[seg.slice().reverse().join(' ')] = 1;         // either drawn direction is one clue
+      out.push(seg);
+    }
     (lines || []).forEach(function (keys) {
-      if (!keys || keys.length < 3) return;
-      splitBetweenLineAtCircles(keys, circles).forEach(function (seg) {
-        if (seg.length < 3 || seg[0] === seg[seg.length - 1]) return;
-        var sig = seg.join(' ');
-        if (seen[sig]) return;
-        seen[sig] = 1;
-        seen[seg.slice().reverse().join(' ')] = 1;
-        out.push(seg);
+      if (!keys || keys.length < 2) return;
+      var n = 0;
+      keys.forEach(function (k) { if (circleSet[k]) n++; });
+      if (n >= 2) walkable.push(keys); else emit(keys);
+    });
+    var adj = lineStepGraph(walkable);
+    Object.keys(adj).forEach(function (start) {
+      if (!circleSet[start]) return;
+      Object.keys(adj[start]).forEach(function (next) {
+        emit(walkBetweenSegment(adj, circleSet, start, next));
       });
     });
     return out;
@@ -9568,11 +9648,12 @@
   //      half-checked). Line validators: reuse resolveCueValidatorLines + one of the
   //      shared engines (computeBandLineRemovals / computeWhisperLikeRemovals) — a
   //      new line type is usually a near-clone of an existing one.
-  //      A DRAWN CHAIN IS NOT ALWAYS ONE CLUE (v3.120): if the constraint is bounded
-  //      by markers (between-line circles, lockout diamonds), a setter may thread
-  //      several onto one polyline — split it (betweenSegments /
-  //      splitBetweenLineAtCircles + getCellCenteredCircles) and apply unitFilter to
-  //      the SEGMENTS, or the rule gets applied across real endpoints.
+  //      A DRAWN CHAIN IS NOT ALWAYS ONE CLUE (v3.120/v3.121): if the constraint is
+  //      bounded by markers (between-line circles, lockout diamonds), a setter may
+  //      thread several onto one polyline AND the stored strokes may turn where the
+  //      picture crosses. Derive clues by WALKING the drawn-step graph between markers
+  //      (betweenSegments / lineStepGraph / walkBetweenSegment + getCellCenteredCircles)
+  //      rather than trusting stroke order, and apply unitFilter to the SEGMENTS.
   //   2. Detection, one of two shapes (the menu lists only detected validators;
   //      re-evaluated per menu open so late model loads / SPA navigation stay correct):
   //        • LINE validators → a `classify` field = your classify*Lines() fn.
