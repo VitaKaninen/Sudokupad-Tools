@@ -457,3 +457,33 @@ Three consequences, all load-bearing:
 numbers are computed in JS from `bounds('.game')` and written as inline `left`/`top`/
 `transform`. Removing the 1.7 clamp (board bound by height instead) is what would let
 the window be narrowed ~110px with nothing shrinking.
+
+### App.resize only recomputes on a window resize — nudge it after our width changes (v3.116)
+
+Because `controlsBounds.height` = the rules block, **any change we make to the rules
+width reflows it to a new height, but `App.resize` won't re-fit the #controls scale until
+a window resize fires.** Until then the footer (gear / version / credit line) sits at the
+stale pre-reflow scale: **"the bottom elements are too low on first load"** (the initial
+rules-width override reflows after App.resize's last run) and the same on **validate-menu
+open/close** (the re-cap reflows the rules). The tell is identical to every other layout
+bug here — **resizing the window fixes it**.
+
+Fix (`syncAppResizeSoon`, called from `applyControlsWidthCap` whenever the #controls cap
+or the banner/rules width actually changes): fire `window.dispatchEvent(new Event('resize'))`,
+coalesced to one rAF so the reflow settles first and a burst of cap writes = one recompute.
+`App.resize` IS wired to the window `resize` event (a manual resize is what fixed it), so
+the synthetic event runs the exact same recompute. No loop: the event's only other listener
+is the settings-panel reposition, and App.resize changes transforms/positions — not the
+native rows' childList that `watchNativePadWidth` observes, nor our own cap.
+
+### Title banner + rules are pinned STATIC, decoupled from the validate menu (v3.116)
+
+Originally the banner/rules tracking #controls width (so they grew when the menu opened)
+was just an unintended side effect of the width cap, left in place. Now
+`updateContentWidthCss` gives **both `.puzzle-header` and `.puzzle-rules` a fixed pixel
+`max-width` computed from the COLLAPSED reservation** (`pad + gap + collapsedRightColW − 64`,
+the −64 being SudokuPad's `margin: 0 32px`), so opening the menu widens #controls (to
+reserve the menu strip and rebalance the board) while the banner/rules keep their width.
+Their 32px left margin left-anchors them, so the extra width opens up on the right — exactly
+where the menu's strip is. A fixed pixel cap (not `max-width: none`) also keeps #controls'
+shrink-to-fit max-content bounded, which is what avoids the old full-window-width load flash.

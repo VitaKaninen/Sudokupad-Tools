@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.115.0
+// @version      3.116.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.115.0';
+  var SCRIPT_VERSION = '3.116.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5152,17 +5152,8 @@
     var col = document.getElementById('sp-right-col');
     if (col) col.style.width = rightColW() + 'px';
     updateRightColCss();
-    applyControlsWidthCap();
-    // Opening/closing the validate menu re-caps #controls, which reflows the rules
-    // block to a new WIDTH — and therefore a new HEIGHT. SudokuPad's own App.resize
-    // (P.resize; see LESSONS_LEARNED "empty band right of the controls") scales the
-    // control block to fit a region whose height is BOARD-derived but whose *fit* is
-    // bounded by controlsBounds.height = the rules block. It only recomputes on a
-    // window resize, so until then the gear/version/credit line sit at the stale
-    // pre-reflow scale (gap at the bottom when the menu opens; content pushed off the
-    // bottom when it closes) — "resizing the window fixes it". Re-run it ourselves by
-    // firing the same resize event, on rAF so the rules reflow has settled first.
-    requestAnimationFrame(function () { window.dispatchEvent(new Event('resize')); });
+    applyControlsWidthCap();   // re-caps #controls; if the cap changed it also fires
+                               // syncAppResizeSoon so App.resize re-fits the footer
   }
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
@@ -5255,9 +5246,29 @@
   //  2. Never write max-width when the value hasn't changed. Every write is a layout
   //     change that SudokuPad's ResizeHandler reacts to by recomputing the #controls
   //     transform — that is what turned a 100ms poll into a visible resize per tick.
-  //  3. The `.puzzle-rules { max-width: none }` rule must not land BEFORE the cap (see
-  //     injectRulesWidthCss). Uncapped rules + uncapped #controls = one frame at full
-  //     window width, which is the "starts really small" flash.
+  //  3. The banner/rules width override must not land BEFORE the cap (see
+  //     updateContentWidthCss). It is now a FIXED pixel max-width (not `max-width: none`),
+  //     so #controls' max-content stays bounded and there is no full-window-width frame —
+  //     but it is still applied only after a real cap, from within applyControlsWidthCap.
+  // Re-run SudokuPad's own App.resize (P.resize) by firing the resize event it listens
+  // on — coalesced to one rAF so a burst of cap writes triggers a single recompute.
+  //
+  // WHY WE NEED IT: every width change here reflows the rules block to a new WIDTH and
+  // therefore a new HEIGHT, but App.resize (which height-bounds the #controls scale on
+  // controlsBounds = the rules block; see LESSONS_LEARNED "empty band right of the
+  // controls") only recomputes on a window resize. Without this nudge the footer
+  // (gear / version / credit line) is left at the stale pre-reflow scale — "the bottom
+  // elements are too low on first load, and resizing the window fixes it", and the same
+  // on validate-menu open/close. rAF so the reflow has settled before App.resize measures.
+  var _resizeSyncQueued = false;
+  function syncAppResizeSoon() {
+    if (_resizeSyncQueued) return;
+    _resizeSyncQueued = true;
+    requestAnimationFrame(function () {
+      _resizeSyncQueued = false;
+      window.dispatchEvent(new Event('resize'));
+    });
+  }
   var lastControlsCap = null;
   function applyControlsWidthCap() {
     var ctrls = document.getElementById('controls');
@@ -5267,21 +5278,31 @@
                                  // next re-cap
     var pad = nativePadWidth();
     if (!pad) return false;
+    var changed = false;
     var cap = pad + RIGHT_COL_GAP + rightColW();
     if (cap !== lastControlsCap) {
       lastControlsCap = cap;
       ctrls.style.maxWidth = cap + 'px';
+      changed = true;
     }
-    injectRulesWidthCss();       // only ever after a real cap is in place
+    // Title banner + rules width is pinned to the COLLAPSED reservation, so it is STATIC:
+    // opening the validate menu widens #controls (to reserve the menu's room and let
+    // SudokuPad rebalance the board) but the header/rules keep the same width. Uses
+    // collapsedRightColW(), never rightColW(), so a menu toggle recomputes the same value
+    // and writes nothing. The −64 is SudokuPad's own `margin: 0 32px` on both blocks.
+    var contentMaxW = pad + RIGHT_COL_GAP + collapsedRightColW() - 64;
+    if (updateContentWidthCss(contentMaxW)) changed = true;   // only ever after a real cap is in place
     applyStaticColWidths();      // keep our buttons pinned to the column's LEFT edge
     centerControlsFooter();      // credit line → centred on Check, not on #controls
+    if (changed) syncAppResizeSoon();   // a width changed → the rules reflowed → re-run App.resize
     return true;
   }
   // ── The five STATIC elements ───────────────────────────────────────────────
   // Auto-fill, Validate, the gear, the version label and SudokuPad's credit line must
-  // not move when the validate menu opens. Opening it widens the reservation (and with
-  // it #controls, the title banner and the rules block — all intended), so anything
-  // anchored to the column's RIGHT edge rides along.
+  // not move when the validate menu opens. Opening it widens the reservation (and with it
+  // #controls, so the board rebalances) — but the title banner and rules block are now
+  // pinned to the collapsed width (see updateContentWidthCss), so anything anchored to the
+  // column's RIGHT edge is what could ride along; that is what these fixed widths prevent.
   //
   // The column's LEFT edge does not move: it is always `nativePadWidth() + RIGHT_COL_GAP`
   // (the cap is that plus the column's width, and the column is right-aligned inside it).
@@ -5379,24 +5400,34 @@
       ' padding-right: ' + (rightColW() + RIGHT_COL_GAP) + 'px; }';
     if (st.textContent !== css) st.textContent = css;   // never write an unchanged value
   }
-  // Widening #controls lets SudokuPad's title banner (.puzzle-header, no max-width) grow
-  // — but the rules block underneath is capped at `max-width: 480px`, so it stops short
-  // and the two stop lining up. Lifting the cap alone overshoots: the banner also carries
-  // `margin: 0 32px`, so the rules would end up 64px WIDER than it. Match that margin and
-  // the two align exactly (verified: both 498px wide at the same left edge).
+  // Pin the title banner (.puzzle-header) AND the rules block (.puzzle-rules) to one FIXED
+  // width `w` (design px), so neither tracks #controls when the validate menu widens it.
   //
-  // DELIBERATELY NOT part of injectRightColCss: this rule removes the only bound on
-  // #controls' shrink-to-fit max-content (see applyControlsWidthCap). Injected before the
-  // cap is in place, it gives one frame of a full-window-width #controls, which SudokuPad
-  // answers by scaling the whole control block way down — the "everything loads tiny and
-  // then jumps" flash. applyControlsWidthCap is the only caller, and only on success.
-  function injectRulesWidthCss() {
-    if (document.getElementById('sp-rules-width-css')) return;
-    var st = document.createElement('style');
-    st.id = 'sp-rules-width-css';
+  // Both carry SudokuPad's own `margin: 0 32px`; SudokuPad's native rules cap is
+  // `max-width: 480px` and the banner has none, so historically the two didn't line up and
+  // BOTH grew with #controls. We override both to the same explicit max-width (computed by
+  // applyControlsWidthCap from the COLLAPSED reservation, so it is menu-independent). Their
+  // 32px left margin left-anchors them, so a wider #controls leaves empty space on the
+  // RIGHT — exactly where the menu's reserved strip is — instead of stretching them.
+  //
+  // A fixed pixel cap (not `max-width: none`) also keeps #controls' shrink-to-fit
+  // max-content bounded, so it never flashes full-window-width before our cap lands
+  // (the old "everything loads tiny and then jumps"). applyControlsWidthCap is the only
+  // caller, only after a real cap, and it never writes an unchanged value.
+  var lastContentMaxW = null;
+  function updateContentWidthCss(w) {
+    if (w === lastContentMaxW) return false;
+    lastContentMaxW = w;
+    var st = document.getElementById('sp-rules-width-css');
+    if (!st) {
+      st = document.createElement('style');
+      st.id = 'sp-rules-width-css';
+      (document.head || document.documentElement).appendChild(st);
+    }
     st.textContent =
-      '#controls .puzzle-rules { max-width: none; margin-left: 32px; margin-right: 32px; }';
-    (document.head || document.documentElement).appendChild(st);
+      '#controls .puzzle-rules { max-width: ' + w + 'px; margin-left: 32px; margin-right: 32px; }' +
+      '#controls .puzzle-header { max-width: ' + w + 'px; }';
+    return true;
   }
 
   // ── Toast stack ────────────────────────────────────────────────────────────
