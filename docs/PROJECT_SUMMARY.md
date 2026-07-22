@@ -147,7 +147,7 @@ One IIFE. Major regions, in order:
 8. `buildActionButtons`, `buildEasyRegionShadeButton`, `buildVersionLabel`, `buildFillSingleButton`
 9. Right-hand column layout: `ensureRightColumn`, `ensureRightColButtonRow`, `ensureGearHolder`,
    `nativePadWidth` / `nativeControlsReady` / `applyControlsWidthCap` / `watchNativePadWidth`,
-   `rightColW` / `collapsedRightColW` / `setRightColWidth`,
+   `rightColW` / `collapsedRightColW` / `rightColOverhang` / `setRightColWidth`,
    `applyStaticColWidths` / `alignNativeAuxRow` / `centerControlsFooter`,
    `injectRightColCss` / `updateRightColCss` / `injectRulesWidthCss`
 10. `buildAllUI` — orchestrates the above on DOMContentLoaded
@@ -594,9 +594,11 @@ ResizeHandler. Anything parented inside that subtree scales smoothly with the wi
 hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, not arithmetic*.
 
 - `ensureRightColumn()` → `#sp-right-col`, `rightColW()` design px wide, **absolutely positioned
-  inside `.controls-buttons`** (`right/top/bottom: 0`). Space is reserved by `padding-right:
-  rightColW() + RIGHT_COL_GAP` on `.controls-buttons` itself, written by `injectRightColCss()` /
-  `updateRightColCss()`.
+  inside `.controls-buttons`** (`top/bottom: 0`; `right` is `0` collapsed and a NEGATIVE
+  `rightColOverhang()` when the menu opens, so the column grows rightward with its left edge
+  pinned). Space is reserved by `padding-right: collapsedRightColW() + RIGHT_COL_GAP` on
+  `.controls-buttons` — a **constant** (collapsed) strip, written by `injectRightColCss()` /
+  `updateRightColCss()`; it does NOT grow when the menu opens.
   ⚠️ **Parent must be `.controls-buttons`, not `.controls-main`** — `.controls-buttons` is the
   column-direction stack holding `.controls-app`, `.controls-main` *and* `.controls-aux` (Easy
   Shade), so spanning its full height is what puts our button row level with the Easy Shade row.
@@ -621,7 +623,9 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   baseline, and it may hang below the column (`#controls` and `.controls-buttons` are both
   `overflow: visible`). `GEAR_SIZE` / `GEAR_TOP_GAP` / `COL_BTN_GAP` are tunables at the top of the
   right-column section.
-- `applyControlsWidthCap()` caps `#controls` at `nativePadWidth() + RIGHT_COL_GAP + rightColW()`.
+- `applyControlsWidthCap()` caps `#controls` at `nativePadWidth() + RIGHT_COL_GAP +
+  collapsedRightColW()` — **menu-independent** (uses the collapsed width, so a toggle never
+  re-caps and nothing downstream reflows).
   ⚠️ **This is load-bearing** — without it `#controls` (position:absolute, so shrink-to-fit) grows
   with the viewport on any puzzle with a rules block, opening slack between the pad and our column.
   `nativePadWidth()` measures the widest extent the native rows' **children** reach; a row's own
@@ -629,21 +633,26 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   rules around it (`nativeControlsReady`, the idempotent write, `injectRulesWidthCss`) — they are
   what stops the controls loading tiny and resizing repeatedly. `watchNativePadWidth()` re-caps on a
   childList MutationObserver over the three rows.
-- **The reservation is two-state (v3.113).** `rightColW()` returns `collapsedRightColW()` (=
-  `2 × nativeButtonSize() + COL_BTN_GAP`, just the Auto-fill/Validate row) while the validate menu
-  is closed, and `RIGHT_COL_W = 200` while it is open; `setRightColWidth(open)` flips it and is
-  called by `openValidateMenu` / `closeValidateMenu`. It rewrites the column width **and** the
-  `.controls-buttons` padding, then re-runs `applyControlsWidthCap()`, so the banner and rules only
-  shift right for as long as the menu is showing. ⚠️ `rebuildValidateMenu()` removes the menu node
-  directly instead of calling `closeValidateMenu()` — going through close would collapse and
-  instantly re-expand the whole control block on every in-menu toggle.
-- **Anchor to the column's LEFT edge, not its right** (v3.114). Opening the menu widens the
-  reservation, so `#controls`, the banner and the rules all move — intended — but the column's left
-  edge is invariant (`nativePadWidth() + RIGHT_COL_GAP`; the cap is that plus the column width).
-  So `#sp-right-col-buttons` and `#sp-validate-undo-btn` take a **fixed `collapsedRightColW()`
-  width** instead of `100%` (`applyStaticColWidths()` keeps them in step). That pins Auto-fill,
-  Validate, and — via `#sp-gear-holder`'s `right: 0` on the now-fixed row — the gear and version
-  label. Only `#sp-validate-menu` and `#sp-toast-stack` still span the column at `100%`.
+- **The menu grows rightward into the empty band — it does NOT widen `#controls` (v3.118).**
+  `rightColW()` returns `collapsedRightColW()` (= `2 × nativeButtonSize() + COL_BTN_GAP`, just the
+  Auto-fill/Validate row) while the validate menu is closed, and `RIGHT_COL_W = 200` while it is
+  open; `setRightColWidth(open)` flips it (called by `openValidateMenu` / `closeValidateMenu`) and
+  sets the column width **and** its negative `right` offset (`rightColOverhang() = RIGHT_COL_W −
+  collapsedRightColW`), so the column expands rightward past `#controls`' edge into the empty band
+  while its LEFT edge stays put. The `.controls-buttons` padding and the `#controls` cap both use
+  `collapsedRightColW()` and never change on a toggle → the board, keypad, banner, rules, footer and
+  Killer Calculator all stay put, and no `App.resize` re-fit fires. Relies on `#controls` /
+  `.controls-buttons` / `#sp-right-col` / `.game` all being `overflow: visible` (they are) so the
+  overflowing menu is not clipped. ⚠️ `rebuildValidateMenu()` removes the menu node directly instead
+  of calling `closeValidateMenu()` — going through close would collapse and instantly re-expand the
+  column on every in-menu toggle. (See LESSONS_LEARNED "The validate menu no longer widens
+  `#controls`" for the why and the narrow-window caveat.)
+- **The column's LEFT edge is invariant** (`nativePadWidth() + RIGHT_COL_GAP`), so left-anchored
+  contents are already still. `#sp-right-col-buttons` and `#sp-validate-undo-btn` still take a
+  **fixed `collapsedRightColW()` width** instead of `100%` (`applyStaticColWidths()` keeps them in
+  step) so they do not stretch to `RIGHT_COL_W` when the menu opens the column wide — that pins
+  Auto-fill, Validate, and (via `#sp-gear-holder`'s `right: 0` on the fixed row) the gear and version
+  label. Only `#sp-validate-menu` and `#sp-toast-stack` span the (open) column at `100%`.
 - `alignNativeAuxRow()` fixes SudokuPad's bottom row. `.controls-aux` is a flat flex row on a 69px
   pitch, but the pad above it is two blocks (`.controls-input` + `.controls-tool`) with an 8px gap
   between them, so from the 4th button on the bottom row is 8px left of the grid. It shifts the 4th
@@ -652,22 +661,28 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   (a second run sees delta 0 and writes nothing) — ⚠️ it runs **before** `nativePadWidth()` in
   `applyControlsWidthCap`, since it changes what that measures.
 - `centerControlsFooter()` pins the "Created by Sven Neumann…" credit line. SudokuPad's
-  `.controls-footer` is full-width under `#controls`, so it centres on the *reserved* width and
-  slides right when the menu opens; the rule gives it `width = 2 × the Check button's centre` +
-  `text-align: center`, i.e. centred on the native keypad. A stylesheet rule (`#sp-footer-centre-css`),
-  not an inline style — SudokuPad rebuilds that element on a puzzle change and nothing observes it.
+  `.controls-footer` is full-width under `#controls`, so it centres on the reserved width (which
+  includes our strip) rather than on the keypad; the rule gives it `width = 2 × the Check button's
+  centre` + `text-align: center`, i.e. centred on the native keypad. A stylesheet rule
+  (`#sp-footer-centre-css`), not an inline style — SudokuPad rebuilds that element on a puzzle
+  change and nothing observes it.
 - **The validate menu has no `max-height`** (v3.113): a long validator list overflows *upward* out of
   the controls area and over the rules text rather than gaining a scrollbar — deliberate, the player
   can close the menu to read the rules again. `#sp-validate-menu` and `#sp-toast-stack` both carry
   `flex-shrink: 0`, which is what makes the column overflow instead of squeezing them to fit.
-- **There is no gutter code.** Widening `.controls-buttons` makes SudokuPad scale the controls down
-  and hand the freed space to the board by itself (measured: transform 0.959→0.788, board 626→713).
-  v3.107 deleted `updateValidateGutter`, `releaseValidateGutter`, `controlsButtonsRight`,
-  `rightZoneLeft`, `positionValidateMenu`, `positionToastStack` and `onValidateResize` outright,
-  along with every `window.dispatchEvent(new Event('resize'))` they relied on.
-- Widening `#controls` also widens SudokuPad's title banner (`.puzzle-header`). To keep the rules
-  block aligned with it, `injectRulesWidthCss` lifts the rules' `max-width: 480px` cap **and** matches
-  the banner's `margin: 0 32px` — lifting the cap alone leaves the rules 64px wider than the banner.
+- **There is no gutter/positioning code.** v3.107 deleted `updateValidateGutter`,
+  `releaseValidateGutter`, `controlsButtonsRight`, `rightZoneLeft`, `positionValidateMenu`,
+  `positionToastStack` and `onValidateResize` outright, along with every
+  `window.dispatchEvent(new Event('resize'))` they relied on — the column is placed by parentage
+  alone. (Historically, widening `.controls-buttons` let SudokuPad rescale the controls and hand
+  space to the board — measured transform 0.959→0.788 — but v3.118 stopped widening on menu open;
+  the board is height-bound with slack anyway, so nothing is lost.)
+- The banner/rules width pin (`.puzzle-header` + `.puzzle-rules`) is a FIXED, menu-independent
+  `max-width` from the collapsed reservation (`updateContentWidthCss`, `#sp-rules-width-css`): it
+  lifts SudokuPad's `max-width: 480px` rules cap **and** matches the banner's `margin: 0 32px` (−64;
+  lifting the cap alone leaves the rules 64px wider than the banner) to one shared width. Its job now
+  is purely to bound `#controls`' shrink-to-fit max-content (no full-window load flash); since
+  `#controls` no longer widens on a toggle, the banner/rules would stay put even without it.
   ⚠️ It is a separate function from `injectRightColCss` on purpose: lifting that cap unbounds
   `#controls`, so it must never be injected before `applyControlsWidthCap` has succeeded.
 - ⚠️ **Never use `offsetWidth` to detect the page scale — it is transform-blind** (a native control

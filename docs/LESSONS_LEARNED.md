@@ -476,27 +476,41 @@ the synthetic event runs the exact same recompute. No loop: the event's only oth
 is the settings-panel reposition, and App.resize changes transforms/positions — not the
 native rows' childList that `watchNativePadWidth` observes, nor our own cap.
 
-### Title banner + rules are pinned STATIC, decoupled from the validate menu (v3.116)
+### The validate menu no longer widens `#controls` at all — nothing moves on a toggle (v3.118)
 
-Originally the banner/rules tracking #controls width (so they grew when the menu opened)
-was just an unintended side effect of the width cap, left in place. Now
-`updateContentWidthCss` gives **both `.puzzle-header` and `.puzzle-rules` a fixed pixel
-`max-width` computed from the COLLAPSED reservation** (`pad + gap + collapsedRightColW − 64`,
-the −64 being SudokuPad's `margin: 0 32px`), so opening the menu widens #controls (to
-reserve the menu strip and rebalance the board) while the banner/rules keep their width.
-Their 32px left margin left-anchors them, so the extra width opens up on the right — exactly
-where the menu's strip is. A fixed pixel cap (not `max-width: none`) also keeps #controls'
-shrink-to-fit max-content bounded, which is what avoids the old full-window-width load flash.
+**The root cause of the whole "everything shifts when the menu opens" saga was one
+overloaded reference.** `#controls`' width is simultaneously the board's size reference, the
+abs-positioning containing block (it carries a `transform`), AND the width/centre reference
+for the title banner, rules, footer, our right column, and the Killer Calculator. The only
+mechanism that made room for the menu was *widening `#controls`* (grow `rightColW()` → grow
+the `.controls-buttons` padding-right AND the `#controls` max-width cap). So every child that
+reads its geometry moved, each reading a different part (left edge / right edge / centre /
+full width), and each needed a bespoke counter-adjustment. That is why it felt like
+whack-a-mole — it was one cause with many symptoms.
 
-**The Killer Calculator needed a separate pin (v3.117).** `.killercalc-onscreen` (native
-`tool-calculator.css`) is `position: absolute; left: -8rem; width: 18rem; margin-left: 50%`
-— i.e. centred on #controls' LIVE width, not a flow block, so the max-width pin above does
-not reach it and opening the menu slid it right by half the cap growth (measured: cap
-495→562 on `xnu5mij9ie`, killercalc +26 screen px = 67/2 × the 0.781 controls scale).
-`updateKillercalcOffset` counter-translates it by `(cap − collapsedCap)/2` — 0 whenever the
-menu is closed, so its native resting position is untouched. **Verified by DOM audit that
-this is the ONLY optional #controls child that centres on #controls width:** the only
-`*-onscreen` panel class is `killercalc-onscreen`, and `.puzzle-title`/`.puzzle-author`
-(`left: 50%`) centre within `.puzzle-header`, which is itself pinned — so they ride it and
-stay put. `.controls-info` (the header/rules wrapper) still widens, but it is an invisible
-block whose pinned children don't move, so nothing visible shifts.
+**v3.118 removes the widening entirely.** The `#controls` cap and the `.controls-buttons`
+padding-right now use `collapsedRightColW()` unconditionally, so opening the menu changes
+neither. The column still grows to `RIGHT_COL_W` (200) when the menu opens, but it grows
+**rightward into the empty band beside `#controls`** (the same App.resize slack documented
+in "The empty band right of the controls" above):
+`setRightColWidth` pins the column's LEFT edge and pushes its RIGHT edge out with a negative
+`right` offset (`rightColOverhang() = RIGHT_COL_W − collapsedRightColW`). Everything up the
+chain (`#controls`, `.controls-buttons`, `#sp-right-col`, `.game`) is `overflow: visible`, so
+the overflowing menu is not clipped. Result: the board, keypad, banner, rules, footer and
+killer calc are **all** untouched on a toggle, and because the cap no longer changes, no
+`App.resize` re-fit fires either (that re-fit was the last, sub-pixel, text-re-rasterising
+shift). Measured pre-change: the board never actually shrank on open even under the old
+widening — on desktop it is height-bound with ~350px of horizontal slack, and `#controls`
+grew *away* from it into that slack, so the "rebalance the board" purpose was already dead.
+
+**What this deleted:** `updateKillercalcOffset` (the v3.117 counter-translate that undid the
+killer-calc's `margin-left: 50%` slide) is gone — the calc no longer moves, so there is
+nothing to counter. `updateContentWidthCss` (fixed pixel `max-width` on `.puzzle-header` +
+`.puzzle-rules`, from `pad + gap + collapsedRightColW − 64`, −64 = SudokuPad's `margin:
+0 32px`) stays: it is menu-independent now, but it still bounds `#controls`' shrink-to-fit
+max-content, which is what avoids the old full-window-width load flash.
+
+**If a very narrow / mobile window ever closes that empty band** (board + controls fill the
+width, no slack), the rightward-overflowing menu could reach the window edge or the board.
+Not observed on desktop; address it only if it comes up (a guarded fallback that reserves,
+or clamps the menu position, only when slack runs out).

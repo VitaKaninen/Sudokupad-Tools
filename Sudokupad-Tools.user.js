@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.117.0
+// @version      3.118.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.117.0';
+  var SCRIPT_VERSION = '3.118.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5110,12 +5110,12 @@
   // entirely by itself (measured: transform 0.959→0.788, board 626→713). So there is
   // no deficit maths, no synthetic resize dispatch, and no resize listener here.
   //
-  // The reservation is NOT constant: it is only as wide as the column's buttons need
-  // until the validate menu opens, then widens to RIGHT_COL_W. See rightColW /
-  // setRightColWidth below.
+  // The RESERVATION is constant (collapsed width). The column itself widens to RIGHT_COL_W
+  // when the menu opens, but that extra width overflows rightward into the empty band beside
+  // #controls rather than being reserved. See rightColW / setRightColWidth below.
   var RIGHT_COL_W   = 200;   // design px — the #controls transform scales it on screen.
-                             // This is the OPEN width: only reserved while the validate
-                             // menu is showing (see setRightColWidth).
+                             // The OPEN column width; overflows past the reserved strip
+                             // rather than widening it (see setRightColWidth).
   var RIGHT_COL_GAP = 10;    // design px between the number pad and our column
   // ── Tunables for the column's buttons (all DESIGN px; the #controls transform
   //    scales them on screen, so these stay constant at every window size) ──
@@ -5127,18 +5127,16 @@
   var GEAR_TOP_GAP  = 9;    // design px between the bottom of the Auto-fill/Validate
                              // row and the top of the gear. TUNE ME.
   // ── How much width the column reserves ────────────────────────────────────
-  // Two widths, not one. The validate menu needs RIGHT_COL_W, but the column's own
-  // buttons (Auto-fill + Validate, two native-sized squares plus COL_BTN_GAP) need far
-  // less — and reserving the menu's width permanently pushed the title banner and the
-  // rules block right by ~65 design px for a menu that is usually closed. So the
-  // reservation is now COLLAPSED by default and only widens while the menu is open
-  // (openValidateMenu / closeValidateMenu call setRightColWidth).
+  // Two widths, not one. The validate menu needs RIGHT_COL_W; the column's own buttons
+  // (Auto-fill + Validate, two native-sized squares plus COL_BTN_GAP) need far less. Only
+  // the collapsed width is ever RESERVED (via .controls-buttons padding-right) and is the
+  // only width that feeds the #controls cap — so #controls, the keypad, the banner, the
+  // rules and the Killer Calculator do not change at all when the menu opens.
   //
-  // Everything downstream reads rightColW(), never RIGHT_COL_W directly: the column's
-  // own width, the .controls-buttons padding-right that does the actual reserving, and
-  // the #controls cap (applyControlsWidthCap). Changing it re-runs the cap, so
-  // SudokuPad rescales the control block and the banner/rules track it, exactly as they
-  // do on any other pad-width change.
+  // When the menu opens the column still grows to RIGHT_COL_W, but it grows RIGHTWARD into
+  // the empty band beside #controls rather than widening the reservation: its left edge is
+  // pinned (so it never covers the keypad) and the extra width (rightColOverhang) overflows
+  // #controls' right edge — everything up the chain is overflow:visible, so nothing clips it.
   var rightColOpen = false;
   function collapsedRightColW() {
     return Math.ceil(nativeButtonSize() * 2 + COL_BTN_GAP);
@@ -5146,14 +5144,22 @@
   function rightColW() {
     return rightColOpen ? RIGHT_COL_W : collapsedRightColW();
   }
+  // How far the open column overflows past its collapsed (reserved) right edge. Applied as
+  // a NEGATIVE `right` offset so the column's LEFT edge stays put and it expands rightward.
+  function rightColOverhang() {
+    return rightColOpen ? (RIGHT_COL_W - collapsedRightColW()) : 0;
+  }
   function setRightColWidth(open) {
     if (rightColOpen === open) return;
     rightColOpen = open;
     var col = document.getElementById('sp-right-col');
-    if (col) col.style.width = rightColW() + 'px';
+    if (col) {
+      col.style.width = rightColW() + 'px';
+      col.style.right = (-rightColOverhang()) + 'px';   // grow rightward, left edge pinned
+    }
     updateRightColCss();
-    applyControlsWidthCap();   // re-caps #controls; if the cap changed it also fires
-                               // syncAppResizeSoon so App.resize re-fits the footer
+    applyControlsWidthCap();   // re-runs the (menu-independent) cap; writes nothing on a
+                               // toggle now, so no reflow and no App.resize re-fit fires
   }
   function ensureRightColumn() {
     var col = document.getElementById('sp-right-col');
@@ -5165,9 +5171,9 @@
     // one row short — and .controls-main is `align-items:start`, so it wouldn't even
     // stretch without help.)
     //
-    // Space is reserved by padding-right on .controls-buttons (see injectRightColCss);
-    // we then absolutely position into that reserved strip. The padding is what makes
-    // SudokuPad scale the controls down and grow the board — the reserve still works.
+    // A collapsed-width strip is reserved by padding-right on .controls-buttons (see
+    // injectRightColCss); we absolutely position into that strip. When the menu opens the
+    // column overflows this strip rightward (setRightColWidth) rather than growing it.
     var cb = document.querySelector('#controls .controls-buttons');
     if (!cb) return null;
     injectRightColCss();
@@ -5279,44 +5285,45 @@
     var pad = nativePadWidth();
     if (!pad) return false;
     var changed = false;
-    var cap = pad + RIGHT_COL_GAP + rightColW();
+    // The cap uses collapsedRightColW(), never rightColW(): opening the validate menu must
+    // NOT widen #controls. #controls' width is the shared reference that the board, keypad,
+    // title banner, rules block AND the Killer Calculator all key off, so widening it drags
+    // every one of them (the whole reason those elements needed bespoke counter-adjustments).
+    // Instead the menu grows RIGHTWARD into the empty band beside #controls (see
+    // rightColOverhang / setRightColWidth) — the container never changes size on a toggle, so
+    // nothing downstream moves and no App.resize re-fit fires. Measured: the board never
+    // shrank on open even under the old widening (it is height-bound with ~350px of slack to
+    // its right), so this reserves nothing the board was actually using.
+    var cap = pad + RIGHT_COL_GAP + collapsedRightColW();
     if (cap !== lastControlsCap) {
       lastControlsCap = cap;
       ctrls.style.maxWidth = cap + 'px';
       changed = true;
     }
-    // Title banner + rules width is pinned to the COLLAPSED reservation, so it is STATIC:
-    // opening the validate menu widens #controls (to reserve the menu's room and let
-    // SudokuPad rebalance the board) but the header/rules keep the same width. Uses
-    // collapsedRightColW(), never rightColW(), so a menu toggle recomputes the same value
-    // and writes nothing. The −64 is SudokuPad's own `margin: 0 32px` on both blocks.
+    // Title banner + rules width is pinned to a FIXED cap so #controls' shrink-to-fit
+    // max-content stays bounded (no full-window flash at load). It equals the cap above
+    // minus 64 (SudokuPad's own `margin: 0 32px` on both blocks). Now that the cap itself
+    // is menu-independent, this is menu-independent too, so a toggle recomputes the same
+    // value and writes nothing. The Killer Calculator needs no counter-adjustment any more:
+    // it centres on #controls' width (`margin-left: 50%`), and #controls no longer changes
+    // width on a toggle, so it simply stays put.
     var contentMaxW = pad + RIGHT_COL_GAP + collapsedRightColW() - 64;
     if (updateContentWidthCss(contentMaxW)) changed = true;   // only ever after a real cap is in place
-    // Native SudokuPad centres the Killer Calculator on #controls' LIVE width
-    // (`.killercalc-onscreen { margin-left: 50% }`), so widening #controls for the menu
-    // slides it right by half the growth — the last thing that still moved. It is
-    // absolute + centred, not a flow block, so the max-width pin above doesn't reach it;
-    // instead we translate it back by exactly half the cap growth (0 when collapsed, so
-    // its native collapsed position is untouched). cap == collapsed cap → shift 0.
-    updateKillercalcOffset((cap - (contentMaxW + 64)) / 2);
     applyStaticColWidths();      // keep our buttons pinned to the column's LEFT edge
     centerControlsFooter();      // credit line → centred on Check, not on #controls
-    if (changed) syncAppResizeSoon();   // a width changed → the rules reflowed → re-run App.resize
+    if (changed) syncAppResizeSoon();   // cap/pad changed (load or puzzle swap) → re-fit; a
+                                        // menu toggle changes nothing here, so it never fires
     return true;
   }
-  // ── The five STATIC elements ───────────────────────────────────────────────
-  // Auto-fill, Validate, the gear, the version label and SudokuPad's credit line must
-  // not move when the validate menu opens. Opening it widens the reservation (and with it
-  // #controls, so the board rebalances) — but the title banner and rules block are now
-  // pinned to the collapsed width (see updateContentWidthCss), so anything anchored to the
-  // column's RIGHT edge is what could ride along; that is what these fixed widths prevent.
-  //
-  // The column's LEFT edge does not move: it is always `nativePadWidth() + RIGHT_COL_GAP`
-  // (the cap is that plus the column's width, and the column is right-aligned inside it).
-  // So the fix is to anchor to the left edge instead: the button row gets a FIXED
-  // collapsedRightColW() width rather than 100% of the column, which pins its left edge
-  // AND its right edge (the gear holder hangs off that right edge). Only the validate
-  // menu still spans the full column, which is what makes it widen. Toasts keep 100% too
+  // ── The STATIC column contents ─────────────────────────────────────────────
+  // Auto-fill, Validate, the gear, the version label and SudokuPad's credit line must not
+  // move when the validate menu opens. The column's LEFT edge is fixed at
+  // `nativePadWidth() + RIGHT_COL_GAP` (it is pinned there and only its RIGHT edge overflows
+  // rightward when the menu opens — see setRightColWidth), so left-anchored contents are
+  // already still. The button row is given a FIXED collapsedRightColW() width rather than
+  // 100% of the column so it does NOT stretch to RIGHT_COL_W when the menu opens the column
+  // wide; that pins its left edge AND its right edge (the gear holder hangs off that right
+  // edge). Only the validate menu spans the full (open) column width. Toasts keep 100% too
   // — they are transient, and a toast that is only as wide as two buttons reads badly.
   function applyStaticColWidths() {
     var w = collapsedRightColW() + 'px';
@@ -5386,12 +5393,12 @@
     });
     return true;
   }
-  // .controls-buttons reserves the column's strip with padding-right (this is the whole
-  // space-reservation mechanism — widening it makes SudokuPad scale the controls down and
-  // hand the freed width to the board) and becomes the positioning context the column is
-  // absolutely placed into. Safe to inject at any time.
-  // The reserved strip is rightColW() wide, which changes when the menu opens/closes —
-  // so the rule is rewritten by updateRightColCss rather than being written once.
+  // .controls-buttons reserves the column's strip with padding-right and becomes the
+  // positioning context the column is absolutely placed into. Safe to inject at any time.
+  // The reserved strip is COLLAPSED-width and constant — it never grows when the menu opens
+  // (the menu overflows rightward past it into the empty band, see setRightColWidth), so the
+  // keypad it reserves against never shrinks. The rule is still rewritten by updateRightColCss
+  // rather than written once so a keypad-width change (puzzle swap) can re-measure the gap.
   function injectRightColCss() {
     if (document.getElementById('sp-right-col-css')) return;
     var st = document.createElement('style');
@@ -5404,7 +5411,7 @@
     if (!st) return;
     var css =
       '#controls .controls-buttons { position: relative; box-sizing: border-box;' +
-      ' padding-right: ' + (rightColW() + RIGHT_COL_GAP) + 'px; }';
+      ' padding-right: ' + (collapsedRightColW() + RIGHT_COL_GAP) + 'px; }';
     if (st.textContent !== css) st.textContent = css;   // never write an unchanged value
   }
   // Pin the title banner (.puzzle-header) AND the rules block (.puzzle-rules) to one FIXED
@@ -5435,29 +5442,6 @@
       '#controls .puzzle-rules { max-width: ' + w + 'px; margin-left: 32px; margin-right: 32px; }' +
       '#controls .puzzle-header { max-width: ' + w + 'px; }';
     return true;
-  }
-
-  // Counter-translate the Killer Calculator so the validate menu never slides it. Native
-  // centres it on #controls' live width (margin-left: 50%), so opening the menu (which
-  // widens #controls by `2 * shift`) pushes it right by `shift`; we translate it back by
-  // the same amount. `shift` is 0 whenever the menu is closed (cap == collapsed cap), so
-  // this rule is inert in the common case and never disturbs its native resting position.
-  // #controls .killercalc-onscreen out-specifies the native `.killercalc-onscreen` rule,
-  // so no !important is needed; the design-px translate scales with the #controls transform.
-  var lastKcShift = null;
-  function updateKillercalcOffset(shift) {
-    shift = Math.round(shift * 100) / 100;
-    if (shift === lastKcShift) return;
-    lastKcShift = shift;
-    var st = document.getElementById('sp-killercalc-offset-css');
-    if (!st) {
-      st = document.createElement('style');
-      st.id = 'sp-killercalc-offset-css';
-      (document.head || document.documentElement).appendChild(st);
-    }
-    st.textContent = shift
-      ? '#controls .killercalc-onscreen { transform: translateX(-' + shift + 'px); }'
-      : '';
   }
 
   // ── Toast stack ────────────────────────────────────────────────────────────
@@ -9747,7 +9731,7 @@
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
-    setRightColWidth(false);      // give the reserved width back to the board/rules
+    setRightColWidth(false);      // collapse the column back to its two-button width
   }
   function toggleValidateMenu() {
     if (document.getElementById('sp-validate-menu')) closeValidateMenu();
