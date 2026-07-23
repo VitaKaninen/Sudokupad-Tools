@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.131.0
+// @version      3.132.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.131.0';
+  var SCRIPT_VERSION = '3.132.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7567,6 +7567,22 @@
   // the shared isLineCluePath predicate — see that block for why lines live in more
   // than one layer and which subsystems must stay in sync. De-duped by colour+cells
   // so a line present in both layers isn't counted twice.
+  // THE SUDOKU-X CROSS IS NOT A CLUE LINE (v3.132). SudokuPad draws the X
+  // diagonals as ordinary stroked `#arrows` paths carrying no id, class or other
+  // attribute of their own, so every attribute test reads them as cosmetic clue
+  // lines. On `blobz/lynx` that put a SECOND colour in the legend, which knocked
+  // the double arrows off the single-colour layer and left them unpinnable.
+  // Geometry separates them cleanly: a clue line runs cell CENTRE to cell centre
+  // (…+0.5 in cell units), while the X is a 2-point path from one CORNER of the
+  // whole grid to the opposite one. `wp` is in cell units; the ~0.1 tolerance
+  // covers the small inset SudokuPad draws it with (0.64px of a 64px cell).
+  function isGridDiagonalPath(wp) {
+    if (!wp || wp.length !== 2) return false;
+    var N = detectGridSize();
+    function atCorner(v) { return Math.abs(v) < 0.1 || Math.abs(v - N) < 0.1; }
+    return atCorner(wp[0][0]) && atCorner(wp[0][1]) && atCorner(wp[1][0]) && atCorner(wp[1][1]) &&
+           wp[0][0] !== wp[1][0] && wp[0][1] !== wp[1][1];
+  }
   function scanLineLayer(layer, cs, inGrid, out, seen) {
     if (!layer) return;
     layer.querySelectorAll('path').forEach(function (p) {
@@ -7575,6 +7591,7 @@
       var nums = (p.getAttribute('d') || '').match(/-?\d+(?:\.\d+)?/g);
       var wp = [];
       for (var i = 0; i + 1 < nums.length; i += 2) wp.push([+nums[i] / cs, +nums[i + 1] / cs]);
+      if (isGridDiagonalPath(wp)) return;                           // the Sudoku-X cross, not a clue
       var keys = expandLineChain(wp);
       if (keys.length < 2 || !keys.every(inGrid)) return;
       var sig = normLineColor(stroke) + '|' + keys.join(' ');
@@ -7761,6 +7778,12 @@
     var nat = nativeLinesFor('whisper');
     if (nat) return { mode: 'confident', lines: nat, allLines: all };
     if (all.length === 0) return { mode: 'none', lines: [], allLines: all };
+    // Layer 0.5 (v3.132) — the puzzle LABELS its lines ("…German whispers (GW)…"
+    // + a GW sticker on the line). An explicit declaration outranks even the
+    // trusted green, and it is what tells a whisper from its neighbours on a
+    // seven-line-type board (`y697kc2umn`). See the LINE-TYPE LABELS block.
+    var wlab = labelledLinesFor(all, 'whisper');
+    if (wlab) return { mode: 'confident', lines: wlab, allLines: all };
     var green = all.filter(function (l) { return isGermanWhisperColor(l.color); });
     if (green.length > 0 && greenNamedForRival()) green = [];
     if (green.length > 0) {
@@ -7815,7 +7838,7 @@
   // the third trigger. Catalog-checked: matches 1cwnilmrp0 + 3DrNDGMDnG, spares the
   // other two line-tagged puzzles that carry the loose phrase.
   var SELF_DEDUCTION_RE = /\bambiguous\s+lines?\b|\blines?\b[^.]{0,40}\b(?:is|are|be)\s+(?:exactly\s+)?(?:one|two)\s+of\b|(?:exactly|either)\s+(?:one|two)\s+of\b[^.]{0,80}(?:modular|entropic|parity|whisper|renban|region[- ]?sum|zipper|palindrome|nabner)/;
-  function classifyCueLines(cueRe, clauseRe, nativeType) {
+  function classifyCueLines(cueRe, clauseRe, nativeType, labelKey) {
     var all = getCosmeticLines();
     // Layer 0 (v3.90) — an f-puzzles payload states the type outright; skip the
     // whole cue/colour ladder. Only reached for the ~30% that carry one.
@@ -7834,6 +7857,11 @@
     // the validator only runs on a hand-selection. (Same guard the entropic
     // ANTI-regex used to hard-code; now shared across all cue validators.)
     if (SELF_DEDUCTION_RE.test(blob)) return { mode: 'ambiguous', lines: [], allLines: all };
+    // Layer 1.5 (v3.132) — the puzzle LABELS its lines ("…double arrows (DA)…"
+    // + a DA sticker on the line). An explicit declaration outranks every colour
+    // heuristic below it; see the LINE-TYPE LABELS block for the two guards.
+    var labelled = labelledLinesFor(all, labelKey);
+    if (labelled) return { mode: 'confident', lines: labelled, allLines: all };
     var colors = {};
     all.forEach(function (l) { colors[normLineColor(l.color)] = 1; });
     if (Object.keys(colors).length === 1) return { mode: 'confident', lines: all.map(function (l) { return l.keys; }), allLines: all };
@@ -7863,7 +7891,7 @@
   // phrasing its CUE covers, minus only the terms that collide with a rival clue.
   // A cue that fires on a phrasing its clause can't read is a GUARANTEED ambiguous.
   var RENBAN_CLAUSE_RE = /renban|set of consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
-  function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE, 'renban'); }
+  function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE, 'renban', 'renban'); }
 
   // Region-sum lines: box/region borders split the line into segments of EQUAL sum.
   // Cue = "region sum", "box borders divide/split", or "same/equal sum in each
@@ -7885,7 +7913,7 @@
   //                      `7FngrT9ftq`), plus "equal sums lines" as a named variant
   var REGIONSUM_CUE_RE = /region[- ]?sum|equal[- ]?sums?\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:box|region|zone|grid)\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+(?:sum|total|number|value)[^.]{0,40}(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone|segment)|(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+segments?[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|segments?[^.]{0,40}(?:each|every)\s+of\s+which[^.]{0,30}(?:same|equal)\s+(?:sum|total)|(?:sum|total)[^.]{0,60}same\s+(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)|(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)/;
   var REGIONSUM_CLAUSE_RE = /region|box|segment|(?:same|equal)\s+sum/;
-  function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE, 'regionsum'); }
+  function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE, 'regionsum', 'regionsum'); }
 
   // Parity lines: adjacent digits alternate odd/even along the line. Catalog rules
   // phrase it as "parity line(s)", "alternate between odd and even", "adjacent
@@ -7912,7 +7940,7 @@
   // which collide with odd/even-cell clues in a multi-colour legend — same lesson
   // as renban's "consecutive" / region-sum's "sum").
   var PARITY_CLAUSE_RE = /parit|alternat/;
-  function classifyParityLines() { return classifyCueLines(PARITY_CUE_RE, PARITY_CLAUSE_RE); }
+  function classifyParityLines() { return classifyCueLines(PARITY_CUE_RE, PARITY_CLAUSE_RE, null, 'parity'); }
 
   // Zipper lines: fold the line at its centre — every pair of cells equidistant
   // from the centre sums to one constant total S; for an odd-length line the lone
@@ -7928,7 +7956,7 @@
   // fromConstraint label), so the cue+colour ladder below stays load-bearing.
   var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
   var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
-  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE, 'zipper'); }
+  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE, 'zipper', 'zipper'); }
 
   // Between lines: every non-endpoint cell holds a digit STRICTLY between the two
   // endpoint ("bulb") circle values. In f-puzzles a between line is a first-class
@@ -7964,7 +7992,7 @@
     // (constraint keys are exhaustive) — veto before the cue can false-positive.
     if (hasNativePayload()) return { mode: 'none', lines: [], allLines: cos };
     // No payload (scl/ctc/js-object): fall to the cue stack.
-    var res = classifyCueLines(BETWEEN_CUE_RE, BETWEEN_CLAUSE_RE, null);
+    var res = classifyCueLines(BETWEEN_CUE_RE, BETWEEN_CLAUSE_RE, null, 'between');
     if (res.mode === 'confident' && BETWEEN_LOCKOUT_RE.test(getPuzzleRulesBlob()))
       return { mode: 'ambiguous', lines: [], allLines: res.allLines };
     // DOUBLE-ARROW COLLISION (v3.131). A double arrow draws the SAME picture as a
@@ -8031,10 +8059,17 @@
     if (!DOUBLEARROW_NAME_RE.test(blob) && DOUBLEARROW_ANTI_RE.test(blob)) return false;
     return DOUBLEARROW_CUE_RE.test(blob);
   }
+  // May an unpinnable double-arrow puzzle fall back to the both-ends-circled
+  // SHAPE? Only when nothing else in the puzzle draws that shape — see
+  // getDoubleArrows.
+  function doubleArrowStructureAllowed() {
+    var blob = getPuzzleRulesBlob();
+    return !BETWEEN_CUE_RE.test(blob) && !BETWEEN_LOCKOUT_RE.test(blob) && !SELF_DEDUCTION_RE.test(blob);
+  }
   function classifyDoubleArrowLines() {
     if (!doubleArrowCueFires(getPuzzleRulesBlob()))
       return { mode: 'none', lines: [], allLines: getCosmeticLines() };
-    return classifyCueLines(DOUBLEARROW_CUE_RE, DOUBLEARROW_CLAUSE_RE, null);
+    return classifyCueLines(DOUBLEARROW_CUE_RE, DOUBLEARROW_CLAUSE_RE, null, 'doublearrow');
   }
 
   // ── Cell-centred CIRCLE markers (shared bulb reader, v3.120) ────────────────
@@ -8456,7 +8491,7 @@
     if (ENTROPIC_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
     // classifyCueLines only ever calls cueRe.test(blob), so a duck-typed matcher
     // lets the named cue and the described-partition cue share one code path.
-    return classifyCueLines({ test: hasEntropicCue }, ENTROPIC_CLAUSE_RE, 'entropic');
+    return classifyCueLines({ test: hasEntropicCue }, ENTROPIC_CLAUSE_RE, 'entropic', 'entropic');
   }
 
   // ── Modular lines ───────────────────────────────────────────────────────────
@@ -8495,7 +8530,7 @@
     if (!modularBands()) return { mode: 'none', lines: [], allLines: [] };
     // No native f-puzzles key for modular lines (they're always cosmetic), so no
     // layer-0 payload type — the cue/colour ladder is the only path.
-    return classifyCueLines({ test: hasModularCue }, MODULAR_CLAUSE_RE, null);
+    return classifyCueLines({ test: hasModularCue }, MODULAR_CLAUSE_RE, null, 'modular');
   }
 
   // Resolve which line chains a cue-gated validator should check + whether removals
@@ -8675,7 +8710,7 @@
   var DUTCH_LOCKOUT_RE = /lockout|lie\s+(?:strictly\s+)?outside|outside\s+the\s+(?:range|values?|interval)/;
   function classifyDutchWhisperLines() {
     // No native f-puzzles key for Dutch whispers (always cosmetic) → cue/colour only.
-    var res = classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null);
+    var res = classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null, 'dutch');
     if (res.mode === 'none') return res;
     if (DUTCH_LOCKOUT_RE.test(getPuzzleRulesBlob()))
       return { mode: 'none', lines: [], allLines: res.allLines };
@@ -8697,6 +8732,104 @@
     if (kept.length === res.lines.length) return res;
     if (kept.length === 0) return { mode: 'none', lines: [], allLines: res.allLines };
     return { mode: 'confident', lines: kept, allLines: res.allLines };
+  }
+
+  // ── LINE-TYPE LABELS — the puzzle states each line's type (v3.132) ──────────
+  // Some setters LABEL every line with the constraint's abbreviation and define
+  // the abbreviations in the rules. `y697kc2umn` "Dovetail": *"Normal rules for
+  // modular lines (MOD), parity lines (PAR), German whispers (GW), double arrows
+  // (DA), ten lines (TEN), region sum lines (RSL), and entropic lines (ENT)
+  // apply"* — with a MOD / DA / RSL … sticker sitting on each of its ten lines.
+  // That is an AUTHORITATIVE type declaration, stronger evidence than colour, and
+  // it is exactly what the colour ladder cannot handle (seven line types, several
+  // sharing a colour). Before this layer the puzzle detected ONE of its seven
+  // types — the whisper, and only because it happened to be green.
+  //
+  // The sticker is a ONE-CELL killer cage with a transparent border whose `value`
+  // is the text (SudokuPad renders a cage's value as text in `#cages`), so it is
+  // read from `cp.cages` — the same array `getKillerCages` reads, which already
+  // skips these because their value isn't a number.
+  //
+  // TWO RULES KEEP IT HONEST, both "under-detect, never mis-apply":
+  //   • a token means a type only when THE RULES SAY SO — the words in front of
+  //     "(TOK)" are matched against the same clause regexes the named-colour
+  //     layer uses, and a phrase matching two types (or none) is dropped;
+  //   • a label claims the line CONTAINING its cell — usually an endpoint, but
+  //     `y697kc2umn` puts RSL/MOD/PAR/ENT on a BEND — and a cell that sits on two
+  //     lines claims neither.
+  // Which token maps to which validator: the clause regex each one already owns.
+  // Declared here, after the last of them (DUTCH_CLAUSE_RE), so every entry is
+  // assigned by the time this runs.
+  var LINE_LABEL_TYPES = [
+    { key: 'whisper',     re: WHISPERISH_RE },
+    { key: 'dutch',       re: DUTCH_CLAUSE_RE },
+    { key: 'renban',      re: RENBAN_CLAUSE_RE },
+    { key: 'regionsum',   re: REGIONSUM_CLAUSE_RE },
+    { key: 'parity',      re: PARITY_CLAUSE_RE },
+    { key: 'zipper',      re: ZIPPER_CLAUSE_RE },
+    { key: 'entropic',    re: ENTROPIC_CLAUSE_RE },
+    { key: 'modular',     re: MODULAR_CLAUSE_RE },
+    { key: 'between',     re: BETWEEN_CLAUSE_RE },
+    { key: 'doublearrow', re: DOUBLEARROW_CLAUSE_RE }
+  ];
+  // Every "<phrase> (TOK)" definition in the rules, as { tok: phrase }. The phrase
+  // class excludes , . ; ( ) so it can never run backwards past the previous list
+  // item, and a leading "and"/"or" is trimmed. Pure (blob in, map out) so the
+  // harness can regression-test the parsing.
+  var LABEL_DEF_RE = /([a-z][a-z' -]{2,40}?)\s*\(([a-z]{1,5})\)/g;
+  function labelDefPhrases(blob) {
+    var out = {}, m;
+    LABEL_DEF_RE.lastIndex = 0;
+    while ((m = LABEL_DEF_RE.exec(String(blob || ''))) !== null)
+      out[m[2]] = m[1].replace(/^(?:and|or)\s+/, '').trim();
+    return out;
+  }
+  // token → line-type key, keeping only tokens the rules tie to EXACTLY one type.
+  function lineLabelTypes() {
+    var phrases = labelDefPhrases(getPuzzleRulesBlob()), out = {};
+    Object.keys(phrases).forEach(function (tok) {
+      var hits = LINE_LABEL_TYPES.filter(function (t) { return t.re.test(phrases[tok]); });
+      if (hits.length === 1) out[tok] = hits[0].key;
+    });
+    return out;
+  }
+  // The label stickers on the board: [{ token, key }] for every one-cell killer
+  // cage whose value is a short alphabetic token rather than a sum.
+  function lineLabelCells() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return [];
+    var N = detectGridSize(), out = [];
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.style !== 'killer') return;
+      var txt = String(cage.value == null ? '' : cage.value).trim();
+      if (!txt || txt.length > 5 || !/^[a-z]+$/i.test(txt)) return;   // an abbreviation, not a sum
+      var keys = [], m, re = /r(\d+)c(\d+)/gi, cellStr = cage.cells || '';
+      while ((m = re.exec(cellStr)) !== null) keys.push((+m[2] - 1) + ',' + (+m[1] - 1));
+      if (keys.length !== 1) return;                                  // a label sits on ONE cell
+      var p = keys[0].split(',');
+      if (+p[0] < 0 || +p[1] < 0 || +p[0] >= N || +p[1] >= N) return;
+      out.push({ token: txt.toLowerCase(), key: keys[0] });
+    });
+    return out;
+  }
+  // The lines this puzzle DECLARES to be of type `key`, or null when it declares
+  // none (no labels, none resolving to this type, or none pinning a single line).
+  function labelledLinesFor(all, key) {
+    if (!key || !all || all.length === 0) return null;
+    var types = lineLabelTypes();
+    var labs = lineLabelCells().filter(function (l) { return types[l.token] === key; });
+    if (labs.length === 0) return null;
+    var out = [], seen = {};
+    labs.forEach(function (lab) {
+      var on = all.filter(function (l) { return l.keys.indexOf(lab.key) >= 0; });
+      if (on.length !== 1) return;                    // label on no line / on a crossing → skip
+      var sig = on[0].keys.join(' ');
+      if (seen[sig]) return;
+      seen[sig] = 1;
+      out.push(on[0].keys);
+    });
+    return out.length ? out : null;
   }
 
   // ── Renban validator ──────────────────────────────────────────────────────
@@ -9959,10 +10092,23 @@
   // double arrow — under-detect, never mis-apply.
   function getDoubleArrows() {
     var cls = classifyDoubleArrowLines();
-    if (cls.mode !== 'confident') return [];
+    var lines = null;
+    if (cls.mode === 'confident') lines = cls.lines;
+    // STRUCTURE BEATS COLOUR HERE (v3.132). A renban or a whisper is a bare
+    // stroke whose only distinguishing feature is its colour — a double arrow is
+    // a line CIRCLED AT BOTH ENDS, which almost nothing else is. So when the cue
+    // fires but the colour ladder can't pin the lines, fall back to the SHAPE:
+    // `4ideo8pjl2` states "each double arrow has its own color", which is exactly
+    // the case the single-colour and named-colour layers are built to refuse.
+    // Only allowed when no RIVAL circle-ended clue is in play — between and
+    // lockout lines draw the same picture, so if either cue fires (or the puzzle
+    // hands the line's type to the solver) we keep refusing.
+    else if (cls.mode === 'ambiguous' && doubleArrowStructureAllowed())
+      lines = (cls.allLines || []).map(function (l) { return l.keys; });
+    if (!lines || lines.length === 0) return [];
     var circles = getCellCircleKeySet();
     var out = [];
-    betweenSegments(cls.lines).forEach(function (seg) {
+    betweenSegments(lines).forEach(function (seg) {
       if (seg.length < 3) return;                                  // no cells between the circles
       if (!circles[seg[0]] || !circles[seg[seg.length - 1]]) return;
       out.push({ keys: seg, circles: [seg[0], seg[seg.length - 1]], line: seg.slice(1, -1) });
@@ -10351,8 +10497,14 @@
   //          one result instead of re-classifying (a classification is a full DOM +
   //          rules scan, and there are many line validators).
   //        • NON-line validators → a cheap `detect()` presence probe.
+  //      A cue-gated line validator MUST also pass its own `labelKey` to
+  //      classifyCueLines and register that key in LINE_LABEL_TYPES — that is how it
+  //      inherits the LINE-TYPE LABEL layer (a puzzle that states "…renban (RB)…"
+  //      and stickers its lines); see the LINE-TYPE LABELS block.
   //   3. The registry entry below (name/unitNoun/menuLabel/compute/countKey/noneKey
-  //      + classify OR detect per above).
+  //      + classify OR detect per above). `menuLabel` may be a FUNCTION when the
+  //      wording depends on what the puzzle holds — read it via validatorLabel(def),
+  //      never `def.menuLabel` directly.
   //   4. THE HOVER EYEBALL (v3.91) — every menu row gets a 👁 via makeValidatorEye:
   //        • LINE validators get it free via `classify` (the default branch of
   //          validatorClueObjects draws the confident lines from def.cls).
@@ -10392,8 +10544,15 @@
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
       // Double arrows share this row: same equation, same engine (see
-      // computeArrowRemovals), so one button validates both.
-      { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum & double arrows',
+      // computeArrowRemovals), so one button validates both. The label names what
+      // this puzzle actually has (a double-arrow-only puzzle shouldn't offer to
+      // validate "sum arrows"), so menuLabel is a FUNCTION here — validatorLabel()
+      // resolves it at every read site.
+      { name: 'sum arrow', unitNoun: 'arrow',
+        menuLabel: function () {
+          var a = getSumArrows().length, d = getDoubleArrows().length;
+          return d ? (a ? 'Sum & double arrows' : 'Double arrows') : 'Sum arrows';
+        },
         detect: function () { return getSumArrows().length > 0 || getDoubleArrows().length > 0; },
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
       { name: 'between', unitNoun: 'between line', menuLabel: 'Between lines',
@@ -10418,6 +10577,15 @@
   // (previously detect + ambiguous + eye each re-classified: ~3 passes per line
   // validator per menu open). Runs (compute) still classify FRESH at click time —
   // the stash is a per-menu-build preview cache, never a correctness input.
+  // A validator's menu text. `menuLabel` may be a FUNCTION when the wording depends
+  // on what the puzzle holds (the arrow row names sum arrows, double arrows or
+  // both); anything that throws falls back to the registry name.
+  function validatorLabel(def) {
+    try {
+      if (typeof def.menuLabel === 'function') return def.menuLabel() || def.name;
+    } catch (e) {}
+    return (typeof def.menuLabel === 'string' && def.menuLabel) || def.name;
+  }
   function detectedValidators() {
     return constraintValidators().filter(function (v) {
       try {
@@ -10758,7 +10926,7 @@
       function withNote(msg) { return res.note ? msg + ' ' + res.note : msg; }
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (!res.present) {
-        if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + (def.menuLabel || def.name) + '" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
+        if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + (validatorLabel(def)) + '" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
         // A note explains WHY nothing was checkable (e.g. bulbless thermos) —
         // that deserves the player's attention, so it warns instead of green.
         showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), res.note ? 'warning' : 'success'); return;
@@ -11023,7 +11191,7 @@
       });
       row.style.setProperty('color', text, 'important');
       var lbl = document.createElement('span');
-      lbl.textContent = def.menuLabel || def.name;
+      lbl.textContent = validatorLabel(def);
       lbl.style.flex = '1';
       row.appendChild(lbl);
 
@@ -11076,7 +11244,7 @@
               + 'then select the line\'s cells to run it by hand.';
         else if (amb)
           tip = 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
-        addItem(def.menuLabel || def.name, function () { onValidatorItemClick(def); },
+        addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
                 { disabled: amb && !selOnly, title: tip, eyeDef: def });
       });
     }

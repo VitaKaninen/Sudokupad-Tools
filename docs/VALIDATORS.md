@@ -275,6 +275,46 @@ cue+colour stack still rules. **`cp.thermos` is VETOED when a payload exists** �
 as a generic line store, so `vd0mn9xqjw`'s three green *whispers* appeared there as 10 phantom
 "thermos"; see LESSONS_LEARNED for why that killed only the diagonal one.
 
+## Layer 1.5 — LINE-TYPE LABELS: the puzzle states each line's type (v3.132)
+
+Some setters **label every line with the constraint's abbreviation** and define the abbreviations in
+the rules. `y697kc2umn` "Dovetail": *"Normal rules for modular lines (MOD), parity lines (PAR),
+German whispers (GW), double arrows (DA), ten lines (TEN), region sum lines (RSL), and entropic
+lines (ENT) apply"* — with a MOD / DA / RSL … sticker on each of its ten lines. That is an
+authoritative declaration, better evidence than any colour heuristic, and it is precisely the case
+colour cannot solve (seven line types, several sharing a colour). Before this layer the puzzle
+detected ONE of its seven types — the whisper, and only because it happened to be green.
+
+Reader: `lineLabelCells` (the stickers) + `labelDefPhrases`/`lineLabelTypes` (the legend) →
+`labelledLinesFor(all, key)`, consulted by `classifyCueLines` (as layer 1.5, after the cue gate and
+the self-deduction guard, before the colour layers) and by `classifyWhisperLines` (layer 0.5, ahead
+of even the trusted green). Every cue validator passes its own `labelKey`.
+
+- **The sticker** is a ONE-CELL killer cage with a transparent border whose `value` is the text —
+  SudokuPad renders a cage's value as text in `#cages`. Read from `cp.cages`, the same array
+  `getKillerCages` reads and already skips these from (their value isn't a number).
+- **A token means a type only when the rules say so.** `LABEL_DEF_RE` pulls every `"<phrase> (TOK)"`
+  out of the blob (the phrase class excludes `,` `.` `;` `(` `)`, so it can never run backwards into
+  the previous list item), and the phrase is matched against the **same clause regexes the
+  named-colour layer uses** (`LINE_LABEL_TYPES`). A phrase matching two types — or none — is
+  dropped: "dutch whispers (DW)" hits both `WHISPERISH_RE` and `DUTCH_CLAUSE_RE`, so it claims
+  nothing and the old ladder handles it.
+- **A label claims the line CONTAINING its cell** — usually an endpoint, but Dovetail puts RSL, MOD,
+  PAR and ENT on a *bend* — and a cell sitting on two lines claims neither. Never guess.
+
+Harmless where it doesn't apply: a legend token that no sticker carries ("German whispers (green)")
+finds no one-cell cage and the layer simply doesn't fire.
+
+## The Sudoku-X cross is not a clue line (v3.132)
+
+SudokuPad draws the X diagonals as ordinary stroked `#arrows` paths with **no id, class or other
+attribute of their own**, so every attribute test in `isLineCluePath` reads them as cosmetic clue
+lines. On `blobz/lynx` that put a SECOND colour in the legend, which knocked the double arrows off
+the single-colour layer and left them unpinnable — and the same false line was being handed to every
+other cue validator. `isGridDiagonalPath` (in `scanLineLayer`, so it only affects the validator-side
+`getCosmeticLines`, not object shading) rejects them on geometry: a clue line runs cell CENTRE to
+cell centre, the X is a 2-point path from one CORNER of the whole grid to the opposite one.
+
 ## Thermo validator
 
 **Thermo validator (v3.67; DOM fallback for cosmetic-drawn thermos v3.67.1):**
@@ -448,6 +488,22 @@ along the line joining them", `cjjw4ss931`). Two narrownesses carry the precisio
 `clauseColorWord` takes the FIRST matching clause, and on `zetamath/angel` the BETWEEN clause comes
 first ("cells along **gray** lines between two filled circles…") — a bare trigger would hand the
 double arrows the between lines' grey. It needs the name, or a sum/total beside the circles.
+
+**STRUCTURE BEATS COLOUR when the ladder can't pin them (v3.132).** A renban or a whisper is a bare
+stroke whose only distinguishing feature is colour; a double arrow is a line **circled at both
+ends**, which almost nothing else is. So when the cue fires but the colour ladder returns
+`ambiguous`, `getDoubleArrows` falls back to the SHAPE — every circle-to-circle segment is a double
+arrow — gated by `doubleArrowStructureAllowed()`: no between cue, no lockout phrasing, no
+self-deduction (those are the clue types that draw the same picture). This is what reads
+`4ideo8pjl2`, whose rules state *"each double arrow has its own color"* — six lines, six colours,
+exactly the case the single-colour and named-colour layers exist to refuse.
+
+**Bulb shapes we deliberately DON'T read** (each checked against a real puzzle, each a one-off;
+`getCellCenteredCircles` requires a near-cell-sized, near-circular rounded rect on a cell centre and
+loosening it would let non-circles act as bulbs for the arrow, thermo and between readers alike):
+hexagons (`ws3dy3a8gi`), squares (`8elcqgk9jm` and its 45°-rotated twin `sn2nojv4os` — a baseball
+diamond), and pills drawn as very wide strokes (`ur11o44tv3` "bulbous arrows"). Under-detection, by
+choice — don't re-investigate these.
 
 **BETWEEN-LINE COLLISION (the reason this touched `classifyBetweenLines`).** A double arrow draws
 the same picture as a between line AND its rules text trips the between cue head-on ("the sum of the

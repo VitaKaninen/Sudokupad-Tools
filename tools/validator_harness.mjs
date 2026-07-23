@@ -75,6 +75,8 @@ const NAMES = [
   'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'ENTROPIC_SET_RE',
   'ENTROPIC_LINEISH_RE', 'ENTROPIC_CLAUSE_RE', 'hasEntropicCue',
   'MODULAR_CUE_RE', 'MODULAR_SET_RE', 'MODULAR_CLAUSE_RE', 'hasModularCue',
+  // line-type labels ("…double arrows (DA)…" + a sticker on the line)
+  'LABEL_DEF_RE', 'labelDefPhrases',
   // between-line interval maths + bulb pruning + circle segmentation
   'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
   'lineStepGraph', 'reflectCellKey', 'walkBetweenSegment',
@@ -233,6 +235,32 @@ checkFalse('double arrow cue: a between line is not a double arrow',
 // "circles" trigger would hand the double arrows the between lines' grey.
 checkFalse('double arrow clause: does NOT match a bare between clause (zetamath/angel)',
   F.DOUBLEARROW_CLAUSE_RE.test('between lines: cells along gray lines between two filled circles must have values between those in the circles'));
+// ── line-type labels (v3.132, y697kc2umn "Dovetail") ────────────────────────
+// The whole seven-type legend must come apart into one phrase per token, with no
+// phrase running backwards past the previous list item.
+const dove = F.labelDefPhrases(
+  'normal sudoku rules.  normal rules for modular lines (mod), parity lines (par), german whispers (gw), double arrows (da), ten lines (ten), region sum lines (rsl), and entropic lines (ent) apply.');
+check('label defs: Dovetail legend → one phrase per token', dove, {
+  mod: 'normal rules for modular lines', par: 'parity lines', gw: 'german whispers',
+  da: 'double arrows', ten: 'ten lines', rsl: 'region sum lines', ent: 'entropic lines',
+});
+// Each phrase must resolve to exactly ONE validator's clause regex — that is what
+// lineLabelTypes() requires before a token may claim a line.
+const claimOf = (phrase) => [
+  ['whisper', F.WHISPERISH_RE], ['dutch', F.DUTCH_CLAUSE_RE], ['renban', F.RENBAN_CLAUSE_RE],
+  ['regionsum', F.REGIONSUM_CLAUSE_RE], ['parity', F.PARITY_CLAUSE_RE], ['zipper', F.ZIPPER_CLAUSE_RE],
+  ['entropic', F.ENTROPIC_CLAUSE_RE], ['modular', F.MODULAR_CLAUSE_RE], ['between', F.BETWEEN_CLAUSE_RE],
+  ['doublearrow', F.DOUBLEARROW_CLAUSE_RE],
+].filter(([, re]) => re.test(phrase)).map(([k]) => k);
+check('label types: Dovetail tokens each resolve to one validator',
+  Object.fromEntries(Object.entries(dove).map(([tok, ph]) => [tok, claimOf(ph)])), {
+    mod: ['modular'], par: ['parity'], gw: ['whisper'], da: ['doublearrow'],
+    ten: [], rsl: ['regionsum'], ent: ['entropic'],
+  });
+// A parenthesised aside that is not a legend must not become a token.
+check('label defs: "(if given)" is not a token',
+  F.labelDefPhrases('digits in killer cages sum to the number in the top left corner (if given)'), {});
+
 checkTrue('double arrow clause: matches its own clause (zetamath/angel)',
   F.DOUBLEARROW_CLAUSE_RE.test('double arrows: the sum of the digits along a red line connecting two circles is equal to the sum of the digits in the circles'));
 
