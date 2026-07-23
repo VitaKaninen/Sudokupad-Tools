@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.124.0
+// @version      3.125.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.124.0';
+  var SCRIPT_VERSION = '3.125.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -191,7 +191,6 @@
     regionBorderCenterEnabled:     true,    // center border: single-color CSS stroke on region outlines
     regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
     regionBorderSuppressBoundary:  false,   // (top-level toggle) drop the built-in cell grid line along region boundaries
-    regionBorderPixelSnap:         true,    // snap border geometry to whole DEVICE pixels ourselves (see snapBorderBand)
     regionHideAuthorBorders:       false,   // (top-level, SESSION-ONLY) hide author-drawn region/grid border lines in #overlay (clash with our borders on overlapping-grid puzzles). Never persisted — forced off on every page load.
     regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
     regionBorderCellColor:         '#dddad6',// cell grid line colour — matches DR's converted native grid-line colour so enabling looks identical to disabled by default
@@ -3063,10 +3062,18 @@
   // whole number of device pixels. Every band of a given nominal width then paints
   // the SAME pixel count at every boundary, which is the thing that was wrong.
   //
-  // Toggleable (`regionBorderPixelSnap`) so the two renderings can be compared
-  // directly — off = the old browser-rounded behaviour, unchanged.
+  // WHY THE ROUNDED WIDTH IS ALSO THE "MAJORITY VOTE". Left to the browser, a band
+  // of device width L paints ceil(L) where the boundary's sub-pixel fraction pushes
+  // it over and floor(L) otherwise; across boundaries that fraction is essentially
+  // uniform, so the share that rounds UP is frac(L) — the majority rounds up
+  // exactly when frac(L) > 0.5, which is `Math.round(L)`. So rounding the nominal
+  // width once and using it everywhere IS "whichever way more than half of the
+  // segments would have gone", with no counting and no tie-breaking to get wrong.
+  //
+  // Unconditional: there is no reason to keep the inconsistent rendering available,
+  // so this has no setting. It falls back to the plain path only when the transform
+  // is unusable (missing, rotated, or skewed).
   function borderSnapCtx() {
-    if (!settings.regionBorderPixelSnap) return null;
     var board = document.getElementById('svgrenderer');
     if (!board || !board.getScreenCTM) return null;
     var m; try { m = board.getScreenCTM(); } catch (e) { return null; }
@@ -3083,19 +3090,34 @@
   //   • neither                   → round the start, force the length.
   // `grid` is the cell size; an edge counts as "on the grid" within a hair of a
   // multiple of it.
-  function snapBorderBand(u0, len, s, o, grid) {
-    if (!(len > 0) || !s) return { u0: u0, len: len };
-    function onGrid(u) { var q = u / grid; return Math.abs(q - Math.round(q)) < 1e-6; }
-    var d0 = u0 * s + o, d1 = (u0 + len) * s + o;
-    var startOn = onGrid(u0), endOn = onGrid(u0 + len);
-    if (startOn && endOn) {
-      var a = Math.round(d0), b = Math.round(d1);
-      if (b <= a) b = a + 1;
-      return { u0: (a - o) / s, len: (b - a) / s };
-    }
-    var n = Math.max(1, Math.round(Math.abs(d1 - d0)));
-    var start = endOn ? Math.round(d1) - n : Math.round(d0);
-    return { u0: (start - o) / s, len: n / s };
+  // ONE QUANTIZER PER AXIS, and every edge goes through it (v3.125). The first cut
+  // snapped each rect on its own, which fixed the widths but left GAPS where
+  // segments meet: a horizontal run trimmed to start at `c*cs + SW` rounded to
+  // round(dev(c·cs) + SW·s), while the vertical strip it abuts ended at
+  // round(dev(c·cs)) + round(SW·s) — the same edge, two expressions, up to a pixel
+  // apart. The cure is to quantize the INPUTS once, not the results: a coordinate
+  // is recognised as "grid line ± a known band width", and each part is snapped
+  // separately, so any two expressions naming the same edge produce the same
+  // device pixel by construction and the geometry closes exactly.
+  //
+  // `widths` are the nominal band widths that may be offset from a grid line
+  // (the colour-strip width; the centre border has its own centred quantizer).
+  // Each becomes a whole number of device pixels — the SAME number everywhere,
+  // which is the consistency requirement: one rounding decision per band type for
+  // the whole board, never per segment.
+  function makeAxisSnap(s, o, grid, widths) {
+    var as = Math.abs(s);
+    var qw = (widths || []).map(function (w) { return Math.max(1, Math.round(w * as)) / as; });
+    function q(u) { return (Math.round(u * s + o) - o) / s; }
+    return function (u) {
+      var g = Math.round(u / grid) * grid, d = u - g;
+      if (Math.abs(d) < 1e-6) return q(g);
+      for (var i = 0; i < qw.length; i++) {
+        if (Math.abs(d - widths[i]) < 1e-6) return q(g) + qw[i];
+        if (Math.abs(d + widths[i]) < 1e-6) return q(g) - qw[i];
+      }
+      return q(u);
+    };
   }
   // A band of nominal width `len` CENTRED on `uc` (the centre border straddles the
   // boundary). Width is a whole number of device pixels at every boundary — the
@@ -3198,6 +3220,11 @@
     var NS = 'http://www.w3.org/2000/svg';
 
     var snap = borderSnapCtx();
+    // The strip width SW is the only offset-from-a-grid-line the rect geometry uses
+    // (runs are trimmed by it, bottom/right strips sit at cs−SW, corner patches at
+    // ±SW), so it is the one width the axis quantizers need to know about.
+    var snapX = snap ? makeAxisSnap(snap.sx, snap.ox, cs, [SW]) : null;
+    var snapY = snap ? makeAxisSnap(snap.sy, snap.oy, cs, [SW]) : null;
 
     var mainGroup = document.createElementNS(NS, 'g');
     mainGroup.setAttribute('data-spdr-region-split', '1');
@@ -3225,10 +3252,13 @@
 
     function addRect(ri, x, y, w, h, color) {
       if (!rGroups[ri] || w <= 0 || h <= 0) return;
-      if (snap) {
-        var bx = snapBorderBand(x, w, snap.sx, snap.ox, cs);
-        var by = snapBorderBand(y, h, snap.sy, snap.oy, cs);
-        x = bx.u0; w = bx.len; y = by.u0; h = by.len;
+      if (snapX) {
+        // Snap both EDGES through the shared quantizer and take the width from the
+        // difference — never round a width on its own, or two rects that must abut
+        // stop abutting. Full-cell fills tile exactly for the same reason.
+        var x0 = snapX(x), x1 = snapX(x + w), y0 = snapY(y), y1 = snapY(y + h);
+        x = x0; w = x1 - x0; y = y0; h = y1 - y0;
+        if (w <= 0 || h <= 0) return;
       }
       var rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('x', x);  rect.setAttribute('y', y);
@@ -3386,12 +3416,14 @@
       if (cellGridsEl) {
         var centerStroke = hexToRgba(settings.regionBorderColor, settings.regionBorderOpacity);
         var centerWidth  = parseFloat(settings.regionBorderWidth) || 3;
-        // Snapped mode draws the centre border as one RECT PER SEGMENT instead of
-        // stroking the path: a centred stroke's two edges round independently, which
-        // is exactly the ±1px wobble we're removing. The rects go in their own <g>
-        // carrying the OPACITY, with solid fills inside — perpendicular segments
-        // overlap in a w×w square at every corner, and group opacity composites that
-        // once instead of double-darkening it the way per-rect alpha would.
+        // The centre border (box outlines AND the outer frame — both are
+        // `#cell-grids path:not(.cell-grid)`) is drawn as one RECT PER SEGMENT
+        // instead of a stroked path: a centred stroke's two edges round
+        // independently, which is exactly the ±1px wobble being removed. The rects
+        // go in their own <g> carrying the OPACITY, with solid fills inside —
+        // perpendicular segments overlap in a w×w square at every corner, and group
+        // opacity composites that once instead of double-darkening it the way
+        // per-rect alpha would.
         var snapGroup = null;
         if (snap) {
           snapGroup = document.createElementNS(NS, 'g');
@@ -3404,15 +3436,22 @@
           if (snapGroup && pathIsRectilinear(dAttr)) {
             rectilinearSegments(dAttr).forEach(function (sg) {
               var vertical = Math.abs(sg.x1 - sg.x2) < 0.01;
+              var aS = vertical ? snap.sy : snap.sx, aO = vertical ? snap.oy : snap.ox;
               var across = vertical
                 ? snapCenteredBand(sg.x1, centerWidth, snap.sx, snap.ox)
                 : snapCenteredBand(sg.y1, centerWidth, snap.sy, snap.oy);
               var a0 = vertical ? Math.min(sg.y1, sg.y2) : Math.min(sg.x1, sg.x2);
               var a1 = vertical ? Math.max(sg.y1, sg.y2) : Math.max(sg.x1, sg.x2);
-              // Extend each segment by half a band at both ends so corners close.
-              var along = vertical
-                ? snapBorderBand(a0 - centerWidth / 2, (a1 - a0) + centerWidth, snap.sy, snap.oy, cs)
-                : snapBorderBand(a0 - centerWidth / 2, (a1 - a0) + centerWidth, snap.sx, snap.ox, cs);
+              // THE GAP FIX: run each segment from the near edge of the band that
+              // crosses it at one end to the far edge of the band at the other, both
+              // taken from snapCenteredBand itself. Extending by an unsnapped
+              // centerWidth/2 (the first attempt) missed by up to a pixel because the
+              // crossing band's real extent comes from the SNAPPED width; asking the
+              // same function makes the corner close exactly, by construction.
+              var lo = snapCenteredBand(a0, centerWidth, aS, aO);
+              var hiB = snapCenteredBand(a1, centerWidth, aS, aO);
+              var along = { u0: lo.u0, len: (hiB.u0 + hiB.len) - lo.u0 };
+              if (!(along.len > 0)) return;
               var r = document.createElementNS(NS, 'rect');
               r.setAttribute('x', vertical ? across.u0 : along.u0);
               r.setAttribute('y', vertical ? along.u0 : across.u0);
@@ -11225,7 +11264,7 @@
       hasColor: false,
       noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone
       enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
-      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary', 'regionHideAuthorBorders', 'regionBorderPixelSnap',
+      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary', 'regionHideAuthorBorders',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
                   'regionColorStripeWidth', 'regionColorOpacity',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
@@ -11263,7 +11302,6 @@
           'regSuppress', 'Highlight the built-in grid lines this hides on region boundaries'));
         wrap.appendChild(makeSubCheckbox('regionHideAuthorBorders', 'Hide author-drawn region borders',
           'regAuthor', 'Highlight the author-drawn region borders this hides'));
-        wrap.appendChild(makeSubCheckbox('regionBorderPixelSnap', 'Snap border widths to whole pixels'));
 
         // ── Subsection 1: Center borders ──────────────────────────────────
         wrap.appendChild(divider());
@@ -13221,44 +13259,8 @@
     }, interval);
   }
 
-  // ══ TEMPORARY (v3.124) — border pixel-snap A/B chip ═══════════════════════
-  // A floating toggle so the snapped and the browser-rounded border rendering can
-  // be flipped between on the live board without opening the settings panel.
-  // Purely a comparison aid: DELETE this function, its call in buildAllUI, and
-  // nothing else changes — `regionBorderPixelSnap` stays available in the Region
-  // borders section either way.
-  function buildTempSnapToggle() {
-    if (document.getElementById('spdr-tmp-snap')) return true;
-    if (!document.body) return false;
-    var b = document.createElement('button');
-    b.id = 'spdr-tmp-snap';
-    b.type = 'button';
-    Object.assign(b.style, {
-      position: 'fixed', left: '10px', bottom: '10px', zIndex: '2147483000',
-      background: '#1e1e2e', color: '#cdd6f4', border: '1px solid #45475a',
-      borderRadius: '6px', padding: '6px 10px', fontSize: '12px',
-      fontFamily: 'system-ui, sans-serif', cursor: 'pointer', opacity: '0.9',
-    });
-    function label() {
-      var on = !!settings.regionBorderPixelSnap;
-      b.textContent = 'Border snap: ' + (on ? 'ON (device-px)' : 'OFF (browser)');
-      b.style.borderColor = on ? '#89b4fa' : '#45475a';
-    }
-    b.addEventListener('click', function () {
-      settings.regionBorderPixelSnap = !settings.regionBorderPixelSnap;
-      saveSettings(settings);
-      applySettings();
-      if (controlSyncers['regionBorderPixelSnap']) controlSyncers['regionBorderPixelSnap']();
-      label();
-    });
-    label();
-    document.body.appendChild(b);
-    return true;
-  }
-
   function buildAllUI() {
     suppressStartDialog();
-    poll(buildTempSnapToggle, 100, 100);   // TEMPORARY — see buildTempSnapToggle
     // All of these live inside #controls now, so they must wait for SudokuPad to
     // build it (each returns false until its target container exists).
     poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)

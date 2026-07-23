@@ -495,13 +495,16 @@ way so it stays low-maintenance.
   so drawn and highlighted marks match. Settings: `zipperCenterDotEnabled`, `zipperCenterDotScale`.
   Regression-tested in `validator_harness.mjs` against `k9mm1xgca5`, which marks all seven of its
   own fold centres.
-- **Region-border pixel snapping (v3.124):** `borderSnapCtx` / `snapBorderBand` /
+- **Region-border pixel snapping (v3.124, reworked v3.125):** `borderSnapCtx` / `makeAxisSnap` /
   `snapCenteredBand` + `rectilinearSegments`, used inside `drawRegionSplitBorders` (`addRect` and
-  the centre-border block). Rounds our own geometry to whole **device** pixels so equal nominal
-  widths paint equal pixel counts at every boundary — see LESSONS_LEARNED "Border-strip drawing"
-  for the measurements and why no setting value fixes it otherwise. Toggle:
-  `regionBorderPixelSnap` (Region borders section) plus a **temporary** floating A/B chip,
-  `buildTempSnapToggle` — delete that function and its `buildAllUI` call to remove it.
+  the centre-border block). **Unconditional — no setting**; falls back to the plain path only when
+  the board transform is missing, rotated or skewed. One rounding decision per band type for the
+  whole board (`round(nominal × scale)`, which is provably the majority-vote outcome), and every
+  edge goes through a per-axis quantizer that understands "grid line ± a known band width", so
+  abutting geometry shares exact device pixels and corners close with no gap. Covers the colour
+  strips, the centre border and the outer frame alike. See LESSONS_LEARNED "Border-strip drawing"
+  for the measurements, the majority-vote proof, and the independent-snapping trap that caused
+  the v3.124 corner gaps.
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
   `reorderCornerCell`/`startCornerReflowPatch` (corner), `fixCenterTspan`/`fixCornerText` (validity
   colours).
