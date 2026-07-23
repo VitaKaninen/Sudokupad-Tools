@@ -527,3 +527,39 @@ max-content, which is what avoids the old full-window-width load flash.
 width, no slack), the rightward-overflowing menu could reach the window edge or the board.
 Not observed on desktop; address it only if it comes up (a guarded fallback that reserves,
 or clamps the menu position, only when slack runs out).
+
+## Border widths: the centre band was EATING the colour strips (v3.126)
+
+Symptom that survived v3.124/v3.125: colour region borders still rendered at two different
+widths (3px here, 4px there) and left a small gap where a run met a perpendicular band.
+
+**It was never a width-rounding bug.** Both quantizers were already correct and already
+board-wide-constant: `snapCenteredBand` gives the centre border the same whole device-pixel
+count `n` at every boundary, placed as `round(dc − n/2)` — which is exactly "odd `n` centred on
+the pixel containing the grid line, even `n` split evenly across the nearest pixel boundary".
+`makeAxisSnap` likewise gave every colour strip the same `round(SW·s)` pixels.
+
+The bug was that the two didn't know about each other. Colour strips were anchored on the
+**grid line**; the centre band straddles that same line and is drawn **on top** (its `<g>` is
+appended after the strip groups). So the band covered part of every strip, and the *visible*
+colour width was `SW − (how much of the band fell on that side)`. For an even `n` the band is
+symmetric about the line and both sides lose `n/2` — consistent. For an **odd** `n` it cannot
+be symmetric on a fractional grid line, so one side lost `(n−1)/2` and the other `(n+1)/2`:
+a permanent 1px difference between the two sides of every boundary. Verified numerically —
+centre = 3px or 5px → visible strip width takes two values board-wide; centre = 4px → one.
+The gap at trimmed run ends was the same thing: the run started `SW` past the grid line, but
+the band's edge was somewhere else, leaving bare background between them.
+
+**Fix:** `makeAxisSnap` now takes `bandLines` (grid indices carrying a centre border, collected
+from `#cell-grids path:not(.cell-grid)` *before* any strip is drawn) + `bandWidth`, and a banded
+grid line reports **two** anchors instead of one — the band's low and high device edge. Strips
+measure outward from the edge on their own side, so they are never painted over, always the
+full `SW`, and mirror-symmetric. `addRect` passes a `dir` hint (+1 = rect interior above this
+edge, −1 = below) to pick the anchor for a coordinate sitting exactly on a banded line;
+`±SW` offsets need no hint. Lines with **no** band (interior cell lines, jigsaw boundaries away
+from a box line, centre border switched off) keep the single grid-line anchor — symmetric by
+construction, which is the "centre disabled ⇒ equal on both sides" rule.
+
+**Rule to keep:** any two subsystems that draw at the same boundary must share one quantizer
+*and* know each other's occupied extent. Snapping each to the same grid line is not enough when
+one of them straddles it and paints on top.

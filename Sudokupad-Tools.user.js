@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.125.0
+// @version      3.126.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.125.0';
+  var SCRIPT_VERSION = '3.126.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3105,16 +3105,44 @@
   // Each becomes a whole number of device pixels — the SAME number everywhere,
   // which is the consistency requirement: one rounding decision per band type for
   // the whole board, never per segment.
-  function makeAxisSnap(s, o, grid, widths) {
+  // `bandLines` / `bandWidth` (v3.126) teach the quantizer where the CENTRE border
+  // sits. The colour strips used to be anchored on the grid line itself, so the
+  // centre band — drawn on top, straddling that same line — ATE part of each strip.
+  // For an odd centre width the band cannot sit symmetrically on a fractional grid
+  // line, so it ate one more device pixel on one side than the other: that is the
+  // "some 3px, some 4px" the strips were showing (verified: with centre=3 or 5 the
+  // visible strip width took two values board-wide; with centre=4 it took one).
+  // Now a grid line that carries a centre border reports TWO anchors — the band's
+  // low and high edge — and every strip is measured outward from the edge on its
+  // own side. Full strip width everywhere, nothing painted over, and the two sides
+  // stay mirror images. Lines with no centre border (interior cell lines, jigsaw
+  // boundaries away from a box line, or the centre border switched off entirely)
+  // keep the single grid-line anchor, which is symmetric by construction.
+  //
+  // `dir` disambiguates a coordinate that lands exactly ON a banded grid line:
+  // +1 = the rect's interior lies above this edge (use the band's high edge),
+  // -1 = it lies below (use the low edge). Offsets (±SW) need no hint — they are
+  // always the far edge of a strip that starts at the band, on the matching side.
+  function makeAxisSnap(s, o, grid, widths, bandLines, bandWidth) {
     var as = Math.abs(s);
     var qw = (widths || []).map(function (w) { return Math.max(1, Math.round(w * as)) / as; });
+    var bn = (bandWidth > 0) ? Math.max(1, Math.round(bandWidth * as)) : 0;
     function q(u) { return (Math.round(u * s + o) - o) / s; }
-    return function (u) {
+    function toU(dev) { return (dev - o) / s; }
+    // Device edges of the centre band straddling grid line `g`, [low-u, high-u],
+    // or null when `g` carries no centre border. Must agree with snapCenteredBand.
+    function edges(g) {
+      if (!bn || !bandLines || !bandLines[Math.round(g / grid)]) return null;
+      var st = Math.round(g * s + o - bn / 2);
+      return s > 0 ? [st, st + bn] : [st + bn, st];
+    }
+    return function (u, dir) {
       var g = Math.round(u / grid) * grid, d = u - g;
-      if (Math.abs(d) < 1e-6) return q(g);
+      var e = edges(g);
+      if (Math.abs(d) < 1e-6) return e ? toU(dir < 0 ? e[0] : e[1]) : q(g);
       for (var i = 0; i < qw.length; i++) {
-        if (Math.abs(d - widths[i]) < 1e-6) return q(g) + qw[i];
-        if (Math.abs(d + widths[i]) < 1e-6) return q(g) - qw[i];
+        if (Math.abs(d - widths[i]) < 1e-6) return (e ? toU(e[1]) : q(g)) + qw[i];
+        if (Math.abs(d + widths[i]) < 1e-6) return (e ? toU(e[0]) : q(g)) - qw[i];
       }
       return q(u);
     };
@@ -3220,11 +3248,30 @@
     var NS = 'http://www.w3.org/2000/svg';
 
     var snap = borderSnapCtx();
+    var centerWidth = parseFloat(settings.regionBorderWidth) || 3;
+    // Which grid lines carry a centre border, collected BEFORE any strip is drawn
+    // (the centre border itself is emitted further down, but the colour strips have
+    // to know its extent to sit flush against it). Keyed by grid index; vertical
+    // segments contribute to X, horizontal ones to Y. The outer frame is in the
+    // same `path:not(.cell-grid)` set, so it is included automatically.
+    var bandX = null, bandY = null;
+    if (snap && needCenterBorder) {
+      bandX = {}; bandY = {};
+      var cgEl0 = document.getElementById('cell-grids');
+      if (cgEl0) cgEl0.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
+        var d0 = p.getAttribute('d') || '';
+        if (!pathIsRectilinear(d0)) return;
+        rectilinearSegments(d0).forEach(function (sg) {
+          if (Math.abs(sg.x1 - sg.x2) < 0.01) bandX[Math.round(sg.x1 / cs)] = 1;
+          else                                bandY[Math.round(sg.y1 / cs)] = 1;
+        });
+      });
+    }
     // The strip width SW is the only offset-from-a-grid-line the rect geometry uses
     // (runs are trimmed by it, bottom/right strips sit at cs−SW, corner patches at
     // ±SW), so it is the one width the axis quantizers need to know about.
-    var snapX = snap ? makeAxisSnap(snap.sx, snap.ox, cs, [SW]) : null;
-    var snapY = snap ? makeAxisSnap(snap.sy, snap.oy, cs, [SW]) : null;
+    var snapX = snap ? makeAxisSnap(snap.sx, snap.ox, cs, [SW], bandX, centerWidth) : null;
+    var snapY = snap ? makeAxisSnap(snap.sy, snap.oy, cs, [SW], bandY, centerWidth) : null;
 
     var mainGroup = document.createElementNS(NS, 'g');
     mainGroup.setAttribute('data-spdr-region-split', '1');
@@ -3256,7 +3303,8 @@
         // Snap both EDGES through the shared quantizer and take the width from the
         // difference — never round a width on its own, or two rects that must abut
         // stop abutting. Full-cell fills tile exactly for the same reason.
-        var x0 = snapX(x), x1 = snapX(x + w), y0 = snapY(y), y1 = snapY(y + h);
+        // dir: +1 for the low edge (interior above it), -1 for the high edge.
+        var x0 = snapX(x, 1), x1 = snapX(x + w, -1), y0 = snapY(y, 1), y1 = snapY(y + h, -1);
         x = x0; w = x1 - x0; y = y0; h = y1 - y0;
         if (w <= 0 || h <= 0) return;
       }
@@ -3415,7 +3463,7 @@
       var cellGridsEl = document.getElementById('cell-grids');
       if (cellGridsEl) {
         var centerStroke = hexToRgba(settings.regionBorderColor, settings.regionBorderOpacity);
-        var centerWidth  = parseFloat(settings.regionBorderWidth) || 3;
+        // centerWidth is hoisted above — the colour-strip quantizers need it too.
         // The centre border (box outlines AND the outer frame — both are
         // `#cell-grids path:not(.cell-grid)`) is drawn as one RECT PER SEGMENT
         // instead of a stroked path: a centred stroke's two edges round
