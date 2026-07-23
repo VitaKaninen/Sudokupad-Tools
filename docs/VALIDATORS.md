@@ -234,11 +234,55 @@ only when it's selected (if that mode is on) AND **none of its cells are under f
 fog) by hit-testing cell centres against the rendered `#fog-path` path with
 `SVGGeometryElement.isPointInFill` — the fog path is the fogged region as one fill whose fill-rule
 **holes are exactly the revealed cells**, so the hit-test reports live reveal state correctly (a
-naive per-subpath rect scan over-counts because it ignores the holes). The menu still **lists** a
-fogged puzzle's validators (detect() ignores fog — thermo clues are in the DOM even while the fog
-mask visually hides them), but running one skips every clue that still has any cell under fog, so it
-never removes candidates for a clue the solver can't see yet (which would spoil the fog). Gating is
-unit-level ("the entire clue must be revealed"), matching the selection-filter contract.
+naive per-subpath rect scan over-counts because it ignores the holes). Gating is unit-level ("the
+entire clue must be revealed"), matching the selection-filter contract.
+
+**FOG LOCKOUT — the whole feature is off on a fog puzzle (v3.133).** The per-clue gate above is no
+longer the outer boundary: on any puzzle with fog the validator menu now lists nothing, previews
+nothing and runs nothing (`puzzleHasFog()` → an explanatory note instead of the item list;
+`validateBlockedByFog()` toasts and bails from `onValidatorItemClick`/`onRunAllClick`). The per-clue
+gate leaked in three ways that no amount of unit filtering fixes: the LIST itself announces which
+constraints the puzzle contains, the 👁 eyeballs draw exactly where they are, and validating a
+*revealed* clue still narrows the candidates of cells that neighbour hidden ones. `combineFogFilter`
+and `getFogTester` stay — they're still the correct per-cell semantics, and they now only ever run on
+a puzzle whose fog is fully lifted. The same policy disables **Easy Shade** (`effRegionColorFill` /
+`effShadedRegionColor` — region colouring painted region shapes straight through the fog, and the
+button greys out with a tooltip). `puzzleHasFog` is a property of the PUZZLE, not of the reveal
+state: model `currentPuzzle.fogofwar`/`.foglight` (non-empty — they're cell lists, so a bare
+truthiness test false-positives on `[]`), then the native payload, then the rendered `#fog-path`.
+
+## Remove vs Highlight (v3.133)
+
+The menu's bottom row is a two-position switch, `settings.validateHighlightMode` (persisted):
+
+- **Remove** (default) — unchanged: a validator deletes the unsupported candidates via the paste
+  path and arms the post-run Undo.
+- **Highlight** — nothing on the board is modified. The unsupported candidates are painted **orange**
+  and each validator row becomes an **on/off toggle** (press again → back to blue); the run-all
+  button becomes **"Clear all highlights"** while anything is flagged. Since no edit is made, the
+  post-run Undo never arms.
+
+Flags live in `validatorHilite.byName` as per-validator sets of `"col,row,digit"`, flattened into
+`validatorHilite.keys` for lookup. Three properties carry the design:
+
+1. **An orange mark is invalid everywhere.** `readValidatorBoardState` drops a flagged digit exactly
+   as it drops a red `.conflict` one, and `fsScanValid` (Auto-fill) does the same. So highlight-mode
+   validators cross-feed each other precisely the way a remove-mode run-all does —
+   `runAllValidatorsHighlight` is the same fixpoint loop with "add to the flag set" in place of
+   "apply removals", and it is fully synchronous (compute only, no DOM ops to await).
+2. **Highlights are a snapshot.** A `MutationObserver` on the cell layers drops **all** flags the
+   moment the player edits anything (`validatorHiliteWatch`), and `validatorHiliteCheckPuzzle` drops
+   them on SPA navigation. A stale flag would feed a wrong "this digit is impossible" into the next
+   run — an unsound elimination, which the contract below forbids. Our own repaint only sets inline
+   `style` (not observed), so it can't self-revoke.
+3. **Red stays red.** `fixCenterTspan` checks the flag store *after* the `.conflict` and `.given`
+   branches, so only ordinary blue marks are recoloured. Rendering reads the store rather than the
+   run, so the orange survives every board repaint for free — the pencilmark observer already
+   re-runs that colour pass. Colour: `settings.validateHighlightColor` (`#ff9800`, no UI — a
+   localStorage-only escape hatch).
+
+An **emptied cell** (every candidate flagged) is reported the same way a remove-mode run reports it,
+via `noValidComboHighlightMsg` — a red ⛔ toast, not a false all-clear.
 
 ## The candidate-elimination contract (every current + future validator)
 

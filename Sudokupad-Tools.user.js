@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.132.0
+// @version      3.133.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.132.0';
+  var SCRIPT_VERSION = '3.133.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -290,6 +290,8 @@
     showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
     showValidateButton:           true,   // show/hide the floating "Validate Constraints" button — the single on/off for the whole validator feature (the old per-validator validate*Enabled keys were removed in v3.104; the menu already lists only detected constraints)
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
+    validateHighlightMode:        false,  // "Validate Constraints" menu toggle: HIGHLIGHT unsupported candidates in orange (each validator row becomes an on/off toggle) instead of REMOVING them
+    validateHighlightColor:       '#ff9800',  // colour of a highlighted-invalid centre mark (no UI — a localStorage-only escape hatch, like disambiguateColors)
     fsSelectDelayMs:              100,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
     fsUndoDelayMs:                50,     // Auto-fill: pause (ms) between native-undo clicks when the message's Undo is used
@@ -1165,6 +1167,23 @@
     }
   }
 
+  // The highlight-mode fill for one centre-mark element, or null when it isn't flagged.
+  // Only a <tspan> carries a digit (data-val); its parent text.cell-candidate holds the
+  // cell's x/y. Declared here (next to its only caller) but reading the flag store that
+  // lives with the validators — see the HIGHLIGHT MODE block.
+  function validatorHiliteFillFor(t) {
+    if (validatorHilite.keys.size === 0) return null;
+    if (t.tagName !== 'tspan') return null;
+    var d = t.getAttribute('data-val');
+    if (!d) return null;
+    var p = t.parentNode;
+    var x = p && p.getAttribute ? p.getAttribute('x') : null;
+    var y = p && p.getAttribute ? p.getAttribute('y') : null;
+    if (x == null || y == null) return null;
+    if (!validatorHiliteHas(cellKeyFromMarkXY(x, y), Number(d))) return null;
+    return validatorHighlightColor();
+  }
+
   function fixCenterTspan(t) {
     // Given candidates (author-provided pencilmarks, tspan.given) are part of the
     // puzzle like given digits, so they're always white to distinguish them from
@@ -1179,6 +1198,13 @@
       else applyInlineFill(t, '#e8e6e3');   // --dm-white
       return;
     }
+    // Highlight mode: a candidate a validator has ruled out is painted ORANGE. Only
+    // ordinary (blue) marks are repainted — a red .conflict mark stays red (SudokuPad
+    // owns that colour and it already says "invalid"), and it is checked BELOW the
+    // conflict test for exactly that reason. The flag store is the source of truth, so
+    // this survives every board repaint without re-running the validator.
+    var hiFill = t.classList.contains('conflict') ? null : validatorHiliteFillFor(t);
+    if (hiFill) { applyInlineFill(t, hiFill); return; }
     if (!settings.centerEnabled) { t.style.removeProperty('fill'); return; }
     var isC = t.classList.contains('conflict');
     var color = isC ? settings.centerInvalidColor   : settings.centerValidColor;
@@ -1303,13 +1329,51 @@
     el.style.setProperty('stroke-opacity', String(sa), 'important');
   }
 
+  // ── FOG IS A HARD SPOILER BOUNDARY (v3.133) ────────────────────────────────
+  // On a Fog-of-War puzzle every clue the solver hasn't uncovered is STILL IN THE
+  // DOM and still in the model — so any feature that reads the board and paints or
+  // reasons from it can leak what's hidden. Per-clue gating (getFogTester /
+  // combineFogFilter) was not enough in practice: Easy Shade painted region shapes
+  // through the fog, and the validators' menu, eyeballs and toasts announced which
+  // constraints exist and how many. The policy is therefore blunt on purpose —
+  // **the whole feature is disabled for the whole puzzle**, not narrowed per cell:
+  //   • Easy Shade (region fill + shaded extra regions) never paints,
+  //   • the constraint validators never list, preview or run.
+  // Erring toward caution costs a fog solver nothing; a leak spoils the puzzle.
+  //
+  // "Has fog" is a property of the PUZZLE, not of the current reveal state, so it
+  // reads the model / native payload first and only falls back to the rendered
+  // #fog-path (which empties out once everything has been uncovered).
+  function puzzleHasFog() {
+    // `fogofwar`/`foglight` are cell LISTS, so an empty array (present but unused) must
+    // read as "no fog" — a bare truthiness test would disable the features everywhere
+    // the key merely exists.
+    function set(v) { return Array.isArray(v) ? v.length > 0 : !!v; }
+    try {
+      var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+        ? Framework.app.puzzle.currentPuzzle : null;
+      if (cp && (set(cp.fogofwar) || set(cp.foglight))) return true;
+    } catch (e) { /* model not ready — fall through */ }
+    var raw = getRawPuzzleJson();
+    if (raw && (set(raw.fogofwar) || set(raw.foglight))) return true;
+    var g = document.getElementById('fog-path');
+    var p = g ? g.querySelector('path') : null;
+    return !!(p && (p.getAttribute('d') || '').trim());
+  }
+  // The EFFECTIVE state of the two Easy Shade modes: the saved setting AND-ed with
+  // the fog lockout. Every render site reads these instead of settings.* directly,
+  // so a puzzle that arrives with the mode already saved on (or auto-enabled by
+  // applyAutoShade) still paints nothing under fog.
+  function effRegionColorFill()   { return !!settings.regionColorFillEnabled   && !puzzleHasFog(); }
+  function effShadedRegionColor() { return !!settings.shadedRegionColorEnabled && !puzzleHasFog(); }
+
   // Shaded-mode recolour for an #underlay rect that falls inside a DOM-detected
   // grey shaded region (see getDomShadedRegionMap). Returns the palette rgba to
   // paint, or null when shaded mode is off, the puzzle has no such regions, or this
   // rect isn't in one. The rect's CENTRE picks the cell, so full cells and the inset
   // border strips both resolve to their region's colour.
   function extraRegionRectColor(rect) {
-    if (!settings.shadedRegionColorEnabled) return null;
+    if (!effShadedRegionColor()) return null;
     var map = getDomShadedRegionMap();
     if (!map) return null;
     var cs = getGridCellSize();
@@ -1405,9 +1469,9 @@
   // Whether any region feature is active (so mainGroup exists / region borders
   // are drawn). Mirrors needFills/needMultiBorders/needCenterBorder + shaded.
   function regionFeatureActive() {
-    return !!settings.regionColorFillEnabled
+    return effRegionColorFill()
       || settings.regionBorderMultiEnabled || settings.regionBorderCenterEnabled
-      || !!settings.shadedRegionColorEnabled;
+      || effShadedRegionColor();
   }
   // Shaded "extra regions" (e.g. "grey regions must contain 1-9") render on top
   // of region borders by default (they live in #cages, above mainGroup). Whenever
@@ -1458,7 +1522,7 @@
   // off so normal Object-shading resumes.
   function assignExtraRegionColors(svg) {
     var paths = [].slice.call(svg.querySelectorAll('#cages path.cage-extraregion'));
-    if (!settings.shadedRegionColorEnabled || paths.length === 0) {
+    if (!effShadedRegionColor() || paths.length === 0) {
       paths.forEach(function (p) { delete p.dataset.spdrExtraColorIdx; });
       return;
     }
@@ -2767,7 +2831,10 @@
       && Framework.app.puzzle && !!Framework.app.puzzle.currentPuzzle);
     if (!modelReadable) return false;             // wait until detection is trustworthy
     var savedShaded = !!loadSettings().shadedRegionColorEnabled;
-    var want = puzzleHasShadedRegions() ? true : savedShaded;
+    // Fog: never auto-enable. The render sites are gated too (effShadedRegionColor),
+    // so this is belt-and-braces — but leaving the flag off also keeps the Easy Shade
+    // button's indicator honest about the fact that nothing will paint.
+    var want = puzzleHasFog() ? false : (puzzleHasShadedRegions() ? true : savedShaded);
     if (settings.shadedRegionColorEnabled !== want) {
       settings.shadedRegionColorEnabled = want;   // in-memory only — do NOT saveSettings
       applySettings();
@@ -3264,7 +3331,7 @@
       }
     })();
 
-    var needFills        = settings.regionColorFillEnabled;
+    var needFills        = effRegionColorFill();
     var needMultiBorders = settings.regionBorderMultiEnabled;
     var needCenterBorder = settings.regionBorderCenterEnabled;
     // Shaded extra-regions are drawn (as clones) inside mainGroup so they sit
@@ -3523,7 +3590,7 @@
 
     // Full-cell background fills (drawn after border rects = higher z-order within mainGroup).
     // Uses fillPalette (regionColorFillOpacity) independently of border opacity.
-    if (settings.regionColorFillEnabled) {
+    if (effRegionColorFill()) {
       regions.forEach(function (cells, ri) {
         if (!rGroups[ri]) return;
         var ci = regionColors[ri];
@@ -3677,7 +3744,7 @@
       // triggered this draw (observers call drawRegionSplitBorders independently
       // of applySettings, so we can't rely on a prior assignExtraRegionColors).
       assignExtraRegionColors(svg);
-      var usePalette = !!settings.shadedRegionColorEnabled;
+      var usePalette = effShadedRegionColor();
       var shadedGroup = document.createElementNS(NS, 'g');
       shadedGroup.setAttribute('data-spdr-shaded', '1');
       var shOp  = (settings.shadedRegionColorOpacity != null) ? settings.shadedRegionColorOpacity : 0.5;
@@ -3718,7 +3785,7 @@
     // puzzle renders its extra regions as cage-extraregion paths (cloned above), and
     // per-cell when that cell already carries a full-cell #underlay rect (recoloured in
     // place by fixUnderlayRect) so grey-shaded regions are never double-painted.
-    if (settings.shadedRegionColorEnabled
+    if (effShadedRegionColor()
         && !document.querySelector('#cages path.cage-extraregion')) {
       var modelShaded = getModelShadedRegionMap();
       if (modelShaded) {
@@ -6641,7 +6708,12 @@
       text.querySelectorAll('tspan').forEach(function (sp) {
         if (sp.classList.contains('conflict')) return;   // red/invalid candidate: not a usable partner
         var dv = sp.getAttribute('data-val');
-        if (/^[0-9]$/.test(dv) && uni[Number(dv)]) s.add(Number(dv));
+        if (!/^[0-9]$/.test(dv) || !uni[Number(dv)]) return;
+        // Orange (highlight-mode) marks are invalid for exactly the same reason a red
+        // one is — a validator has already ruled them out — so they are not partners
+        // either. This is what makes several highlight-mode validators cross-feed.
+        if (validatorHiliteHas(ck, Number(dv))) return;
+        s.add(Number(dv));
       });
       if (s.size === 0) delete centre[ck];
     });
@@ -10889,6 +10961,222 @@
     }
   }
 
+  // ── HIGHLIGHT MODE (v3.133) ────────────────────────────────────────────────
+  // The toggle at the bottom of the validator menu switches what a validator DOES
+  // with the candidates it finds unsupported:
+  //   Remove    (default) — the original behaviour: delete them via the paste path.
+  //   Highlight — leave them on the board and paint them ORANGE, so the player does
+  //               the removing. Each validator's menu row then behaves as an ON/OFF
+  //               TOGGLE: press once to flag, press again to send its marks back to
+  //               blue. Nothing on the board is modified, so there is nothing to undo
+  //               (the post-run Undo button never arms in this mode).
+  //
+  // Flags live per validator as sets of "col,row,digit", so a row owns exactly what it
+  // flagged and can drop exactly that. `keys` is their flattened union — the hot lookup
+  // used by the two readers below.
+  //
+  // AN ORANGE MARK IS INVALID EVERYWHERE. readValidatorBoardState() treats a flagged
+  // mark exactly like a red .conflict one, so running several validators in highlight
+  // mode cross-feeds precisely the way a remove-mode run-all does; fsScanValid() does
+  // the same, so the Auto-fill button won't place a digit this feature has ruled out.
+  //
+  // Highlights are a SNAPSHOT of the board they were computed from, so the moment the
+  // player edits any cell they are ALL dropped (validatorHiliteWatch) — a stale flag
+  // would silently feed a wrong "this digit is impossible" into the next run, and an
+  // unsound elimination is exactly what the candidate-elimination contract forbids.
+  // Colouring is not an edit (it only sets inline `style`, which the observer doesn't
+  // watch), so our own repaint can't self-revoke.
+  var validatorHilite = { byName: Object.create(null), keys: new Set(), observer: null, key: null };
+
+  function validatorHighlightMode() { return settings.validateHighlightMode === true; }
+  function validatorHighlightColor() { return settings.validateHighlightColor || DEFAULTS.validateHighlightColor; }
+  function highlightRowBg() { return hexToRgba(validatorHighlightColor(), 0.20); }
+  // The "this row is currently colouring the board" look, shared by the plain menu
+  // items and the Thermo row (which builds its own element).
+  function styleActiveHighlightRow(el) {
+    el.style.setProperty('background-color', highlightRowBg(), 'important');
+    el.style.setProperty('box-shadow', 'inset 3px 0 0 ' + validatorHighlightColor(), 'important');
+  }
+  function validatorHiliteActive(name) { return !!validatorHilite.byName[name]; }
+  function validatorHiliteAny() { return Object.keys(validatorHilite.byName).length > 0; }
+  function validatorHiliteHas(cellKey, digit) { return validatorHilite.keys.has(cellKey + ',' + digit); }
+  function validatorHiliteRebuildKeys() {
+    var all = new Set();
+    Object.keys(validatorHilite.byName).forEach(function (n) {
+      validatorHilite.byName[n].forEach(function (k) { all.add(k); });
+    });
+    validatorHilite.keys = all;
+  }
+  // Repaint the centre marks. fixCenterTspan reads the flag store directly, so re-running
+  // the ordinary colour pass is the whole of "apply the highlight" — and because the
+  // pencilmark observer re-runs that same pass on every SudokuPad re-render, the orange
+  // survives repaints and selection changes for free.
+  function validatorHiliteRepaint() {
+    var cc = document.getElementById('cell-candidates');
+    if (cc) fixAllCenterTspans(cc);
+  }
+  function validatorHiliteWatch() {
+    var want = validatorHiliteAny();
+    if (want && !validatorHilite.observer) {
+      var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
+        .map(function (s) { return document.querySelector(s); }).filter(Boolean);
+      if (!targets.length) return;
+      validatorHilite.observer = new MutationObserver(function () { validatorHiliteClearAll(); });
+      targets.forEach(function (t) { validatorHilite.observer.observe(t, { childList: true, subtree: true, characterData: true }); });
+    } else if (!want && validatorHilite.observer) {
+      validatorHilite.observer.disconnect();
+      validatorHilite.observer = null;
+    }
+  }
+  function validatorHiliteSet(name, removals) {
+    var s = new Set();
+    removals.forEach(function (r) { s.add(r.cellKey + ',' + r.digit); });
+    validatorHilite.byName[name] = s;
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();
+    validatorHiliteRepaint();
+  }
+  function validatorHiliteClear(name) {
+    delete validatorHilite.byName[name];
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();
+    validatorHiliteRepaint();
+  }
+  // SPA navigation: flags are meaningless on a different puzzle. The board observer
+  // normally catches the re-render, but it holds references to the OLD layer nodes if
+  // SudokuPad replaces them outright — so the puzzle key is checked directly wherever
+  // the highlights are about to be read or shown.
+  function validatorHiliteCheckPuzzle() {
+    var k = location.pathname;
+    if (validatorHilite.key === k) return;
+    validatorHilite.key = k;
+    validatorHiliteClearAll();
+  }
+  function validatorHiliteClearAll() {
+    if (!validatorHiliteAny()) return;
+    validatorHilite.byName = Object.create(null);
+    validatorHilite.keys = new Set();
+    validatorHiliteWatch();
+    validatorHiliteRepaint();
+    if (document.getElementById('sp-validate-menu')) rebuildValidateMenu();
+  }
+
+  // Same wording as noValidComboMsg, for the mode that flags instead of deleting.
+  function noValidComboHighlightMsg(checked, flagged, emptied) {
+    return '⛔ No valid combination found — checked ' + checked + ' and highlighted ' +
+           flagged + ' candidate' + (flagged === 1 ? '' : 's') + ', but ' + emptied +
+           ' cell' + (emptied === 1 ? '' : 's') + ' now ha' + (emptied === 1 ? 's' : 've') +
+           ' NO valid candidates left. The constraint can\'t be satisfied by the current ' +
+           'pencilmarks — there\'s a mistake (or the marks are incomplete). Nothing was ' +
+           'removed; press the same button again to clear the highlight.';
+  }
+
+  // Run ONE validator in highlight mode. Pure compute + flag, synchronous, no board
+  // edit — and a straight toggle: an already-flagged validator just clears its flags.
+  function toggleValidatorHighlight(def, unitFilter) {
+    if (actionInProgress) return;
+    var label = validatorLabel(def);
+    if (validatorHiliteActive(def.name)) {
+      validatorHiliteClear(def.name);
+      rebuildValidateMenu();
+      showRemoveInvalidToast('Cleared the "' + label + '" highlight — those candidates are back to normal.', 'success');
+      return;
+    }
+    var comp;
+    try { comp = def.compute(unitFilter); }
+    catch (e) {
+      console.error('[spDR-fix] VALIDATE highlight failed', e);
+      showRemoveInvalidToast('Validation failed unexpectedly — nothing was changed.', 'error');
+      return;
+    }
+    var note = comp.note || null;
+    function withNote(msg) { return note ? msg + ' ' + note : msg; }
+    if (comp.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+    if (comp[def.noneKey]) {
+      if (comp.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + label + '" again — only your selected cells will be highlighted (the rest of the line is still read for context).', 'warning'); return; }
+      showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), note ? 'warning' : 'success');
+      return;
+    }
+    var count    = comp[def.countKey] || 0;
+    var checked  = count + ' ' + pluralUnit(def.unitNoun, count);
+    var removals = comp.removals || [];
+    var before   = markedCellKeys();          // cells that still had a usable candidate
+    validatorHiliteSet(def.name, removals);   // …flagging makes them unusable, so diff after
+    rebuildValidateMenu();
+    if (removals.length === 0) { showRemoveInvalidToast(withNote('Checked ' + checked + ' — no invalid candidates to highlight.'), 'success'); return; }
+    var emptied = countEmptiedSince(before);
+    if (emptied > 0) { showRemoveInvalidToast(noValidComboHighlightMsg(checked, removals.length, emptied), 'error'); return; }
+    showRemoveInvalidToast(withNote('Highlighted ' + removals.length + ' invalid candidate' +
+      (removals.length === 1 ? '' : 's') + ' across ' + checked + '. Press "' + label +
+      '" again to clear the highlight.'), 'success');
+  }
+
+  // Run EVERY detected validator in highlight mode, to the same cross-constraint
+  // fixpoint as the remove-mode run-all: each pass re-reads the board, and because a
+  // flagged mark reads as invalid, one validator's flags immediately constrain the
+  // next. Also a toggle — with anything highlighted, this button clears everything.
+  function runAllValidatorsHighlight(unitFilter) {
+    if (actionInProgress) return;
+    if (validatorHiliteAny()) {
+      validatorHiliteClearAll();
+      rebuildValidateMenu();
+      showRemoveInvalidToast('Cleared every highlighted candidate — the board is back to normal.', 'success');
+      return;
+    }
+    var defs = detectedValidators();
+    if (defs.length === 0) { showRemoveInvalidToast('No supported constraints were detected in this puzzle.', 'warning'); return; }
+    var before = markedCellKeys();
+    var t0 = performance.now();
+    var present = {}, notes = {}, unsupported = false, total = 0, passes = 0;
+    var changed = true, guard = 0;
+    while (changed && guard++ < 50) {
+      changed = false;
+      for (var i = 0; i < defs.length; i++) {
+        var def = defs[i], comp;
+        try { comp = def.compute(unitFilter); }
+        catch (e) { console.error('[spDR-fix] VALIDATE highlight failed', def.name, e); continue; }
+        if (comp.note) notes[comp.note] = 1;
+        if (comp.unsupported) { unsupported = true; break; }
+        if (comp[def.noneKey]) continue;
+        present[def.name] = { count: comp[def.countKey] || 0, unitNoun: def.unitNoun };
+        var s = validatorHilite.byName[def.name] || new Set();
+        var added = 0;
+        (comp.removals || []).forEach(function (r) {
+          var k = r.cellKey + ',' + r.digit;
+          if (!s.has(k)) { s.add(k); added++; }
+        });
+        validatorHilite.byName[def.name] = s;   // ran → the row is "on" even if it flagged nothing
+        if (added > 0) { validatorHiliteRebuildKeys(); total += added; changed = true; }
+      }
+      passes++;
+      if (unsupported) break;
+    }
+    if (unsupported) {
+      validatorHilite.byName = Object.create(null); validatorHilite.keys = new Set();
+      showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning');
+      return;
+    }
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();
+    validatorHiliteRepaint();
+    rebuildValidateMenu();
+    var noteList = Object.keys(notes);
+    function withNotes(msg) { return noteList.length ? msg + ' ' + noteList.join(' ') : msg; }
+    var names = Object.keys(present);
+    if (names.length === 0) {
+      var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
+      showRemoveInvalidToast(withNotes(noneFoundMsg(nouns, !!unitFilter)), noteList.length ? 'warning' : 'success');
+      return;
+    }
+    var checked = names.map(function (nm) { var p = present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
+    if (total === 0) { showRemoveInvalidToast(withNotes('Checked ' + checked + ' — no invalid candidates to highlight.'), 'success'); return; }
+    var emptied = countEmptiedSince(before);
+    if (emptied > 0) { showRemoveInvalidToast(noValidComboHighlightMsg(checked, total, emptied), 'error'); return; }
+    showRemoveInvalidToast(withNotes('Highlighted ' + total + ' invalid candidate' + (total === 1 ? '' : 's') +
+      ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
+      ' (' + passes + ' pass' + (passes === 1 ? '' : 'es') + '). Press "Clear all highlights" to undo.'), 'success');
+  }
+
   // Apply ONE validator against the CURRENT board (compute → apply its removals
   // via the shared paste-path worker). Reads the live DOM, so each call sees prior
   // removals (this is what lets run-all cross-feed). No lock toggle, no toast —
@@ -11033,23 +11321,39 @@
   // menu stays open either way.
   function onValidatorItemClick(def) {
     if (actionInProgress) return;
+    if (validateBlockedByFog()) return;
+    // In highlight mode a row that is already flagged just clears itself — no
+    // selection is needed for that, so resolve the filter only when we're flagging.
+    if (validatorHighlightMode() && validatorHiliteActive(def.name)) { toggleValidatorHighlight(def, null); return; }
     var sf = selectionUnitFilter();
     if (!sf.ok) return;
     var filter = combineFogFilter(sf.filter);   // fog gate is always on (no-op when no fog)
+    if (validatorHighlightMode()) { toggleValidatorHighlight(def, filter); return; }
     runSingleValidator(def, filter);
   }
   // The "Run all above functions" button: same selection + fog resolution as a
   // single item, then the cross-constraint fixpoint over every detected validator.
   function onRunAllClick() {
     if (actionInProgress) return;
+    if (validateBlockedByFog()) return;
+    if (validatorHighlightMode() && validatorHiliteAny()) { runAllValidatorsHighlight(null); return; }   // = "clear all highlights"
     var sf = selectionUnitFilter();
     if (!sf.ok) return;
     var filter = combineFogFilter(sf.filter);
+    if (validatorHighlightMode()) { runAllValidatorsHighlight(filter); return; }
     runAllValidators(filter);
+  }
+  // Fog lockout for the whole validator feature — see puzzleHasFog. Toasts and
+  // returns true when the puzzle has fog, so callers can just bail.
+  function validateBlockedByFog() {
+    if (!puzzleHasFog()) return false;
+    showRemoveInvalidToast('The constraint validators are disabled on Fog of War puzzles. Even a validator that skips fogged clues narrows the candidates of the cells around them, which tells you about clues you haven\'t uncovered yet — so the whole feature stays off here.', 'warning');
+    return true;
   }
   function openValidateMenu() {
     var btn = document.getElementById('sp-validate-btn');
     if (!btn) return;
+    validatorHiliteCheckPuzzle();   // drop stale highlights from a previous puzzle
     var bs = getComputedStyle(btn);
     var bg = bs.backgroundColor || 'rgb(34, 36, 38)';
     var border = bs.borderColor || 'rgb(62, 68, 70)';
@@ -11078,9 +11382,13 @@
     // opts.disabled → greyed out, not clickable, and opts.title explains WHY on
     // hover (the tooltip is the whole point of showing a disabled item instead of
     // hiding it: a missing row tells the player nothing).
+    // opts.active (highlight mode) → the row is a pressed toggle: it holds an orange
+    // tint + rule, so which validators are currently colouring the board is legible at
+    // a glance and clicking again is obviously the way to turn one off.
     function addItem(label, onClick, opts) {
       opts = opts || {};
       var disabled = opts.disabled === true;
+      var active   = opts.active === true;
       var it = document.createElement('div');
       if (opts.title) it.title = opts.title;
       Object.assign(it.style, {
@@ -11090,6 +11398,7 @@
         fontSize: '12px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
       });
+      if (active) styleActiveHighlightRow(it);
       var lbl = document.createElement('span');
       lbl.textContent = label;
       lbl.style.flex = '1';
@@ -11103,8 +11412,9 @@
       it.style.setProperty('color', text, 'important');
       it.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onClick(); });
       if (!disabled) {
+        var restBg = active ? highlightRowBg() : 'transparent';
         it.addEventListener('mouseenter', function () { it.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
-        it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', 'transparent', 'important'); });
+        it.addEventListener('mouseleave', function () { it.style.setProperty('background-color', restBg, 'important'); });
       }
       menu.appendChild(it);
     }
@@ -11166,13 +11476,14 @@
         whiteSpace: 'normal', userSelect: 'none',
         opacity: disabled ? '0.4' : '1',
       });
+      var baseBg = opts.active === true ? highlightRowBg() : 'rgba(255,255,255,0.06)';
       b.style.setProperty('color', text, 'important');
-      b.style.setProperty('border', '1px solid ' + border, 'important');
-      b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important');
+      b.style.setProperty('border', '1px solid ' + (opts.active === true ? validatorHighlightColor() : border), 'important');
+      b.style.setProperty('background-color', baseBg, 'important');
       b.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onClick(); });
       if (!disabled) {
         b.addEventListener('mouseenter', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.16)', 'important'); });
-        b.addEventListener('mouseleave', function () { b.style.setProperty('background-color', 'rgba(255,255,255,0.06)', 'important'); });
+        b.addEventListener('mouseleave', function () { b.style.setProperty('background-color', baseBg, 'important'); });
       }
       menu.appendChild(b);
     }
@@ -11190,6 +11501,8 @@
         whiteSpace: 'normal', userSelect: 'none',
       });
       row.style.setProperty('color', text, 'important');
+      var thermoActive = validatorHighlightMode() && validatorHiliteActive(def.name);
+      if (thermoActive) styleActiveHighlightRow(row);
       var lbl = document.createElement('span');
       lbl.textContent = validatorLabel(def);
       lbl.style.flex = '1';
@@ -11209,8 +11522,9 @@
       row.appendChild(slowLbl);
       row.appendChild(makeValidatorEye(def));
 
+      var thermoRestBg = thermoActive ? highlightRowBg() : 'transparent';
       row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
-      row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
+      row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', thermoRestBg, 'important'); });
       row.addEventListener('click', function (e) { e.stopPropagation(); onValidatorItemClick(def); });
       menu.appendChild(row);
     }
@@ -11226,7 +11540,70 @@
     // select the line, so the ambiguity is resolved by them — which re-enables every
     // such item. This is the uniform policy for ALL validators, driven off each
     // def's `ambiguous()` (no per-name special-casing).
+    // A sliding two-position switch (Remove ⟷ Highlight) — see the HIGHLIGHT MODE
+    // block. Flipping it clears every existing highlight, because the two modes can't
+    // co-exist coherently: leaving orange marks behind while the buttons start
+    // deleting again would mean removals computed against a board the player can no
+    // longer see the reasoning for.
+    function addModeToggle() {
+      var on = validatorHighlightMode();
+      var row = document.createElement('label');
+      row.title = 'What a validator does with the candidates it proves impossible.\n\n' +
+                  'Remove — delete them (a post-run Undo button appears).\n' +
+                  'Highlight — leave them in place and colour them orange; each validator button then works as an on/off toggle, and you remove the marks yourself. Orange candidates count as invalid for every other function, so validators still feed each other.';
+      Object.assign(row.style, {
+        display: 'flex', alignItems: 'center', gap: '8px',
+        padding: '6px 9px', borderRadius: '6px', cursor: 'pointer',
+        fontSize: '12px', fontWeight: '600',
+        whiteSpace: 'normal', userSelect: 'none',
+      });
+      row.style.setProperty('color', text, 'important');
+
+      var track = document.createElement('span');
+      Object.assign(track.style, {
+        position: 'relative', flexShrink: '0',
+        width: '34px', height: '18px', borderRadius: '9px',
+        transition: 'background-color .15s ease',
+      });
+      track.style.setProperty('background-color', on ? validatorHighlightColor() : 'rgba(255,255,255,0.18)', 'important');
+      var knob = document.createElement('span');
+      Object.assign(knob.style, {
+        position: 'absolute', top: '2px', left: on ? '18px' : '2px',
+        width: '14px', height: '14px', borderRadius: '50%',
+        background: '#fff', transition: 'left .15s ease',
+      });
+      track.appendChild(knob);
+
+      var lbl = document.createElement('span');
+      lbl.textContent = on ? 'Highlight invalid digits' : 'Remove invalid digits';
+      lbl.style.flex = '1';
+
+      row.appendChild(track);
+      row.appendChild(lbl);
+      row.addEventListener('click', function (e) {
+        e.stopPropagation();
+        settings.validateHighlightMode = !validatorHighlightMode();
+        saveSettings(settings);
+        // clearAll rebuilds the menu itself when it actually had something to clear.
+        if (validatorHiliteAny()) validatorHiliteClearAll();
+        else rebuildValidateMenu();
+      });
+      row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+      row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
+      menu.appendChild(row);
+    }
+
+    // FOG LOCKOUT (v3.133). On a Fog of War puzzle the menu lists nothing and runs
+    // nothing. The per-clue fog gate below is not enough on its own: the LIST itself
+    // announces which constraints the puzzle contains, the 👁 previews draw where they
+    // are, and validating a revealed clue still narrows cells that neighbour hidden
+    // ones. See puzzleHasFog.
+    if (puzzleHasFog()) {
+      addNote('🌫 Fog of War — constraint validation is disabled for this puzzle.');
+      addNote('Listing, previewing or running a validator would give away clues you haven\'t uncovered yet, so the whole feature stays off here.');
+    } else {
     var selOnly = settings.validateSelectionOnly === true;
+    var hiMode  = validatorHighlightMode();
     var detected = detectedValidators();
     if (detected.length === 0) {
       addNote('No supported constraints detected in this puzzle.');
@@ -11236,6 +11613,7 @@
         // Line validators carry their classification from detectedValidators()
         // (def.cls) — no re-classification here.
         var amb = !!(def.cls && def.cls.mode === 'ambiguous');
+        var act = hiMode && validatorHiliteActive(def.name);
         var noun = def.unitNoun || def.name;
         var tip = '';
         if (amb && !selOnly)
@@ -11244,8 +11622,12 @@
               + 'then select the line\'s cells to run it by hand.';
         else if (amb)
           tip = 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
+        else if (act)
+          tip = 'Highlighting is ON for this validator — click to clear its orange candidates.';
+        // An ACTIVE highlight row stays clickable even when it would otherwise be
+        // greyed out: turning a highlight off must never be blocked.
         addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
-                { disabled: amb && !selOnly, title: tip, eyeDef: def });
+                { disabled: amb && !selOnly && !act, title: tip, eyeDef: def, active: act });
       });
     }
     addSep();
@@ -11253,15 +11635,25 @@
     // selection-only: that mode narrows every validator to the player's selection
     // (and re-enables the ambiguous ones, which would then apply every rival line
     // type to the same selected line). With it ticked, run validators one at a time.
-    if (detected.length > 0)
-      addButton('Run all above functions', onRunAllClick,
-        selOnly
-          ? 'Disabled while "Validate selection only" is ticked — run the validators one at a time from the list above.'
-          : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).',
-        { disabled: selOnly });
+    // In highlight mode it doubles as the master "clear everything" button.
+    if (detected.length > 0) {
+      var clearAll = hiMode && validatorHiliteAny();
+      addButton(clearAll ? 'Clear all highlights' : 'Run all above functions', onRunAllClick,
+        clearAll
+          ? 'Send every highlighted candidate back to its normal colour.'
+          : (selOnly
+            ? 'Disabled while "Validate selection only" is ticked — run the validators one at a time from the list above.'
+            : (hiMode
+              ? 'Run every validator listed above in a loop until nothing more can be flagged, highlighting the results in orange (each validator reads the previous one\'s orange marks as invalid).'
+              : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).')),
+        { disabled: selOnly && !clearAll, active: clearAll });
+    }
     addCheckbox('Validate selection only', 'validateSelectionOnly',
       'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped. Also re-enables any greyed-out validator whose line type couldn\'t be identified, and disables "Run all above functions". Exception: German whisper lines DO run on a partial selection (only the selected cells change; the rest of the line is still read). Resets on page reload.',
       rebuildValidateMenu);
+    addSep();
+    addModeToggle();
+    }
 
     // Drop the menu into the reserved column, directly above the button row. Its
     // width comes from the column, so it needs no sizing or positioning of its own.
@@ -12722,7 +13114,9 @@
       });
     }
     refreshSwatches();
-    easyShadeSwatchRefresh = refreshSwatches; // let applySettings keep them current
+    // applySettings drives BOTH the palette swatches and the fog lockout look — fog
+    // is only detectable once the model/board has loaded, which is after this build.
+    easyShadeSwatchRefresh = function () { refreshSwatches(); applyToggleStyle(); };
     btn.appendChild(lbl);
     btn.appendChild(swatches);
 
@@ -12903,6 +13297,7 @@
       hoverInfo.style.left   = 'auto';
     }
     btn.addEventListener('mouseenter', function () {
+      if (puzzleHasFog()) return;                  // fog lockout — the title attr says why
       if (card.style.display !== 'none') return;   // opacity card is open — don't overlap it
       renderHoverInfo(); positionHoverInfo();
       hoverInfo.style.display = 'block';
@@ -12911,8 +13306,26 @@
 
     // ── Toggle style ──────────────────────────────────────────────────────────
     function applyToggleStyle() {
-      var reg    = !!settings.regionColorFillEnabled;
-      var shd    = !!settings.shadedRegionColorEnabled;
+      // FOG LOCKOUT — shading a region paints its shape straight through the fog, so
+      // the whole button is dead on a fog puzzle (see puzzleHasFog). Shown greyed with
+      // a tooltip rather than hidden: a vanished button explains nothing.
+      if (puzzleHasFog()) {
+        btn.style.setProperty('background-color', bgBase, 'important');
+        btn.style.setProperty('border',     '1px solid ' + borderCol, 'important');
+        btn.style.setProperty('box-shadow', 'none', 'important');
+        btn.style.setProperty('opacity',    '0.4',  'important');
+        btn.style.cursor = 'default';
+        btn.title = 'Disabled on Fog of War puzzles — colouring the regions would show the shape of cells you haven\'t uncovered yet.';
+        modeLbl.style.display = 'none';
+        hideCard();
+        [btn, lbl].forEach(function (el) { el.style.setProperty('color', accentCol, 'important'); });
+        return;
+      }
+      btn.style.setProperty('opacity', '1', 'important');
+      btn.style.cursor = 'pointer';
+      btn.title = '';
+      var reg    = effRegionColorFill();
+      var shd    = effShadedRegionColor();
       var active = reg || shd;
       btn.style.setProperty('background-color', bgBase, 'important');
       if (active) {
@@ -12942,6 +13355,7 @@
     }
 
     btn.addEventListener('click', function () {
+      if (puzzleHasFog()) return;          // fog lockout — see applyToggleStyle
       var reg = !!settings.regionColorFillEnabled;
       var shd = !!settings.shadedRegionColorEnabled;
       // 4-state cycle, ALWAYS available (independent of puzzleHasShadedRegions):
@@ -13112,7 +13526,11 @@
       var ck = cellKeyFromMarkXY(t.getAttribute('x'), t.getAttribute('y'));
       var digits = [];
       t.querySelectorAll('tspan').forEach(function (sp) {
-        if (!sp.classList.contains('conflict')) { var d = sp.getAttribute('data-val'); if (d) digits.push(d); }
+        if (sp.classList.contains('conflict')) return;              // red = invalid
+        var d = sp.getAttribute('data-val');
+        if (!d) return;
+        if (validatorHiliteHas(ck, Number(d))) return;              // orange = a validator ruled it out
+        digits.push(d);
       });
       map[ck] = digits;
     });
@@ -13622,7 +14040,7 @@
     var btn = document.createElement('button');
     btn.id    = 'sp-validate-btn';
     btn.type  = 'button';
-    btn.title = 'Validate constraints — toggles a menu of the validators this puzzle supports (Kropki dots, cages, little killers, …), with "Run all until stable" and "Validate selection only" modes';
+    btn.title = 'Validate constraints — toggles a menu of the validators this puzzle supports (Kropki dots, cages, little killers, …), with "Run all until stable", "Validate selection only", and a Remove/Highlight switch for what to do with invalid candidates. Disabled on Fog of War puzzles.';
     btn.textContent = 'Validate\nConstraints';
     styleRightColButton(btn, 10);
     btn.style.whiteSpace = 'pre-line';        // honour the explicit line break

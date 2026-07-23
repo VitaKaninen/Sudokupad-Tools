@@ -82,7 +82,11 @@ the frozen native theme):**
   Regions → Shaded → off; the card pops for every active mode (only "off" leaves it hidden) and
   shows only the slider(s) for the active mode (Both→both, Regions→region only, Shaded→shaded only);
   a Both/Regions/Shaded indicator appears on the button. The button's 4 swatches mirror the palette
-  live. Normal puzzles keep the plain on/off toggle + single slider.
+  live. Normal puzzles keep the plain on/off toggle + single slider. **Fog puzzles: dead (v3.133)** —
+  colouring a region shows the shape of cells the solver hasn't uncovered, so the button greys out
+  with a tooltip and both modes read through `effRegionColorFill`/`effShadedRegionColor`, which AND
+  in `!puzzleHasFog()` at every render site (so a saved-on or auto-enabled mode paints nothing
+  either).
 - **Cell selection** customization (v2.110+, restructured v3.27, master removed v3.42) —
   **master-less** section (label "Cell selection", `noMasterCheckbox`, like Given / placed digits;
   the old `selectionColorEnabled` master + its buildCSS gate are gone) with **two always-visible
@@ -467,7 +471,16 @@ way so it stays low-maintenance.
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
-  removed v3.104). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
+  removed v3.104). **Remove vs Highlight (v3.133)** — a switch at the bottom of the menu
+  (`validateHighlightMode`): Highlight paints the unsupported candidates **orange** instead of
+  deleting them and turns each validator row into an on/off toggle
+  (`validatorHilite` store, `toggleValidatorHighlight` / `runAllValidatorsHighlight`,
+  `validatorHiliteFillFor` inside `fixCenterTspan`). An orange mark reads as invalid to
+  `readValidatorBoardState` and `fsScanValid`, so validators still cross-feed; flags are dropped on
+  any board edit. **Fog lockout (v3.133)** — `puzzleHasFog()` disables the ENTIRE validator feature
+  (`validateBlockedByFog`, and the menu lists a note instead of items) *and* Easy Shade
+  (`effRegionColorFill` / `effShadedRegionColor`) on any Fog of War puzzle; both leaked what was
+  still hidden. Full detail in [VALIDATORS.md](VALIDATORS.md). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
   rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
   circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than
