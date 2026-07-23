@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.123.0
+// @version      3.124.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.123.0';
+  var SCRIPT_VERSION = '3.124.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -191,6 +191,7 @@
     regionBorderCenterEnabled:     true,    // center border: single-color CSS stroke on region outlines
     regionBorderMultiEnabled:      true,    // multi-color border: colored rect borders per region
     regionBorderSuppressBoundary:  false,   // (top-level toggle) drop the built-in cell grid line along region boundaries
+    regionBorderPixelSnap:         true,    // snap border geometry to whole DEVICE pixels ourselves (see snapBorderBand)
     regionHideAuthorBorders:       false,   // (top-level, SESSION-ONLY) hide author-drawn region/grid border lines in #overlay (clash with our borders on overlapping-grid puzzles). Never persisted — forced off on every page load.
     regionBorderCellEnabled:       false,   // cell borders: recolor the thin built-in cell grid lines
     regionBorderCellColor:         '#dddad6',// cell grid line colour — matches DR's converted native grid-line colour so enabling looks identical to disabled by default
@@ -272,6 +273,7 @@
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
     zipperCenterDotEnabled:       true,   // draw the fold centre on zipper lines the setter left unmarked
+    zipperCenterDotScale:         5,      // dot DIAMETER as a multiple of the line width (shared by the eyeball disc)
 
     selectionBorderEnabled:       true,    // "Border" subsection: restyle the selection cage stroke (colour/opacity/width) + grow/offset
     selectionColor:               '#3399ff',
@@ -686,6 +688,36 @@
       else { i++; }
     }
     return true;
+  }
+
+  // The axis-aligned segments of a rectilinear path, absolute, as
+  // [{x1,y1,x2,y2}]. Same walker as pathIsRectilinear (call that first — this one
+  // assumes the path passed). Used by the pixel-snapped centre border, which draws
+  // one rect per boundary segment instead of stroking the whole path.
+  function rectilinearSegments(d) {
+    var segs = [];
+    var toks = (d || '').match(/[MLHVZmlhvz]|-?\d*\.?\d+/g) || [];
+    var i = 0, cx = 0, cy = 0, sx = 0, sy = 0, cmd = '';
+    function step(nx, ny) {
+      if (Math.abs(nx - cx) > 0.01 || Math.abs(ny - cy) > 0.01) segs.push({ x1: cx, y1: cy, x2: nx, y2: ny });
+      cx = nx; cy = ny;
+    }
+    while (i < toks.length) {
+      var t = toks[i];
+      if (/^[MLHVZmlhvz]$/.test(t)) { cmd = t; i++; if (cmd === 'Z' || cmd === 'z') step(sx, sy); continue; }
+      if (cmd === 'M' || cmd === 'm') {
+        var mx = parseFloat(toks[i++]), my = parseFloat(toks[i++]);
+        if (cmd === 'm') { mx += cx; my += cy; }
+        cx = mx; cy = my; sx = mx; sy = my; cmd = (cmd === 'M') ? 'L' : 'l';   // extra pairs are implicit L
+      } else if (cmd === 'L' || cmd === 'l') {
+        var lx = parseFloat(toks[i++]), ly = parseFloat(toks[i++]);
+        if (cmd === 'l') { lx += cx; ly += cy; }
+        step(lx, ly);
+      } else if (cmd === 'H' || cmd === 'h') { var hx = parseFloat(toks[i++]); step((cmd === 'h') ? cx + hx : hx, cy); }
+      else if (cmd === 'V' || cmd === 'v') { var vy = parseFloat(toks[i++]); step(cx, (cmd === 'v') ? cy + vy : vy); }
+      else { i++; }
+    }
+    return segs;
   }
 
   // "Hide author-drawn region borders" (session-only toggle). Some puzzles —
@@ -3012,6 +3044,69 @@
     return { regions: regions, cellSize: cs, rows: rows, cols: cols };
   }
 
+  // ── DEVICE-PIXEL SNAPPING for the region borders (v3.124) ───────────────────
+  // WHY (measured, not assumed): SudokuPad scales the board by a FRACTIONAL factor
+  // that changes with the window (1.509 at a 1166px window), so the grid lines land
+  // at arbitrary and DIFFERENT sub-pixel positions — measured device-pixel
+  // fractions across one board's ten verticals: .272 .848 .424 .000 .576 .152 .728
+  // .304 .880 .456. `shape-rendering:crispEdges` (which mainGroup needs, or the
+  // strip rects anti-alias into a dark fringe) then rounds EVERY EDGE INDEPENDENTLY,
+  // so a 4-unit strip paints 6px at one boundary and 7px at the next, and a centre
+  // border set to 3 can paint 4. Because the bands are contiguous they share edges,
+  // which is why the TOTAL looks right while the split does not.
+  //
+  // There is no setting value that avoids this: a band is stable only when
+  // width × scale ≈ an integer (and the CENTRE border, being a stroke split ±w/2
+  // about the boundary, only when it is ≈ an EVEN integer), and the scale is
+  // fractional and window-dependent. So we snap the geometry OURSELVES instead:
+  // round the edge that sits ON the grid line, then force the band's thickness to a
+  // whole number of device pixels. Every band of a given nominal width then paints
+  // the SAME pixel count at every boundary, which is the thing that was wrong.
+  //
+  // Toggleable (`regionBorderPixelSnap`) so the two renderings can be compared
+  // directly — off = the old browser-rounded behaviour, unchanged.
+  function borderSnapCtx() {
+    if (!settings.regionBorderPixelSnap) return null;
+    var board = document.getElementById('svgrenderer');
+    if (!board || !board.getScreenCTM) return null;
+    var m; try { m = board.getScreenCTM(); } catch (e) { return null; }
+    if (!m || !m.a || !m.d) return null;
+    if (Math.abs(m.b) > 1e-6 || Math.abs(m.c) > 1e-6) return null;   // rotated/skewed — don't touch it
+    var dpr = window.devicePixelRatio || 1;
+    return { sx: m.a * dpr, sy: m.d * dpr, ox: m.e * dpr, oy: m.f * dpr };
+  }
+  // Snap one band (start `u0`, length `len`, user units) along one axis.
+  //   • both edges on a grid line → round each independently (full-cell fills, which
+  //     must keep tiling exactly with their neighbours).
+  //   • one edge on a grid line   → anchor THAT edge, force the length to a whole
+  //     number of device pixels (border strips + corner patches).
+  //   • neither                   → round the start, force the length.
+  // `grid` is the cell size; an edge counts as "on the grid" within a hair of a
+  // multiple of it.
+  function snapBorderBand(u0, len, s, o, grid) {
+    if (!(len > 0) || !s) return { u0: u0, len: len };
+    function onGrid(u) { var q = u / grid; return Math.abs(q - Math.round(q)) < 1e-6; }
+    var d0 = u0 * s + o, d1 = (u0 + len) * s + o;
+    var startOn = onGrid(u0), endOn = onGrid(u0 + len);
+    if (startOn && endOn) {
+      var a = Math.round(d0), b = Math.round(d1);
+      if (b <= a) b = a + 1;
+      return { u0: (a - o) / s, len: (b - a) / s };
+    }
+    var n = Math.max(1, Math.round(Math.abs(d1 - d0)));
+    var start = endOn ? Math.round(d1) - n : Math.round(d0);
+    return { u0: (start - o) / s, len: n / s };
+  }
+  // A band of nominal width `len` CENTRED on `uc` (the centre border straddles the
+  // boundary). Width is a whole number of device pixels at every boundary — the
+  // even/odd instability disappears because we never round two edges separately.
+  function snapCenteredBand(uc, len, s, o) {
+    if (!(len > 0) || !s) return { u0: uc - len / 2, len: len };
+    var dc = uc * s + o, n = Math.max(1, Math.round(len * Math.abs(s)));
+    var start = Math.round(dc - n / 2);
+    return { u0: (start - o) / s, len: n / Math.abs(s) };
+  }
+
   function drawRegionSplitBorders(svg) {
     if (!svg) svg = document.getElementById('svgrenderer');
     if (!svg) return;
@@ -3102,6 +3197,8 @@
 
     var NS = 'http://www.w3.org/2000/svg';
 
+    var snap = borderSnapCtx();
+
     var mainGroup = document.createElementNS(NS, 'g');
     mainGroup.setAttribute('data-spdr-region-split', '1');
     mainGroup.setAttribute('pointer-events', 'none');
@@ -3109,7 +3206,11 @@
     // dark fringe where the strip boundary falls at a fractional pixel position
     // (the SVG is typically scaled ~1.33× so almost no coordinate lands on an
     // integer screen pixel without this).
-    mainGroup.setAttribute('shape-rendering', 'crispEdges');
+    // With OUR snapping on, every coordinate we emit already lands on a whole
+    // device pixel, so hand the browser geometricPrecision instead — crispEdges
+    // rounds in CSS px and would re-round (and undo) our device-px placement on a
+    // HiDPI screen.
+    mainGroup.setAttribute('shape-rendering', snap ? 'geometricPrecision' : 'crispEdges');
 
     // Each region gets a plain <g> (no clipPath needed — all rects are placed
     // entirely within that region's own cells).
@@ -3124,6 +3225,11 @@
 
     function addRect(ri, x, y, w, h, color) {
       if (!rGroups[ri] || w <= 0 || h <= 0) return;
+      if (snap) {
+        var bx = snapBorderBand(x, w, snap.sx, snap.ox, cs);
+        var by = snapBorderBand(y, h, snap.sy, snap.oy, cs);
+        x = bx.u0; w = bx.len; y = by.u0; h = by.len;
+      }
       var rect = document.createElementNS(NS, 'rect');
       rect.setAttribute('x', x);  rect.setAttribute('y', y);
       rect.setAttribute('width', w); rect.setAttribute('height', h);
@@ -3280,9 +3386,46 @@
       if (cellGridsEl) {
         var centerStroke = hexToRgba(settings.regionBorderColor, settings.regionBorderOpacity);
         var centerWidth  = parseFloat(settings.regionBorderWidth) || 3;
+        // Snapped mode draws the centre border as one RECT PER SEGMENT instead of
+        // stroking the path: a centred stroke's two edges round independently, which
+        // is exactly the ±1px wobble we're removing. The rects go in their own <g>
+        // carrying the OPACITY, with solid fills inside — perpendicular segments
+        // overlap in a w×w square at every corner, and group opacity composites that
+        // once instead of double-darkening it the way per-rect alpha would.
+        var snapGroup = null;
+        if (snap) {
+          snapGroup = document.createElementNS(NS, 'g');
+          var op0 = settings.regionBorderOpacity;
+          snapGroup.setAttribute('opacity', String(op0 != null ? op0 : 1));
+          mainGroup.appendChild(snapGroup);
+        }
         cellGridsEl.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
+          var dAttr = p.getAttribute('d') || '';
+          if (snapGroup && pathIsRectilinear(dAttr)) {
+            rectilinearSegments(dAttr).forEach(function (sg) {
+              var vertical = Math.abs(sg.x1 - sg.x2) < 0.01;
+              var across = vertical
+                ? snapCenteredBand(sg.x1, centerWidth, snap.sx, snap.ox)
+                : snapCenteredBand(sg.y1, centerWidth, snap.sy, snap.oy);
+              var a0 = vertical ? Math.min(sg.y1, sg.y2) : Math.min(sg.x1, sg.x2);
+              var a1 = vertical ? Math.max(sg.y1, sg.y2) : Math.max(sg.x1, sg.x2);
+              // Extend each segment by half a band at both ends so corners close.
+              var along = vertical
+                ? snapBorderBand(a0 - centerWidth / 2, (a1 - a0) + centerWidth, snap.sy, snap.oy, cs)
+                : snapBorderBand(a0 - centerWidth / 2, (a1 - a0) + centerWidth, snap.sx, snap.ox, cs);
+              var r = document.createElementNS(NS, 'rect');
+              r.setAttribute('x', vertical ? across.u0 : along.u0);
+              r.setAttribute('y', vertical ? along.u0 : across.u0);
+              r.setAttribute('width',  vertical ? across.len : along.len);
+              r.setAttribute('height', vertical ? along.len : across.len);
+              r.setAttribute('data-spdr-kind', 'center');   // highlight target
+              r.style.setProperty('fill', settings.regionBorderColor || '#000000', 'important');
+              snapGroup.appendChild(r);
+            });
+            return;
+          }
           var clone = document.createElementNS(NS, 'path');
-          clone.setAttribute('d', p.getAttribute('d'));
+          clone.setAttribute('d', dAttr);
           clone.setAttribute('fill', 'none');
           clone.setAttribute('pointer-events', 'none');
           clone.setAttribute('data-spdr-kind', 'center');  // highlight target
@@ -4317,11 +4460,12 @@
       if (!m || !cs) { osvg.style.display = 'none'; return; }
       function S(ux, uy) { return { x: m.a * ux + m.c * uy + m.e, y: m.b * ux + m.d * uy + m.f }; }
       function centre(key) { var p = String(key).split(','), c = +p[0], r = +p[1]; return (isFinite(c) && isFinite(r)) ? S(c * cs + cs / 2, r * cs + cs / 2) : null; }
+      var SEG_W = 4;                    // highlight line width (px) — the zipper disc scales off it
       function seg(p1, p2) {
         if (!p1 || !p2) return;
         var ln = document.createElementNS(NS, 'line');
         ln.setAttribute('x1', p1.x); ln.setAttribute('y1', p1.y); ln.setAttribute('x2', p2.x); ln.setAttribute('y2', p2.y);
-        ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', '4'); ln.setAttribute('stroke-opacity', '1');
+        ln.setAttribute('stroke', STROKE); ln.setAttribute('stroke-width', String(SEG_W)); ln.setAttribute('stroke-opacity', '1');
         ln.setAttribute('stroke-linecap', 'round');
         ln.style.cssText = 'stroke:' + STROKE + ' !important;stroke-opacity:1 !important;';
         osvg.appendChild(ln);
@@ -4393,21 +4537,19 @@
           if (ak.length > 1) arrowHead(centre(ak[ak.length - 2]), centre(ak[ak.length - 1]), cellPx * 0.30);
         }
         else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { ringCell(bk[0], cellPx * 0.34); ringCell(bk[bk.length - 1], cellPx * 0.34); } }
-        // Zipper: the FOLD CENTRE is what the clue turns on, so mark it — a
-        // Kropki-sized disc at the middle cell (odd chain) or at the midpoint
-        // between the two middle cells (even chain: an edge, or a corner where the
-        // line turns). Same fold computeZipperRemovals uses.
+        // Zipper: the FOLD CENTRE is what the clue turns on, so mark it. Position
+        // comes from zipperFoldCenter — the same function the injected cosmetic dot
+        // and the validator's own pairing use — and the disc is sized by the same
+        // `zipperCenterDotScale` multiple, here of OUR line width (SEG_W) instead of
+        // the puzzle's, so the highlight and the drawn dot read as the same mark.
         else if (o.type === 'zipper') {
           var zk = o.keys || [];
           polyline(zk);
-          if (zk.length > 1) {
-            var zL = zk.length, zc;
-            if (zL % 2 === 1) zc = centre(zk[(zL - 1) / 2]);
-            else {
-              var za = centre(zk[zL / 2 - 1]), zb = centre(zk[zL / 2]);
-              zc = (za && zb) ? { x: (za.x + zb.x) / 2, y: (za.y + zb.y) / 2 } : null;
-            }
-            disc(zc, cellPx * 0.11);
+          var zfc = zipperFoldCenter(zk);
+          if (zfc) {
+            var zsc = parseFloat(settings.zipperCenterDotScale);
+            if (!isFinite(zsc) || zsc <= 0) zsc = DEFAULTS.zipperCenterDotScale;
+            disc(S(zfc.cx * cs, zfc.cy * cs), SEG_W * zsc / 2);
           }
         }
         else if (o.type === 'thermo') { (o.edges || []).forEach(function (e) { seg(centre(e[0]), centre(e[1])); }); marker(centre(o.root), cellPx * 0.30); }
@@ -7686,6 +7828,82 @@
     return set;
   }
 
+  // ── ONE ZIPPER CAN BE DRAWN AS SEVERAL STROKES (v3.124) ─────────────────────
+  // The between-line lesson (v3.121: "the drawn polyline is not the clue") has a
+  // mirror image, and `k9mm1xgca5` "The Zip that Zips the Zips" is it. Its
+  // R6C3→R9C3 zipper is stored as TWO line entries that meet end-to-end at R8C2:
+  //     R6C3 R5C4 R4C4 R4C3 R5C2 R6C1 R7C1 R8C2   +   R9C3 R8C2
+  // Read stroke-by-stroke that is two zippers folding at the R4C3/R5C2 corner and
+  // at the R8C2/R9C3 corner — both wrong. JOINED it is one 9-cell zipper whose
+  // middle cell is R5C2, and the setter's own centre circle sits exactly there.
+  // PROOF, not inference: this puzzle marks every fold centre, and R5C2 is marked
+  // while neither stroke-wise fold point is.
+  //
+  // So the merge is a CORRECTNESS fix for the validator too, not just cosmetics —
+  // computeZipperRemovals was pairing cells across the wrong fold on any zipper the
+  // setter drew in more than one stroke.
+  //
+  // Two chains join when an endpoint of one IS an endpoint of the other AND that
+  // cell ends no OTHER chain: three chain-ends meeting is a junction the picture
+  // leaves open, and we refuse to guess (under-detect, never mis-apply — the same
+  // rule walkBetweenSegment follows). Closed loops (first === last) never join, and
+  // a merge that would revisit a cell is rejected.
+  function mergeZipperChains(chains) {
+    var items = (chains || [])
+      .filter(function (k) { return k && k.length >= 2; })
+      .map(function (k) { return { keys: k.slice(), parts: [k.slice()], alive: true }; });
+    var guard = 0;
+    while (guard++ < 200) {
+      var ends = {};
+      items.forEach(function (it) {
+        if (!it.alive) return;
+        var a = it.keys[0], b = it.keys[it.keys.length - 1];
+        if (a === b) return;                                   // closed loop — not a join candidate
+        (ends[a] = ends[a] || []).push(it);
+        (ends[b] = ends[b] || []).push(it);
+      });
+      var joined = false;
+      for (var cell in ends) {
+        var list = ends[cell];
+        if (list.length !== 2) continue;                       // 1 = free end, ≥3 = open junction
+        var A = list[0], B = list[1];
+        if (A === B || !A.alive || !B.alive) continue;         // both ends of ONE chain meet here
+        var ak = A.keys.slice(), bk = B.keys.slice();
+        if (ak[0] === cell) ak.reverse();                      // A must END at the join…
+        if (bk[bk.length - 1] === cell) bk.reverse();          // …and B must START there
+        var merged = ak.concat(bk.slice(1));                   // drop the duplicated join cell
+        var seen = {}, simple = true;
+        merged.forEach(function (k) { if (seen[k]) simple = false; seen[k] = 1; });
+        if (!simple) continue;                                 // not a simple line — leave both alone
+        A.keys = merged; A.parts = A.parts.concat(B.parts); B.alive = false;
+        joined = true;
+        break;
+      }
+      if (!joined) break;
+    }
+    return items.filter(function (it) { return it.alive; });
+  }
+  // Every zipper the puzzle actually poses, as cell chains — the ONE reader the
+  // validator, the centre dot and the eyeball preview all go through, so a fold
+  // point can never mean three different things in three places.
+  function zipperChains(lines) {
+    return mergeZipperChains(lines).map(function (it) { return it.keys; });
+  }
+  // A zipper chain's FOLD CENTRE in CELL units (x.5 = a cell centre, a whole number
+  // = a grid line). Odd length → the middle cell; even → the midpoint between the
+  // two middle cells, which is a cell EDGE when the line runs straight through and a
+  // grid CORNER where it turns. This is exactly the fold computeZipperRemovals
+  // pairs across (keys[i] with keys[L-1-i]), by construction rather than by
+  // coincidence — everything that needs "where does this zipper fold" calls this.
+  function zipperFoldCenter(keys) {
+    if (!keys || keys.length < 2) return null;
+    function c(k) { var p = String(k).split(','); return [+p[0] + 0.5, +p[1] + 0.5]; }
+    var L = keys.length;
+    if (L % 2 === 1) { var m = c(keys[(L - 1) / 2]); return { cx: m[0], cy: m[1] }; }
+    var a = c(keys[L / 2 - 1]), b = c(keys[L / 2]);
+    return { cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2 };
+  }
+
   // ── Zipper fold-centre dot (v3.123) ─────────────────────────────────────────
   // A zipper line folds at its geometric centre, and that centre is the one thing
   // the drawing doesn't show: most setters mark it with a small circle (`k9mm1xgca5`
@@ -7695,20 +7913,22 @@
   // CONFIDENTLY-classified zipper has no cosmetic object at its centre, draw one.
   //
   // It must read as part of the clue, not as an extra constraint, so it takes the
-  // LINE's own colour and a diameter of twice the line's stroke width.
+  // LINE's own colour and a diameter of `zipperCenterDotScale` × the line's stroke
+  // width.
   //
-  // GEOMETRY = the validator's fold, exactly (computeZipperRemovals pairs keys[i]
-  // with keys[L-1-i]): an ODD-length chain centres on its middle cell; an EVEN one
-  // on the midpoint between the two middle cells — a cell EDGE for a straight line,
-  // a grid CORNER where the line turns there. Setters draw it the same way: that
-  // puzzle stores a 4-cell circle (R2C6/R2C7/R3C6/R3C7) for a chain that folds on a
-  // corner, and 2-cell circles for edge folds.
+  // GEOMETRY comes from zipperFoldCenter over zipperChains — the SAME pair of
+  // functions the validator and the eyeball preview use, so the drawn dot, the
+  // highlighted dot and the cells the validator folds together can never disagree.
+  // Setters mark the fold the same way: `k9mm1xgca5` stores a 4-cell circle
+  // (R2C6/R2C7/R3C6/R3C7) where a chain folds on a grid corner, and 2-cell circles
+  // where it folds on an edge.
   //
   // Colour + width come from the DOM <path>, read AFTER fixAllLines has run, so the
   // dot tracks the line's ON-SCREEN colour (object shading rewrites the stroke) and
   // its real rendered width — the model's `thickness` is in units we'd have to
   // guess at, and the model can be stored transposed (the v3.83 trap). A chain with
-  // no matching DOM path is SKIPPED: under-draw, never guess a colour.
+  // no matching DOM path is SKIPPED: under-draw, never guess a colour. A MERGED
+  // chain matches on any of its constituent strokes (`parts`).
   function zipperLineDomPaths(cs) {
     var out = [];
     if (!cs) return out;
@@ -7767,7 +7987,7 @@
     try { cls = classifyZipperLines(); } catch (e) { return; }
     if (!cls || cls.mode !== 'confident' || !cls.lines || cls.lines.length === 0) return;
 
-    // Chain → the <path> that draws it. Both orientations: the classifier's chain
+    // Stroke → the <path> that draws it. Both orientations: the classifier's chain
     // and the path's own point order can run opposite ways.
     var byChain = {};
     zipperLineDomPaths(cs).forEach(function (info) {
@@ -7778,15 +7998,18 @@
     var marks = smallCosmeticMarkerPoints(cs);
     var NS = 'http://www.w3.org/2000/svg';
     var TOL = cs * 0.3;                       // "already marked" radius around the fold point
+    var scale = parseFloat(settings.zipperCenterDotScale);
+    if (!isFinite(scale) || scale <= 0) scale = DEFAULTS.zipperCenterDotScale;
 
-    cls.lines.forEach(function (keys) {
-      if (!keys || keys.length < 2) return;
-      var info = byChain[keys.join(' ')];
+    mergeZipperChains(cls.lines).forEach(function (item) {
+      // A merged zipper is drawn by several paths; any one of them carries the
+      // colour and width (they are the same line), so take the first that matched.
+      var info = null;
+      for (var i = 0; i < item.parts.length && !info; i++) info = byChain[item.parts[i].join(' ')];
       if (!info || !info.el.parentNode) return;
-      function ctr(k) { var p = String(k).split(','); return [(+p[0] + 0.5) * cs, (+p[1] + 0.5) * cs]; }
-      var L = keys.length, cx, cy;
-      if (L % 2 === 1) { var m = ctr(keys[(L - 1) / 2]); cx = m[0]; cy = m[1]; }
-      else { var a = ctr(keys[L / 2 - 1]), b = ctr(keys[L / 2]); cx = (a[0] + b[0]) / 2; cy = (a[1] + b[1]) / 2; }
+      var fc = zipperFoldCenter(item.keys);
+      if (!fc) return;
+      var cx = fc.cx * cs, cy = fc.cy * cs;
       if (marks.some(function (p) { return Math.abs(p.x - cx) < TOL && Math.abs(p.y - cy) < TOL; })) return;
 
       var st = window.getComputedStyle(info.el);
@@ -7795,7 +8018,7 @@
       var dot = document.createElementNS(NS, 'circle');
       dot.setAttribute('data-spdr-zipper-dot', '1');
       dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
-      dot.setAttribute('r', w);                                        // diameter = 2× the line width
+      dot.setAttribute('r', w * scale / 2);                  // diameter = scale × the line width
       dot.setAttribute('pointer-events', 'none');
       dot.style.setProperty('fill', col, 'important');
       var op = parseFloat(st.strokeOpacity);
@@ -8592,7 +8815,10 @@
       return true;
     }
     // Fold structure is fixed by geometry: pairs + optional lone centre (odd line).
-    var lineData = lines.map(function (keys) {
+    // JOIN end-to-end strokes first (v3.124) — a zipper the setter drew in two
+    // strokes is ONE clue, and folding each stroke separately pairs the wrong cells
+    // (see mergeZipperChains for the `k9mm1xgca5` proof).
+    var lineData = zipperChains(lines).map(function (keys) {
       var pairs = [], L = keys.length;
       for (var i = 0; i < Math.floor(L / 2); i++) pairs.push([keys[i], keys[L - 1 - i]]);
       var centre = (L % 2 === 1) ? keys[(L - 1) / 2] : null;
@@ -9960,7 +10186,7 @@
       case 'zipper':
         var zcls = validatorClassify(def);
         if (zcls && zcls.mode === 'confident')
-          (zcls.lines || []).forEach(function (keys) { out.push({ type: 'zipper', keys: keys }); });
+          zipperChains(zcls.lines || []).forEach(function (keys) { out.push({ type: 'zipper', keys: keys }); });
         break;
       default:
         // Only CONFIDENTLY-identified lines are validated on a plain click, so those
@@ -10999,7 +11225,7 @@
       hasColor: false,
       noMasterCheckbox: true,   // no section toggle — each subsection checkbox stands alone
       enableKeys: ['regionBorderCenterEnabled', 'regionBorderMultiEnabled', 'regionBorderCellEnabled'],
-      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary', 'regionHideAuthorBorders',
+      resetKeys: ['regionBorderCenterEnabled', 'regionBorderColor', 'regionBorderOpacity', 'regionBorderWidth', 'regionBorderSuppressBoundary', 'regionHideAuthorBorders', 'regionBorderPixelSnap',
                   'regionBorderMultiEnabled', 'regionColorPalette0', 'regionColorPalette1', 'regionColorPalette2', 'regionColorPalette3',
                   'regionColorStripeWidth', 'regionColorOpacity',
                   'regionBorderCellEnabled', 'regionBorderCellColor', 'regionBorderCellOpacity', 'regionBorderCellWidth'],
@@ -11037,6 +11263,7 @@
           'regSuppress', 'Highlight the built-in grid lines this hides on region boundaries'));
         wrap.appendChild(makeSubCheckbox('regionHideAuthorBorders', 'Hide author-drawn region borders',
           'regAuthor', 'Highlight the author-drawn region borders this hides'));
+        wrap.appendChild(makeSubCheckbox('regionBorderPixelSnap', 'Snap border widths to whole pixels'));
 
         // ── Subsection 1: Center borders ──────────────────────────────────
         wrap.appendChild(divider());
@@ -11384,7 +11611,31 @@
       label: 'Zipper centre dots',
       desc: 'Mark the fold point of a zipper line the setter left unmarked, in the line’s own colour. Lines that already carry a centre marker are left alone.',
       hasColor: false,
-      resetKeys: ['zipperCenterDotEnabled'],
+      resetKeys: ['zipperCenterDotEnabled', 'zipperCenterDotScale'],
+      subBuilder: function (wrap) {
+        var row = document.createElement('div');
+        Object.assign(row.style, { display:'flex', alignItems:'center', gap:'6px', marginTop:'6px' });
+        var lbl = document.createElement('span');
+        lbl.textContent = 'Dot size (× line width):';
+        Object.assign(lbl.style, { color:'#cdd6f4', fontSize:'12px', flex:'1' });
+        var inp = document.createElement('input');
+        inp.type = 'text';
+        inp.value = String(settings.zipperCenterDotScale != null ? settings.zipperCenterDotScale : DEFAULTS.zipperCenterDotScale);
+        Object.assign(inp.style, {
+          width:'54px', background:'#313244', color:'#cdd6f4',
+          border:'1px solid #45475a', borderRadius:'4px',
+          padding:'2px 6px', fontSize:'12px', fontFamily:'monospace', textAlign:'center', flexShrink:'0',
+        });
+        inp.addEventListener('input', function () {
+          var v = inp.value.trim();
+          if (v === '' || /^\d+(\.\d+)?$/.test(v)) { settings.zipperCenterDotScale = v; saveSettings(settings); applySettings(); }
+        });
+        controlSyncers['zipperCenterDotScale'] = function () {
+          inp.value = String(settings.zipperCenterDotScale != null ? settings.zipperCenterDotScale : DEFAULTS.zipperCenterDotScale);
+        };
+        row.appendChild(lbl); row.appendChild(inp);
+        wrap.appendChild(row);
+      },
     });
   }
 
@@ -12970,8 +13221,44 @@
     }, interval);
   }
 
+  // ══ TEMPORARY (v3.124) — border pixel-snap A/B chip ═══════════════════════
+  // A floating toggle so the snapped and the browser-rounded border rendering can
+  // be flipped between on the live board without opening the settings panel.
+  // Purely a comparison aid: DELETE this function, its call in buildAllUI, and
+  // nothing else changes — `regionBorderPixelSnap` stays available in the Region
+  // borders section either way.
+  function buildTempSnapToggle() {
+    if (document.getElementById('spdr-tmp-snap')) return true;
+    if (!document.body) return false;
+    var b = document.createElement('button');
+    b.id = 'spdr-tmp-snap';
+    b.type = 'button';
+    Object.assign(b.style, {
+      position: 'fixed', left: '10px', bottom: '10px', zIndex: '2147483000',
+      background: '#1e1e2e', color: '#cdd6f4', border: '1px solid #45475a',
+      borderRadius: '6px', padding: '6px 10px', fontSize: '12px',
+      fontFamily: 'system-ui, sans-serif', cursor: 'pointer', opacity: '0.9',
+    });
+    function label() {
+      var on = !!settings.regionBorderPixelSnap;
+      b.textContent = 'Border snap: ' + (on ? 'ON (device-px)' : 'OFF (browser)');
+      b.style.borderColor = on ? '#89b4fa' : '#45475a';
+    }
+    b.addEventListener('click', function () {
+      settings.regionBorderPixelSnap = !settings.regionBorderPixelSnap;
+      saveSettings(settings);
+      applySettings();
+      if (controlSyncers['regionBorderPixelSnap']) controlSyncers['regionBorderPixelSnap']();
+      label();
+    });
+    label();
+    document.body.appendChild(b);
+    return true;
+  }
+
   function buildAllUI() {
     suppressStartDialog();
+    poll(buildTempSnapToggle, 100, 100);   // TEMPORARY — see buildTempSnapToggle
     // All of these live inside #controls now, so they must wait for SudokuPad to
     // build it (each returns false until its target container exists).
     poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)

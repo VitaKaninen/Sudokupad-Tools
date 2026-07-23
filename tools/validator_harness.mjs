@@ -76,6 +76,8 @@ const NAMES = [
   // between-line interval maths + bulb pruning + circle segmentation
   'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
   'lineStepGraph', 'reflectCellKey', 'walkBetweenSegment',
+  // zipper stroke-joining + fold centre
+  'mergeZipperChains', 'zipperChains', 'zipperFoldCenter',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -439,6 +441,51 @@ checkTrue('modular bands 1-9: residue classes {1,4,7}/{2,5,8}/{3,6,9}',
 settings.digitSet = '1245';
 check('modular bands: unequal residues refuse', F.modularBands(), null);
 settings.digitSet = '123456789';
+
+// ── zipper stroke-joining + fold centre (v3.124) ─────────────────────────────
+// GROUND TRUTH: `k9mm1xgca5` "The Zip that Zips the Zips" marks every zipper's
+// fold centre with its own cosmetic circle, so the puzzle states the answers. It
+// stores 8 line entries for 7 zippers — the R6C3→R9C3 one is drawn as TWO strokes
+// meeting at R8C2 — and folding the strokes separately misses the marked centre
+// (R5C2) entirely. All seven computed folds must hit all seven drawn circles.
+const zRc = (s) => { const m = /R(\d+)C(\d+)/.exec(s); return `${+m[2] - 1},${+m[1] - 1}`; };
+const K9_STROKES = [
+  ['R8C3','R7C3','R6C4','R6C5','R5C5','R4C5','R4C6','R5C6','R6C6','R6C7','R6C8','R6C9'],
+  ['R1C2','R1C1','R2C1','R2C2','R3C2','R3C1','R4C1','R5C1','R4C2'],
+  ['R2C3','R1C3','R1C4','R2C4','R3C4'],
+  ['R2C6','R3C5','R3C6','R2C7','R1C6','R1C5'],
+  ['R2C8','R3C7','R4C7','R5C8','R5C7'],
+  ['R7C5','R7C6','R8C6','R8C7','R7C7','R7C8','R7C9','R8C9','R9C9','R9C8','R9C7','R9C6','R9C5','R8C5'],
+  ['R6C3','R5C4','R4C4','R4C3','R5C2','R6C1','R7C1','R8C2'],
+  ['R9C3','R8C2'],
+].map((c) => c.map(zRc));
+// The seven drawn circles, as cell-unit centres (a multi-cell circle sits at the
+// centroid — R2C6+R2C7+R3C6+R3C7 is a grid CORNER, R4C5+R4C6 a cell EDGE).
+const K9_CIRCLES = [[1.5,2.5],[3.5,0.5],[6,2],[6.5,3.5],[5,3.5],[1.5,4.5],[8.5,7]];
+const k9 = F.zipperChains(K9_STROKES);
+check('zipper: 8 strokes join into 7 zippers (k9mm1xgca5)', k9.length, 7);
+const k9folds = k9.map((c) => { const f = F.zipperFoldCenter(c); return [f.cx, f.cy]; });
+const keyOf = (p) => p[0] + '/' + p[1];
+check('zipper: every fold lands on the setter’s own centre circle',
+  k9folds.map(keyOf).sort(), K9_CIRCLES.map(keyOf).sort());
+// The merged chain specifically: 8 + 2 strokes → one 9-cell zipper folding on R5C2.
+const k9merged = k9.find((c) => c.length === 9 && c[0] === zRc('R6C3'));
+checkTrue('zipper: the two-stroke line merges to 9 cells ending R9C3',
+  !!k9merged && k9merged[k9merged.length - 1] === zRc('R9C3'));
+check('zipper: merged fold = R5C2 (the marked centre)',
+  k9merged ? F.zipperFoldCenter(k9merged) : null, { cx: 1.5, cy: 4.5 });
+// Guard rails: a junction is never guessed at, and a closed loop never joins.
+const yJunction = [['0,0','1,0','2,0'], ['2,0','2,1','2,2'], ['2,0','3,0','4,0']];
+check('zipper: three chain-ends at one cell = refuse to join',
+  F.zipperChains(yJunction).length, 3);
+const loop = [['0,0','1,0','1,1','0,1','0,0'], ['3,3','4,3']];
+check('zipper: a closed loop is left alone', F.zipperChains(loop).length, 2);
+check('zipper: an odd chain folds on its middle cell',
+  F.zipperFoldCenter(['0,0','1,0','2,0']), { cx: 1.5, cy: 0.5 });
+check('zipper: an even STRAIGHT chain folds on the shared edge',
+  F.zipperFoldCenter(['0,0','1,0','2,0','3,0']), { cx: 2, cy: 0.5 });
+check('zipper: an even DIAGONAL step folds on the grid corner',
+  F.zipperFoldCenter(['0,0','1,1']), { cx: 1, cy: 1 });
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);

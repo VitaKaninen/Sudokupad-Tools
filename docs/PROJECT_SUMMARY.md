@@ -478,16 +478,30 @@ way so it stays low-maintenance.
   column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).
-- **Zipper centre dot (v3.123):** `drawZipperCenterDots` (+ helpers `zipperLineDomPaths`,
-  `smallCosmeticMarkerPoints`) — a *rendering* feature, not a validator: where a confidently
-  classified zipper line has no cosmetic object at its fold centre, it injects a
-  `[data-spdr-zipper-dot]` `<circle>` in the line's own rendered colour, diameter = 2× the line's
-  stroke width. Runs at the tail of the render pipeline (`applySettings`, `startLabelRectPatch`,
+- **Zipper fold centres (v3.123, corrected v3.124):** **`zipperChains`** (→ `mergeZipperChains`) and
+  **`zipperFoldCenter`** are the single shared reader — *one clue can be drawn as several strokes*,
+  so the classified chains are joined end-to-end before anything folds them, and the fold point is
+  computed in one place. All three consumers go through them: `computeZipperRemovals` (the
+  validator's pairing), `drawZipperCenterDots` (the injected cosmetic dot) and
+  `validatorClueObjects`' `zipper` case (the eyeball disc) — so a fold point can never mean three
+  different things in three places. `drawZipperCenterDots` (+ helpers `zipperLineDomPaths`,
+  `smallCosmeticMarkerPoints`) is a *rendering* feature: where a confidently classified zipper has
+  no cosmetic object within 0.3 cells of its fold centre, it injects a `[data-spdr-zipper-dot]`
+  `<circle>` in the line's own **rendered** colour, diameter = `zipperCenterDotScale` × the line's
+  stroke width. It runs at the tail of the render pipeline (`applySettings`, `startLabelRectPatch`,
   the observer's `flushFixes` WORK_FULL branch) so it reads the stroke **after** `fixAllLines` has
   shaded it; its own nodes are classified `'none'` in `classifyAddedNode` so they can't re-trigger a
-  sweep. Fold geometry is identical to `computeZipperRemovals` (odd chain → middle cell; even →
-  midpoint of the two middle cells, i.e. a cell edge or a grid corner). Setting:
-  `zipperCenterDotEnabled`.
+  sweep. The eyeball disc uses the same multiplier against the highlight's own line width (`SEG_W`),
+  so drawn and highlighted marks match. Settings: `zipperCenterDotEnabled`, `zipperCenterDotScale`.
+  Regression-tested in `validator_harness.mjs` against `k9mm1xgca5`, which marks all seven of its
+  own fold centres.
+- **Region-border pixel snapping (v3.124):** `borderSnapCtx` / `snapBorderBand` /
+  `snapCenteredBand` + `rectilinearSegments`, used inside `drawRegionSplitBorders` (`addRect` and
+  the centre-border block). Rounds our own geometry to whole **device** pixels so equal nominal
+  widths paint equal pixel counts at every boundary — see LESSONS_LEARNED "Border-strip drawing"
+  for the measurements and why no setting value fixes it otherwise. Toggle:
+  `regionBorderPixelSnap` (Region borders section) plus a **temporary** floating A/B chip,
+  `buildTempSnapToggle` — delete that function and its `buildAllUI` call to remove it.
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
   `reorderCornerCell`/`startCornerReflowPatch` (corner), `fixCenterTspan`/`fixCornerText` (validity
   colours).

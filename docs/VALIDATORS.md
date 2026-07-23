@@ -516,12 +516,28 @@ notes wired like renban/region-sum.
 flattened to plain `line` entries with no `fromConstraint` label to read — so the cue+colour ladder
 stays load-bearing and this is purely additive precision.
 
-**Zipper eyeball = polyline + a disc at the FOLD CENTRE (v3.123).** A bare polyline hides the one
-thing a zipper is about, so `{type:'zipper',keys}` draws a Kropki-sized filled disc (`disc()` in
-`showObjects`, `cellPx*0.11`) at the fold point — the middle cell on an odd chain, the midpoint of
-the two middle cells on an even one (a cell EDGE when the line runs straight through, a grid CORNER
-where it turns). Same fold `computeZipperRemovals` uses. The *rendering* counterpart that adds a
-permanent centre dot to unmarked zippers is `drawZipperCenterDots` — see PROJECT_SUMMARY.
+**⚠️ ONE ZIPPER CAN BE DRAWN AS SEVERAL STROKES — join before folding (v3.124).** `k9mm1xgca5`
+stores its R6C3→R9C3 zipper as TWO line entries meeting end-to-end at R8C2. Folding each stroke
+separately pairs the wrong cells, so `computeZipperRemovals` now folds **`zipperChains(lines)`**
+(→ `mergeZipperChains`), not the raw classified chains. Two chains join when an endpoint of one IS
+an endpoint of the other **and that cell ends no other chain** — three ends meeting is an open
+junction and we refuse to guess (the `walkBetweenSegment` rule); closed loops never join, and a
+merge that would revisit a cell is rejected. This is the mirror image of the between-line lesson:
+there one stroke was several clues, here several strokes are one clue.
+
+**One fold function, three consumers (v3.124).** `zipperFoldCenter(keys)` returns the fold point in
+CELL units — the middle cell on an odd chain, the midpoint of the two middle cells on an even one
+(a cell EDGE when the line runs straight through, a grid CORNER where it turns). The validator's
+pairing, the eyeball disc and the injected cosmetic dot all read it, so the three can't drift.
+The eyeball case `{type:'zipper',keys}` draws the polyline plus a filled disc (`disc()` in
+`showObjects`) sized `zipperCenterDotScale × SEG_W`, matching the drawn dot's
+`zipperCenterDotScale × line width`. The rendering counterpart is `drawZipperCenterDots` — see
+PROJECT_SUMMARY.
+
+**Ground truth for the fold geometry:** `k9mm1xgca5` marks every fold centre with its own cosmetic
+circle. All 7 computed folds match all 7 circles — including a 4-cell circle on a grid CORNER and
+2-cell circles on cell EDGES — and the merge is what makes the 7th match. Pinned in
+`validator_harness.mjs`.
 
 ## Entropic-line validator
 
