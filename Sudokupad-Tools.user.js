@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.128.0
+// @version      3.129.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.128.0';
+  var SCRIPT_VERSION = '3.129.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -452,8 +452,13 @@
     var svg = document.getElementById('svgrenderer');
     if (!svg) return { error: 'no board' };
     var dpr = window.devicePixelRatio || 1;
+    // Report BOTH scales: the calibrated one we now snap with, and the
+    // getScreenCTM one we used to. They agree on Blink and disagree on Gecko —
+    // which is what the width inconsistency turned out to be.
+    var ctx = borderSnapCtx();
+    var scale = ctx ? ctx.sx : 0;
     var m = svg.getScreenCTM ? svg.getScreenCTM() : null;
-    var scale = m ? m.a * dpr : 0;
+    var ctmScale = m ? m.a * dpr : 0;
     var cs0 = settings.regionBorderWidth, cw0 = settings.regionColorStripeWidth;
     var centers = opts.center || [parseFloat(cs0) || 3];
     var colors  = opts.color  || [parseFloat(cw0) || 3];
@@ -504,6 +509,7 @@
       drawRegionSplitBorders(svg);
     }
     var out = { version: SCRIPT_VERSION, dpr: dpr, scale: +scale.toFixed(4),
+                ctmScale: +ctmScale.toFixed(4), engine: navigator.userAgent.indexOf('Gecko/') > -1 ? 'gecko' : 'other',
                 innerWidth: window.innerWidth, rows: rows };
     if (!opts.quiet) { try { console.log('[spdrBorderProbe]', out); console.table(rows); } catch (e) {} }
     return out;
@@ -3149,14 +3155,49 @@
   // Unconditional: there is no reason to keep the inconsistent rendering available,
   // so this has no setting. It falls back to the plain path only when the transform
   // is unusable (missing, rotated, or skewed).
+  // Calibrate the user-unit → device-pixel transform EMPIRICALLY, by measuring a
+  // probe rect of known size, rather than trusting getScreenCTM().
+  //
+  // WHY (v3.129). `getScreenCTM() × devicePixelRatio` is NOT the transform the
+  // engine actually paints with on Gecko. Measured in LibreWolf at dpr 2, reported
+  // scale 2.772: every band rendered at 3.1 / 3.13 device px instead of a flat 3,
+  // and no rect edge landed on a whole device pixel (fracMax 0.1) — in all 16
+  // width combinations. The identical build on Chrome measured dead-integer widths
+  // and fracMax 0 across 16 combinations × 5 board scales. So the snapping
+  // arithmetic was correct and its INPUT was wrong on one engine; every band then
+  // sat at a fractional position and rasterised to whatever the sub-pixel fraction
+  // happened to give, which is the width inconsistency that kept coming back.
+  //
+  // getBoundingClientRect() reports what layout will actually paint, on every
+  // engine, so the scale and origin come from it instead. The probe is 1000 user
+  // units so that Gecko's 1/60-CSS-px layout quantisation lands ~1e-5 of relative
+  // scale error instead of dominating the measurement. It carries
+  // `data-spdr-region-split` so the cage-box MutationObserver treats it as one of
+  // ours and doesn't fire a redraw loop, and it is removed before we return.
   function borderSnapCtx() {
     var board = document.getElementById('svgrenderer');
-    if (!board || !board.getScreenCTM) return null;
-    var m; try { m = board.getScreenCTM(); } catch (e) { return null; }
-    if (!m || !m.a || !m.d) return null;
-    if (Math.abs(m.b) > 1e-6 || Math.abs(m.c) > 1e-6) return null;   // rotated/skewed — don't touch it
+    if (!board) return null;
+    // Axis alignment is still a precondition — the band maths assumes no rotation
+    // or skew, and getScreenCTM remains a fine way to detect that.
+    if (board.getScreenCTM) {
+      var m; try { m = board.getScreenCTM(); } catch (e) { m = null; }
+      if (m && (Math.abs(m.b) > 1e-6 || Math.abs(m.c) > 1e-6)) return null;
+    }
+    var K = 1000;
+    var probe = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    probe.setAttribute('data-spdr-region-split', '1');
+    probe.setAttribute('x', '0');           probe.setAttribute('y', '0');
+    probe.setAttribute('width', String(K)); probe.setAttribute('height', String(K));
+    probe.setAttribute('fill', '#000');     // painted (so it has a box) but…
+    probe.setAttribute('opacity', '0');     // …invisible; BCR ignores opacity
+    probe.setAttribute('pointer-events', 'none');
+    var b = null;
+    board.appendChild(probe);
+    try { b = probe.getBoundingClientRect(); } finally { probe.remove(); }
+    if (!b || !(b.width > 0) || !(b.height > 0)) return null;
     var dpr = window.devicePixelRatio || 1;
-    return { sx: m.a * dpr, sy: m.d * dpr, ox: m.e * dpr, oy: m.f * dpr };
+    return { sx: b.width / K * dpr, sy: b.height / K * dpr,
+             ox: b.left * dpr,      oy: b.top * dpr };
   }
   // Snap one band (start `u0`, length `len`, user units) along one axis.
   //   • both edges on a grid line → round each independently (full-cell fills, which

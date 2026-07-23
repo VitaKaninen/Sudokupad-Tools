@@ -563,3 +563,41 @@ construction, which is the "centre disabled ⇒ equal on both sides" rule.
 **Rule to keep:** any two subsystems that draw at the same boundary must share one quantizer
 *and* know each other's occupied extent. Snapping each to the same grid line is not enough when
 one of them straddles it and paints on top.
+
+## `getScreenCTM()` lies on Gecko — calibrate the device transform instead (v3.129)
+
+**Never use `getScreenCTM() × devicePixelRatio` as the user-unit → device-pixel transform.**
+It is correct on Blink and wrong on Gecko, which is why the border-width inconsistency kept
+"coming back" after fixes that were themselves correct.
+
+Same build, same puzzle, `spdrBorderProbe({center:[1,2,3,4],color:[1,2,3,4]})`:
+
+| engine | dpr | reported scale | measured band widths | fracMax |
+|---|---|---|---|---|
+| Chrome | 1 | 1.278 | `1×72`, `3×72`, `4×72`, `5×72` — one value each | **0** |
+| LibreWolf | 2 | 2.772 | `3.1×36 \| 3.13×36` … every row split | **0.1** |
+
+`fracMax` is how far the worst rect edge sits from a whole device pixel. On Gecko *nothing*
+landed on one, in all 16 width combinations — so every band rasterised according to whatever
+sub-pixel fraction it happened to get. The snapping arithmetic was never the problem; its
+**input** was wrong on one engine.
+
+**Fix:** `borderSnapCtx()` now measures the transform empirically — append a 1000×1000
+user-unit probe rect, read `getBoundingClientRect()`, derive scale and origin, remove it.
+`getBoundingClientRect()` reports what layout will actually paint on every engine.
+Details that matter:
+- **1000 units, not 1** — Gecko quantises layout to 1/60 CSS px, so a large probe pushes that
+  quantisation down to ~1e-5 of relative scale error instead of dominating the measurement.
+- **`fill:#000` + `opacity:0`**, not `fill:none` or `visibility:hidden` — the box must be
+  painted to be measurable; BCR ignores opacity.
+- **Tag it `data-spdr-region-split`** so the cage-box MutationObserver treats it as one of ours
+  (`isOwnNode`) and doesn't fire a redraw loop.
+- `getScreenCTM()` is still used, but *only* to reject rotated/skewed transforms (`b`/`c`).
+
+Verified after the change: Chrome `scale === ctmScale` (1.278), `fracMax 0`, all 16 combos
+single-width — the calibration is equivalent where the CTM was already right.
+
+**Generalisation:** any time correctness depends on where something lands in *device* pixels,
+measure it, don't derive it from a transform API. And when a rendering bug survives a fix that
+you have proven correct arithmetically, suspect the inputs and **check a second engine** — the
+cross-engine diff localised this in one run after several rounds of chasing the maths.
