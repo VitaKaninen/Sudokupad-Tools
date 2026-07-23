@@ -16,7 +16,7 @@ UNREADABLE at 0).*
 **Validate Constraints (v3.53; cages added v3.56; little killers v3.57; dropdown menu + run-all
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
-modular lines v3.93):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+modular lines v3.93; double arrows v3.131):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -379,17 +379,20 @@ hitline clue; the ≥2 guard preserves the v3.80 single-colour sweep-in protecti
 harness for the classifier lives in the session scratchpad pattern (extracts the real functions from
 the userscript via `eval` — 15 cases incl. Hijinks/Equipoise/3xdi7kf6ab colours).
 
-## Sum-arrow validator
+## Sum-arrow + double-arrow validator
 
-**Sum-arrow validator (v3.73; multi-head branching v3.74):** `computeArrowRemovals` (independent;
+**Sum-arrow validator (v3.73; multi-head branching v3.74; double arrows v3.131):**
+`computeArrowRemovals` (independent;
 always-on — the per-validator enable settings were removed v3.104). Shaft digits (tip = just the
 last shaft cell) sum to the circle digit; repeats allowed along the shaft except where ordinary
 Sudoku forbids (same row/col/box/uniqueness-cage — unlike the little killer, arrow cells CAN share
 rows/cols, so those checks join the conflict matrix; circle-vs-shaft pairs included). Same LK
-backtracking enumeration (`computeSupported`, exact-sum suffix-bound + conflict pruning, 300k node
-cap → bail safely) extended so the TARGET is variable: circle cell = index 0, and for each circle
-candidate *v* the shaft is enumerated with target *v*; union supported digits per cell (circle
-included, so an unsupportable *v* is removed too). Iterated to a fixpoint. **Two detection sources
+backtracking enumeration (`computeSupported`, suffix-bound + conflict pruning, 300k node cap → bail
+safely) extended so the TARGET is variable — and, since v3.131, so that the target side can be MORE
+THAN ONE CELL: each unit is `{keys, tc}` where the first `tc` keys are the target side and the rest
+the line side, and the equation is carried as ONE SIGNED TOTAL (targets +d, line cells −d, legal
+fill ⇔ total 0). One DFS therefore serves both clue types; union supported digits per cell (targets
+included, so an unsupportable circle digit is removed too). Iterated to a fixpoint. **Two detection sources
 (`getSumArrows`), model preferred:** `getArrowsFromModel` reads `cp.arrowSums` — one entry per
 rendered ARM ({bulb:{center,width…}, arrow:{wayPoints}}); a multi-arm arrow = several independent
 units sharing the circle cell (each arm sums separately, the correct rule). **NB `arrowSums`
@@ -414,6 +417,47 @@ units, automatically consistent). A branch cell matching MORE THAN ONE distinct 
 (crossing arrows) is dropped, never guessed (a wrong stem could over-remove); model branches only
 attach to arms of the same bulb; a bulb-less arm that never attaches (decorative arrow) is dropped —
 under-detection, safe.
+
+**Double arrows (v3.131) — same row, same engine, different DETECTION.** A double arrow is a line
+with a circle at EACH end whose in-between digits sum to the sum of the two circles (`5,6,7` between
+them ⇒ the circles hold 9 and 9); repeats follow the same "unless Sudoku forbids it" rule. It is
+`tc = 2` in the engine above, so it needed no validator of its own — it shares the `sum arrow`
+registry row (menu label **"Sum & double arrows"**) and the eyeball (drawn with the `between` shape:
+polyline ringed at both ends). Detection is NOT the arrow readers: the picture is a between line's
+(plain cosmetic line + two cell-centred circles, no `marker-end` shaft), so `getDoubleArrows` runs
+`classifyDoubleArrowLines` → `betweenSegments` (the same circle-to-circle walk) and keeps only
+segments with a circle at BOTH ends and ≥1 cell between them.
+
+Cue-gated like renban/between (no native f-puzzles key; colour can never discriminate it from a
+between line). Catalog-measured 2026-07-23 over the 27 `double_arrow` puzzles + a false-positive
+sweep of all 6,260: **26 fire, 0 false positives** (the 6 "FP"s `cue_recall.py` reports are all
+genuine double arrows the catalog left untagged; the 1 miss is `ur11o44tv3`, a "bulbous arrows"
+variant). Three phrasing families, all real: **named** ("double arrow"), **line-first** ("digits
+along lines must have the same sum as the digits in the bulbs at each end", `v1litbf6k9`),
+**circle-first** ("the sum of the digits in two orange circles is equal to the sum of the digits
+along the line joining them", `cjjw4ss931`). Two narrownesses carry the precision:
+- the circle noun must be **PLURAL** (`circles`/`bulbs`) — that one letter is what keeps a plain
+  arrow's "…must equal the number in **the circle**" (`h3i7jv9pqj`) out of the descriptive branches;
+- `DOUBLEARROW_ANTI_RE` (`concatenat`, `product`) drops the near-misses that also join two circles
+  with a summing line but are a DIFFERENT clue — "equal to a concatenation of the digits in the
+  circles" (5 puzzles, `mqx8o45al4`) and "equal to the product of both digits" (`Hp97h2FtB4`). The
+  ANTI is skipped when the rules literally say "double arrow", because `0m0zb2b86m` is titled
+  "Double Arrows, **Product** Squares" — there `product` names another clue in the same puzzle.
+
+`DOUBLEARROW_CLAUSE_RE` (named-colour layer) deliberately does NOT trigger on a bare "circles":
+`clauseColorWord` takes the FIRST matching clause, and on `zetamath/angel` the BETWEEN clause comes
+first ("cells along **gray** lines between two filled circles…") — a bare trigger would hand the
+double arrows the between lines' grey. It needs the name, or a sum/total beside the circles.
+
+**BETWEEN-LINE COLLISION (the reason this touched `classifyBetweenLines`).** A double arrow draws
+the same picture as a between line AND its rules text trips the between cue head-on ("the sum of the
+digits on a line BETWEEN two CIRCLES…", `0m0zb2b86m`, `quadsparade/doubleexclusion`), so on a
+DA-only puzzle the single-colour layer would have handed every DA line to the between validator —
+the wrong rule, applied confidently. So when the DA cue also fires, between subtracts the lines DA
+confidently claims (→ `none` if that leaves nothing), and refuses (→ `ambiguous`) if DA itself
+can't be pinned. Only 2 of the 99 `between_line` puzzles trip the DA cue and BOTH genuinely have
+both clue types, so the guard costs nothing: `zetamath/angel` (grey between + red double arrows)
+keeps its grey lines through it.
 
 ## Renban + region-sum-line validators
 
@@ -719,7 +763,9 @@ between key vetoes to `none` (keys are exhaustive). For scl/ctc/js-object puzzle
 "between … circles/bulbs/endpoints/attached", catalog-measured phrasings) gated exactly like renban,
 with a **lockout guard** (`BETWEEN_LOCKOUT_RE` — "lie outside", "must not be between", "lockout")
 that forces `ambiguous` when lockout phrasing co-occurs, so the opposite rule is never mis-applied.
-**Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages), `hg0yh5uke9` (between + cosmetic
+A second guard (v3.131) does the same job for **double arrows**, which draw the identical picture and
+trip the between cue — see "Double arrows" in the sum-arrow section for how the claimed lines are
+subtracted. **Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages), `hg0yh5uke9` (between + cosmetic
 renban); non-native scl `2ad4183iyn` (**the segmentation case** — 11 chains → 57 segments),
 `xm3e3npmmk`, `swtm07rplk`.
 

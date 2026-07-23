@@ -460,8 +460,8 @@ way so it stays low-maintenance.
   press Ctrl+Z" (the old per-reason "Nothing was damaged" / partial-count text is gone).
 - **Validate Constraints — the validator subsystem (v3.53+; full documentation in
   [VALIDATORS.md](VALIDATORS.md)):** floating button + popup menu of per-constraint validators
-  (Kropki, cages, little killers, thermos, German/Dutch whispers, XV, sum arrows, between lines,
-  renban, region-sum, parity, zipper, entropic, modular) that remove — never add — centre candidates with no
+  (Kropki, cages, little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
+  between lines, renban, region-sum, parity, zipper, entropic, modular) that remove — never add — centre candidates with no
   complete support. Entry points: `buildValidateButton` / `openValidateMenu` /
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →

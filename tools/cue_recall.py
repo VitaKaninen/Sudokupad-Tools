@@ -43,6 +43,11 @@ VALIDATORS = [
     ('entropic', 'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'entropic_line',
      ('ENTROPIC_SET_RE', 'ENTROPIC_LINEISH_RE')),
     ('thermo', 'THERMO_CUE_RE', None, 'thermo', None),
+    # NOTE: the script skips DOUBLEARROW_ANTI_RE when the rules literally say
+    # "double arrow" (DOUBLEARROW_NAME_RE), which this table can't express — so the
+    # recall printed here is a LOWER BOUND (one puzzle short: 0m0zb2b86m, titled
+    # "Double Arrows, Product Squares").
+    ('double arrow', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE', 'double_arrow', None),
 ]
 
 # tag -> clause const, for the clause-blindness check below. Whisper's layer 3 uses
@@ -54,6 +59,7 @@ CLAUSES = {
     'zipper': 'ZIPPER_CLAUSE_RE',
     'entropic_line': 'ENTROPIC_CLAUSE_RE',
     'thermo': 'THERMO_CLAUSE_RE',
+    'double_arrow': 'DOUBLEARROW_CLAUSE_RE',
 }
 
 # enough of the script's COLOR_WORD_ALL to answer "does this clause name a colour?"

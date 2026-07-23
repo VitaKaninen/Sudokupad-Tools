@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.130.0
+// @version      3.131.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.130.0';
+  var SCRIPT_VERSION = '3.131.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6526,8 +6526,8 @@
   // ══════════════════════════════════════════════════════════════════════════
   //  Validate Constraints — remove candidates that no constraint can satisfy.
   //  Many independent validators (see constraintValidators() for the registry):
-  //  Kropki, cages, little killers, thermos, whispers, XV, sum arrows, between
-  //  lines, and the cue-detected line family. Quadruples are not yet implemented.
+  //  Kropki, cages, little killers, thermos, whispers, XV, sum + double arrows,
+  //  between lines, and the cue-detected line family. Quadruples aren't done yet.
   //  It only ever REMOVES centre candidates — never adds — so a player's prior
   //  eliminations are preserved.
   // ══════════════════════════════════════════════════════════════════════════
@@ -7967,7 +7967,74 @@
     var res = classifyCueLines(BETWEEN_CUE_RE, BETWEEN_CLAUSE_RE, null);
     if (res.mode === 'confident' && BETWEEN_LOCKOUT_RE.test(getPuzzleRulesBlob()))
       return { mode: 'ambiguous', lines: [], allLines: res.allLines };
+    // DOUBLE-ARROW COLLISION (v3.131). A double arrow draws the SAME picture as a
+    // between line (line + a circle at each end) and its rules text trips the
+    // between cue head-on — "the sum of the digits on a line BETWEEN two CIRCLES…"
+    // (`0m0zb2b86m`, `quadsparade/doubleexclusion`). On a DA-only puzzle the
+    // single-colour layer would then hand every DA line to the between validator,
+    // which applies the WRONG rule. So when the DA cue also fires, subtract the
+    // lines the DA classifier confidently claims; if that leaves none the puzzle
+    // was DA-only, and if DA itself can't be pinned we refuse rather than guess
+    // which rule a line carries. `zetamath/angel` has BOTH (grey between, red
+    // double arrows) and keeps its grey lines through this.
+    if (res.mode === 'confident' && doubleArrowCueFires(getPuzzleRulesBlob())) {
+      var da = classifyDoubleArrowLines();
+      if (da.mode !== 'confident') return { mode: 'ambiguous', lines: [], allLines: res.allLines };
+      var claimed = {};
+      da.lines.forEach(function (k) { claimed[k.join(' ')] = 1; });
+      var left = res.lines.filter(function (k) { return !claimed[k.join(' ')]; });
+      return left.length
+        ? { mode: 'confident', lines: left, allLines: res.allLines }
+        : { mode: 'none', lines: [], allLines: res.allLines };
+    }
     return res;
+  }
+
+  // ── Double-arrow lines ──────────────────────────────────────────────────────
+  // A double arrow is a line with a CIRCLE AT EACH END: the digits BETWEEN the
+  // circles sum to the SUM OF THE TWO CIRCLE digits (a 5-6-7 line → the circles
+  // hold 8 and 9). Digits may repeat on the line where Sudoku allows it — the
+  // same rule the sum arrow follows, which is why it is validated by the SAME
+  // engine and the same menu row: a sum arrow is this equation with a one-cell
+  // target side (see computeArrowRemovals).
+  //
+  // Cue-gated like renban/between — there is no native f-puzzles key and the
+  // picture is a plain cosmetic line plus two cell-centred circles, identical to
+  // a between line, so colour can never discriminate it. Catalog-measured over
+  // the 27 `double_arrow` puzzles plus a false-positive sweep of all 6,260
+  // (2026-07-23): 26 named or described, 0 false positives. Three phrasing
+  // families, all seen in the wild:
+  //   named        "double arrow" / "double-arrow"                    (most)
+  //   line-first   "digits along lines must have the same sum as the digits in
+  //                 the bulbs at each end"                       (`v1litbf6k9`)
+  //   circle-first "the sum of the digits in two orange circles is equal to the
+  //                 sum of the digits along the line joining them" (`cjjw4ss931`)
+  // The circle noun must be PLURAL (`circles`/`bulbs`) — that one letter is what
+  // keeps ordinary arrow rules ("…must equal the number in the circle",
+  // `h3i7jv9pqj`) out of the descriptive branches.
+  var DOUBLEARROW_NAME_RE = /double[- ]?arrows?/;
+  var DOUBLEARROW_CUE_RE = /double[- ]?arrows?|(?:sum|total)[^.\n]{0,70}\b(?:lines?|paths?)\b[^.\n]{0,70}(?:equal|same)[^.\n]{0,70}(?:circles|bulbs)\b|\b(?:lines?|paths?)\b[^.\n]{0,70}(?:same\s+(?:sum|total)|sums?\s+to\s+the\s+sum|equals?[^.\n]{0,30}(?:sum|total))[^.\n]{0,70}(?:circles|bulbs)\b|(?:circles|bulbs)\b[^.\n]{0,70}(?:equal|same)[^.\n]{0,40}(?:sum|total)[^.\n]{0,70}\b(?:lines?|paths?)\b/;
+  // The near-miss rules that ALSO connect two circles with a summing line but are
+  // a different constraint: "…equal to a CONCATENATION of the digits in the
+  // circles" (5 catalog puzzles, e.g. `mqx8o45al4`) and "…equal to the PRODUCT of
+  // both digits in the circles" (`Hp97h2FtB4`). Only applied when the rules never
+  // say "double arrow": `0m0zb2b86m` is titled "Double Arrows, Product Squares",
+  // where `product` names a DIFFERENT clue in the same puzzle.
+  var DOUBLEARROW_ANTI_RE = /concatenat|\bproduct\b/;
+  // Named-colour clause trigger. Deliberately NOT bare "circles": on a puzzle with
+  // both clue types the between clause ("cells along gray lines between two filled
+  // circles…") comes FIRST, and clauseColorWord takes the first matching clause —
+  // it would hand the DA validator the between lines' colour (`zetamath/angel`).
+  // Requiring the name, or a sum/total sitting beside the circles, keeps them apart.
+  var DOUBLEARROW_CLAUSE_RE = /double[- ]?arrow|(?:sum|total)[^.\n]{0,70}(?:circles|bulbs)|(?:circles|bulbs)[^.\n]{0,70}(?:sum|total)/;
+  function doubleArrowCueFires(blob) {
+    if (!DOUBLEARROW_NAME_RE.test(blob) && DOUBLEARROW_ANTI_RE.test(blob)) return false;
+    return DOUBLEARROW_CUE_RE.test(blob);
+  }
+  function classifyDoubleArrowLines() {
+    if (!doubleArrowCueFires(getPuzzleRulesBlob()))
+      return { mode: 'none', lines: [], allLines: getCosmeticLines() };
+    return classifyCueLines(DOUBLEARROW_CUE_RE, DOUBLEARROW_CLAUSE_RE, null);
   }
 
   // ── Cell-centred CIRCLE markers (shared bulb reader, v3.120) ────────────────
@@ -9708,7 +9775,14 @@
     return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied, note: note };
   }
 
-  // ── Sum-arrow validator ───────────────────────────────────────────────────
+  // ── Sum-arrow + double-arrow validator ────────────────────────────────────
+  // ONE engine, two clue types (v3.131). A DOUBLE ARROW is a line with a circle
+  // at each end whose in-between digits sum to the SUM OF THE TWO CIRCLES — the
+  // same equation as a sum arrow with a two-cell target side, same repeat rule,
+  // so it runs through computeArrowRemovals on the same menu row. Detection is
+  // separate (getDoubleArrows, a cue-gated cosmetic-line read) because the
+  // picture is a between line's, not an arrow's.
+  //
   // An arrow: the digits along the shaft (tip included — it's just the last
   // shaft cell) sum to the digit in the circle. Digits MAY repeat along the
   // shaft — except where ordinary Sudoku rules forbid it (two arrow cells, or
@@ -9876,17 +9950,44 @@
     return units;
   }
 
-  // Compute centre-candidate removals forced by the sum arrows, iterated to a
-  // fixpoint (a removal on one arrow can invalidate another's support — arrows
-  // may share cells, and a circle is often another arrow's shaft cell). Pure
+  // Double arrows as units: { keys:[circle … circle], circles:[a,b], line:[…] }.
+  // The picture is a between line's, so it is read the same way — walk the drawn
+  // step graph between circle markers (betweenSegments), which splits one drawn
+  // chain that threads several circles into one clue per circle-to-circle run.
+  // BOTH ENDS MUST CARRY A CIRCLE: betweenSegments falls back to emitting chains
+  // unchanged when it can find no circles at all, and a bare chain is not a
+  // double arrow — under-detect, never mis-apply.
+  function getDoubleArrows() {
+    var cls = classifyDoubleArrowLines();
+    if (cls.mode !== 'confident') return [];
+    var circles = getCellCircleKeySet();
+    var out = [];
+    betweenSegments(cls.lines).forEach(function (seg) {
+      if (seg.length < 3) return;                                  // no cells between the circles
+      if (!circles[seg[0]] || !circles[seg[seg.length - 1]]) return;
+      out.push({ keys: seg, circles: [seg[0], seg[seg.length - 1]], line: seg.slice(1, -1) });
+    });
+    return out;
+  }
+
+  // Compute centre-candidate removals forced by the sum arrows AND the double
+  // arrows, iterated to a fixpoint (a removal on one can invalidate another's
+  // support — they share cells, and a circle is often another's line cell). Pure
   // w.r.t. the board — works on copies of the candidate sets and returns the
   // removal list.
   function computeArrowRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
-    var arrows = getSumArrows();
-    if (unitFilter) arrows = arrows.filter(function (a) { return unitFilter([a.circle].concat(a.shaft)); });
-    if (arrows.length === 0) return { noArrows: true };
+    // Both clue types are the SAME equation — a set of TARGET cells whose digits
+    // sum to the digits of a set of LINE cells. A sum arrow has one target (the
+    // circle) and the shaft as its line; a double arrow has two targets (the end
+    // circles) and the cells between them. `tc` = how many leading keys are on
+    // the target side; everything after is the line side.
+    var raw = [];
+    getSumArrows().forEach(function (a) { raw.push({ keys: [a.circle].concat(a.shaft), tc: 1 }); });
+    getDoubleArrows().forEach(function (d) { raw.push({ keys: d.circles.concat(d.line), tc: 2 }); });
+    if (unitFilter) raw = raw.filter(function (u) { return unitFilter(u.keys); });
+    if (raw.length === 0) return { noArrows: true };
 
     var N = detectGridSize();
     var bd = regularBoxDims(N);
@@ -9899,13 +10000,13 @@
       return boxId(a) === boxId(b) || shareCage(a, b);
     }
 
-    // Per-arrow cell list (circle at index 0) + conflict matrix (which cell
+    // Per-unit cell list (target cells first) + conflict matrix (which cell
     // pairs must differ). Unlike the little killer, arrow cells CAN share a
     // row or column, so those checks join box/cage here.
-    var units = arrows.map(function (a) {
-      var keys = [a.circle].concat(a.shaft);
+    var units = raw.map(function (u) {
+      var keys = u.keys;
       var conf = keys.map(function (_, i) { return keys.map(function (__, j) { return i !== j && keys[i] !== keys[j] && conflict(keys[i], keys[j]); }); });
-      return { keys: keys, conf: conf };
+      return { keys: keys, tc: u.tc, conf: conf };
     });
 
     // Working copies of the player's centre marks (the only cells we may modify).
@@ -9917,46 +10018,52 @@
       return st.fullSet;                                // empty cell → unconstrained, never modified
     }
 
-    // Which (cell-index, digit) pairs the arrow can still place: for each circle
-    // candidate v, enumerate every shaft assignment summing to v with all
+    // Which (cell-index, digit) pairs the unit can still place: enumerate every
+    // complete assignment where the TARGET side and the LINE side sum equal, all
     // conflicting pairs distinct (each cell drawing from its CURRENT candidate
-    // set) and union the digits used per cell — the circle included, so v itself
-    // is supported only when a complete legal fill exists. Backtracking with
-    // exact-sum suffix-bound + conflict pruning; the node cap is shared across
-    // all of the arrow's circle candidates, and if hit we bail (no removals
-    // from this arrow this pass — never over-remove).
+    // set), and union the digits used per cell — targets included, so a circle
+    // digit survives only when a complete legal fill exists for it.
+    //
+    // The equation is carried as one SIGNED total: target cells count +d, line
+    // cells −d, and a fill is legal exactly when the total is 0. That is what
+    // lets one solver serve both clue types (a fixed target sum would only fit
+    // the single-circle arrow). Backtracking with signed suffix-bound + conflict
+    // pruning; on a node-cap overrun we bail (no removals from this unit this
+    // pass — never over-remove).
     function computeSupported(unit) {
-      var keys = unit.keys, n = keys.length, conf = unit.conf;
+      var keys = unit.keys, n = keys.length, conf = unit.conf, tc = unit.tc;
       var sets = keys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
       if (sets.some(function (s) { return s.length === 0; })) return { supported: null, bailed: false, empty: true };
+      // Smallest / largest signed total still reachable from index i onwards.
       var sufMin = new Array(n + 1).fill(0), sufMax = new Array(n + 1).fill(0);
-      for (var i = n - 1; i >= 1; i--) {
-        sufMin[i] = sufMin[i + 1] + sets[i][0];
-        sufMax[i] = sufMax[i + 1] + sets[i][sets[i].length - 1];
+      for (var i = n - 1; i >= 0; i--) {
+        var lo = sets[i][0], hi = sets[i][sets[i].length - 1];
+        sufMin[i] = sufMin[i + 1] + (i < tc ? lo : -hi);
+        sufMax[i] = sufMax[i + 1] + (i < tc ? hi : -lo);
       }
       var supported = keys.map(function () { return new Set(); });
       var assign = new Array(n), nodes = 0, CAP = 300000, bailed = false;
-      function dfs(idx, sum, target) {
+      function dfs(idx, sum) {
         if (bailed) return;
         if (nodes++ > CAP) { bailed = true; return; }
-        if (idx === n) { if (sum === target) for (var k = 0; k < n; k++) supported[k].add(assign[k]); return; }
-        if (sum + sufMin[idx] > target || sum + sufMax[idx] < target) return;
-        var opts = sets[idx];
+        if (idx === n) { if (sum === 0) for (var k = 0; k < n; k++) supported[k].add(assign[k]); return; }
+        if (sum + sufMin[idx] > 0 || sum + sufMax[idx] < 0) return;
+        var opts = sets[idx], target = idx < tc;
         for (var oi = 0; oi < opts.length; oi++) {
-          var d = opts[oi];
-          if (sum + d + sufMin[idx + 1] > target) break;          // sorted asc → larger d only worse
+          var d = opts[oi], c = target ? d : -d;
+          // sets are ascending: on the target side a larger d only pushes the
+          // total further ABOVE 0, on the line side further BELOW it — so once
+          // the best remaining suffix can't come back, no later d can either.
+          if (target ? (sum + c + sufMin[idx + 1] > 0) : (sum + c + sufMax[idx + 1] < 0)) break;
           var ok = true;
           for (var j = 0; j < idx; j++) if (conf[idx][j] && assign[j] === d) { ok = false; break; }
           if (!ok) continue;
           assign[idx] = d;
-          dfs(idx + 1, sum + d, target);
+          dfs(idx + 1, sum + c);
           if (bailed) return;
         }
       }
-      for (var vi = 0; vi < sets[0].length && !bailed; vi++) {
-        assign[0] = sets[0][vi];
-        dfs(1, 0, sets[0][vi]);
-      }
+      dfs(0, 0);
       return { supported: supported, bailed: bailed, empty: false };
     }
 
@@ -10284,8 +10391,10 @@
       { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues',
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
-      { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum arrows',
-        detect: function () { return getSumArrows().length > 0; },
+      // Double arrows share this row: same equation, same engine (see
+      // computeArrowRemovals), so one button validates both.
+      { name: 'sum arrow', unitNoun: 'arrow', menuLabel: 'Sum & double arrows',
+        detect: function () { return getSumArrows().length > 0 || getDoubleArrows().length > 0; },
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
       { name: 'between', unitNoun: 'between line', menuLabel: 'Between lines',
         classify: classifyBetweenLines, compute: computeBetweenLineRemovals, countKey: 'betweenCount', noneKey: 'noBetween' },
@@ -10347,7 +10456,13 @@
       case 'cage':          getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;
       case 'little killer': getLittleKillers().forEach(function (lk) { out.push({ type: 'diag', keys: lk.keys }); }); break;
       case 'thermo':        getThermos().forEach(function (t) { out.push({ type: 'thermo', edges: t.edges, root: t.root, keys: t.keys }); }); break;
-      case 'sum arrow':     getSumArrows().forEach(function (a) { out.push({ type: 'arrow', circle: a.circle, shaft: a.shaft }); }); break;
+      // Sum arrows draw as bulb + shaft + arrowhead; double arrows reuse the
+      // 'between' shape (polyline ringed at BOTH ends), which is exactly their
+      // picture. Same two getters the compute reads.
+      case 'sum arrow':
+        getSumArrows().forEach(function (a) { out.push({ type: 'arrow', circle: a.circle, shaft: a.shaft }); });
+        getDoubleArrows().forEach(function (d) { out.push({ type: 'between', keys: d.keys }); });
+        break;
       // Between lines get their own case (v3.120) rather than the generic line
       // branch: what a click validates is the SEGMENTS (one drawn chain threading
       // several circles is several clues), and the endpoint CIRCLES are now part of

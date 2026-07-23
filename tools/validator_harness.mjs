@@ -70,6 +70,8 @@ const NAMES = [
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
   'BETWEEN_CUE_RE', 'BETWEEN_CLAUSE_RE', 'BETWEEN_LOCKOUT_RE',
+  'DOUBLEARROW_NAME_RE', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE',
+  'DOUBLEARROW_CLAUSE_RE', 'doubleArrowCueFires',
   'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'ENTROPIC_SET_RE',
   'ENTROPIC_LINEISH_RE', 'ENTROPIC_CLAUSE_RE', 'hasEntropicCue',
   'MODULAR_CUE_RE', 'MODULAR_SET_RE', 'MODULAR_CLAUSE_RE', 'hasModularCue',
@@ -204,6 +206,35 @@ checkTrue('lockout guard: "must not be between" the endpoints',
   F.BETWEEN_LOCKOUT_RE.test('the digits on the line must not be between the two endpoint values'));
 checkFalse('lockout guard: a plain between clue is NOT lockout',
   F.BETWEEN_LOCKOUT_RE.test('digits along a line must be numerically between the digits in the circles'));
+
+// ── Double arrows (v3.131) — catalog-measured: 26 of the 27 double_arrow puzzles
+// fire, 0 false positives over all 6,260. One case per phrasing family + each
+// near-miss the ANTI guard exists for.
+checkTrue('double arrow cue: named outright (zetamath/angel)',
+  F.doubleArrowCueFires('double arrows: the sum of the digits along a red line connecting two circles is equal to the sum of the digits in the circles'));
+checkTrue('double arrow cue: line-first, "bulbs at each end" (v1litbf6k9)',
+  F.doubleArrowCueFires('digits along lines must have the same sum as the digits in the bulbs at each end'));
+checkTrue('double arrow cue: circle-first (cjjw4ss931)',
+  F.doubleArrowCueFires('the sum of the digits in two orange circles is equal to the sum of the digits along the line joining them'));
+checkTrue('double arrow cue: described, never named (7fapjms0yv)',
+  F.doubleArrowCueFires('the sum of the digits along a line connecting two circles is equal to the sum of the digits in the circles'));
+checkFalse('double arrow cue: a plain ARROW says "the circle", singular (h3i7jv9pqj)',
+  F.doubleArrowCueFires('the sum of the numbers along the path of each arrow must equal the number in the circle'));
+checkFalse('double arrow cue: CONCATENATION of the circle digits is a different clue (mqx8o45al4)',
+  F.doubleArrowCueFires('the sum of the digits on a line strictly between two circles is equal to a concatenation of the digits in those circles'));
+checkFalse('double arrow cue: PRODUCT of the circle digits is a different clue (Hp97h2FtB4)',
+  F.doubleArrowCueFires('the sum of the digits on a line between two circles is equal to the product of both digits in the circles'));
+checkTrue('double arrow cue: ANTI is skipped when the rules NAME it (0m0zb2b86m "Double Arrows, Product Squares")',
+  F.doubleArrowCueFires('double arrows, product squares -the sum of digits along a line between two circles is equal to the sum of the digits in those two circles'));
+checkFalse('double arrow cue: a between line is not a double arrow',
+  F.doubleArrowCueFires('digits along a grey line must lie strictly between the digits in the attached circles'));
+// The clause regex feeds the named-colour layer, where clauseColorWord takes the
+// FIRST matching clause — on angel the BETWEEN clause comes first, so a bare
+// "circles" trigger would hand the double arrows the between lines' grey.
+checkFalse('double arrow clause: does NOT match a bare between clause (zetamath/angel)',
+  F.DOUBLEARROW_CLAUSE_RE.test('between lines: cells along gray lines between two filled circles must have values between those in the circles'));
+checkTrue('double arrow clause: matches its own clause (zetamath/angel)',
+  F.DOUBLEARROW_CLAUSE_RE.test('double arrows: the sum of the digits along a red line connecting two circles is equal to the sum of the digits in the circles'));
 
 // ── between-line interval maths (the plan's worked "trapped value" example) ──
 // bulb {5} & {2..8}: keeps 3,4,6,7; excludes 1,2,5,8,9 (a digit is never strictly
