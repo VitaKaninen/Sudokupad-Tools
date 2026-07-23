@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.126.0
+// @version      3.127.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.126.0';
+  var SCRIPT_VERSION = '3.127.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -433,6 +433,68 @@
     return out;
   }
   window.spdrGapScan = spdrGapScan;
+
+  // ── Diagnostics: window.spdrBorderProbe() ──────────────────────────────────
+  // Measure what the border bands ACTUALLY render at, and sweep settings without
+  // touching the UI. Answers the two questions a screenshot can't separate:
+  //   1. `wCenter` / `wColor` — the distinct device-pixel thicknesses in play for
+  //      each band type. Anything other than a single value is the inconsistency.
+  //   2. `fracMax` — how far the worst rect edge sits from a whole device pixel.
+  //      ~0 means the geometry we emit is exactly device-aligned, so any visible
+  //      unevenness is the browser's rasterisation, not our arithmetic. Clearly
+  //      non-zero means the snap context (getScreenCTM × dpr) does not describe
+  //      the real transform — a different bug with a different fix.
+  // Usage: spdrBorderProbe()                        → current settings only
+  //        spdrBorderProbe({center:[1,2], color:[1,2,3,4]})  → full sweep
+  // Settings are restored afterwards and never persisted.
+  function spdrBorderProbe(opts) {
+    opts = opts || {};
+    var svg = document.getElementById('svgrenderer');
+    if (!svg) return { error: 'no board' };
+    var dpr = window.devicePixelRatio || 1;
+    var m = svg.getScreenCTM ? svg.getScreenCTM() : null;
+    var scale = m ? m.a * dpr : 0;
+    var cs0 = settings.regionBorderWidth, cw0 = settings.regionColorStripeWidth;
+    var centers = opts.center || [parseFloat(cs0) || 3];
+    var colors  = opts.color  || [parseFloat(cw0) || 3];
+    var rows = [];
+    function widths(kind, nominal) {
+      var nom = nominal * scale, lo = nom * 0.5, hi = nom * 2, out = {}, frac = 0;
+      svg.querySelectorAll('rect[data-spdr-kind="' + kind + '"]').forEach(function (r) {
+        var b = r.getBoundingClientRect();
+        [b.width * dpr, b.height * dpr].forEach(function (d) {
+          if (d >= lo && d <= hi) { var k = Math.round(d * 100) / 100; out[k] = (out[k] || 0) + 1; }
+        });
+        [b.left * dpr, b.top * dpr, b.right * dpr, b.bottom * dpr].forEach(function (e) {
+          frac = Math.max(frac, Math.abs(e - Math.round(e)));
+        });
+      });
+      return { list: Object.keys(out).map(Number).sort(function (a, b) { return a - b; }),
+               counts: out, frac: frac };
+    }
+    try {
+      centers.forEach(function (cv) {
+        colors.forEach(function (kv) {
+          settings.regionBorderWidth = String(cv);
+          settings.regionColorStripeWidth = String(kv);
+          drawRegionSplitBorders(svg);
+          var C = widths('center', cv), M = widths('multi', kv);
+          rows.push({ center: cv, color: kv,
+                      wCenter: C.list.join(' | ') || '—', wColor: M.list.join(' | ') || '—',
+                      okCenter: C.list.length === 1, okColor: M.list.length === 1,
+                      fracMax: +Math.max(C.frac, M.frac).toFixed(3) });
+        });
+      });
+    } finally {
+      settings.regionBorderWidth = cs0; settings.regionColorStripeWidth = cw0;
+      drawRegionSplitBorders(svg);
+    }
+    var out = { version: SCRIPT_VERSION, dpr: dpr, scale: +scale.toFixed(4),
+                innerWidth: window.innerWidth, rows: rows };
+    if (!opts.quiet) { try { console.log('[spdrBorderProbe]', out); console.table(rows); } catch (e) {} }
+    return out;
+  }
+  window.spdrBorderProbe = spdrBorderProbe;
 
   // Parse hex (3/4/6/8 digit) or rgb()/rgba() into {r,g,b,a}. Returns null on failure.
   function parseColor(str) {
