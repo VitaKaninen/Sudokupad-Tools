@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.129.0
+// @version      3.130.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.129.0';
+  var SCRIPT_VERSION = '3.130.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3125,36 +3125,30 @@
     return { regions: regions, cellSize: cs, rows: rows, cols: cols };
   }
 
-  // ── DEVICE-PIXEL SNAPPING for the region borders (v3.124) ───────────────────
-  // WHY (measured, not assumed): SudokuPad scales the board by a FRACTIONAL factor
-  // that changes with the window (1.509 at a 1166px window), so the grid lines land
-  // at arbitrary and DIFFERENT sub-pixel positions — measured device-pixel
-  // fractions across one board's ten verticals: .272 .848 .424 .000 .576 .152 .728
-  // .304 .880 .456. `shape-rendering:crispEdges` (which mainGroup needs, or the
-  // strip rects anti-alias into a dark fringe) then rounds EVERY EDGE INDEPENDENTLY,
-  // so a 4-unit strip paints 6px at one boundary and 7px at the next, and a centre
-  // border set to 3 can paint 4. Because the bands are contiguous they share edges,
-  // which is why the TOTAL looks right while the split does not.
+  // ── DEVICE-PIXEL SNAPPING for the region borders ────────────────────────────
+  // SudokuPad scales the board by a fractional, window-dependent factor, so grid
+  // lines land at arbitrary sub-pixel positions and no border width is stable on
+  // its own: left to the browser, a band of device width L paints ceil(L) where the
+  // boundary's fraction pushes it over and floor(L) otherwise. We therefore place
+  // every band on whole device pixels ourselves. Three rules, and they are the
+  // whole design:
   //
-  // There is no setting value that avoids this: a band is stable only when
-  // width × scale ≈ an integer (and the CENTRE border, being a stroke split ±w/2
-  // about the boundary, only when it is ≈ an EVEN integer), and the scale is
-  // fractional and window-dependent. So we snap the geometry OURSELVES instead:
-  // round the edge that sits ON the grid line, then force the band's thickness to a
-  // whole number of device pixels. Every band of a given nominal width then paints
-  // the SAME pixel count at every boundary, which is the thing that was wrong.
+  //   1. ONE rounding decision per band type for the entire board — the nominal
+  //      width is rounded to device pixels ONCE and that count is used at every
+  //      boundary. This is also the "majority vote": the share of boundaries that
+  //      would have rounded up is frac(L), so the majority rounds up exactly when
+  //      frac(L) > 0.5, which is Math.round(L). No counting, no tie-break.
+  //   2. Quantize edge INPUTS, never widths. A width is always the difference of
+  //      two separately snapped edges, so two rects naming the same edge land on
+  //      the same device pixel by construction and joins close with no gap.
+  //   3. The centre band and the colour strips share one quantizer per axis and
+  //      know each other's extent (see makeAxisSnap's bandLines), so strips sit
+  //      flush against the centre band instead of being painted over by it.
   //
-  // WHY THE ROUNDED WIDTH IS ALSO THE "MAJORITY VOTE". Left to the browser, a band
-  // of device width L paints ceil(L) where the boundary's sub-pixel fraction pushes
-  // it over and floor(L) otherwise; across boundaries that fraction is essentially
-  // uniform, so the share that rounds UP is frac(L) — the majority rounds up
-  // exactly when frac(L) > 0.5, which is `Math.round(L)`. So rounding the nominal
-  // width once and using it everywhere IS "whichever way more than half of the
-  // segments would have gone", with no counting and no tie-breaking to get wrong.
-  //
-  // Unconditional: there is no reason to keep the inconsistent rendering available,
-  // so this has no setting. It falls back to the plain path only when the transform
-  // is unusable (missing, rotated, or skewed).
+  // Unconditional — there is no reason to offer inconsistent rendering, so no
+  // setting. Falls back to unsnapped drawing only when the transform is unusable
+  // (no board, or rotated/skewed).
+
   // Calibrate the user-unit → device-pixel transform EMPIRICALLY, by measuring a
   // probe rect of known size, rather than trusting getScreenCTM().
   //
@@ -3199,55 +3193,35 @@
     return { sx: b.width / K * dpr, sy: b.height / K * dpr,
              ox: b.left * dpr,      oy: b.top * dpr };
   }
-  // Snap one band (start `u0`, length `len`, user units) along one axis.
-  //   • both edges on a grid line → round each independently (full-cell fills, which
-  //     must keep tiling exactly with their neighbours).
-  //   • one edge on a grid line   → anchor THAT edge, force the length to a whole
-  //     number of device pixels (border strips + corner patches).
-  //   • neither                   → round the start, force the length.
-  // `grid` is the cell size; an edge counts as "on the grid" within a hair of a
-  // multiple of it.
-  // ONE QUANTIZER PER AXIS, and every edge goes through it (v3.125). The first cut
-  // snapped each rect on its own, which fixed the widths but left GAPS where
-  // segments meet: a horizontal run trimmed to start at `c*cs + SW` rounded to
-  // round(dev(c·cs) + SW·s), while the vertical strip it abuts ended at
-  // round(dev(c·cs)) + round(SW·s) — the same edge, two expressions, up to a pixel
-  // apart. The cure is to quantize the INPUTS once, not the results: a coordinate
-  // is recognised as "grid line ± a known band width", and each part is snapped
-  // separately, so any two expressions naming the same edge produce the same
-  // device pixel by construction and the geometry closes exactly.
+  // ONE QUANTIZER PER AXIS — every colour-strip edge goes through it, so any two
+  // rects naming the same edge land on the same device pixel by construction.
   //
-  // `widths` are the nominal band widths that may be offset from a grid line
-  // (the colour-strip width; the centre border has its own centred quantizer).
-  // Each becomes a whole number of device pixels — the SAME number everywhere,
-  // which is the consistency requirement: one rounding decision per band type for
-  // the whole board, never per segment.
-  // `bandLines` / `bandWidth` (v3.126) teach the quantizer where the CENTRE border
-  // sits. The colour strips used to be anchored on the grid line itself, so the
-  // centre band — drawn on top, straddling that same line — ATE part of each strip.
-  // For an odd centre width the band cannot sit symmetrically on a fractional grid
-  // line, so it ate one more device pixel on one side than the other: that is the
-  // "some 3px, some 4px" the strips were showing (verified: with centre=3 or 5 the
-  // visible strip width took two values board-wide; with centre=4 it took one).
-  // Now a grid line that carries a centre border reports TWO anchors — the band's
-  // low and high edge — and every strip is measured outward from the edge on its
-  // own side. Full strip width everywhere, nothing painted over, and the two sides
-  // stay mirror images. Lines with no centre border (interior cell lines, jigsaw
-  // boundaries away from a box line, or the centre border switched off entirely)
-  // keep the single grid-line anchor, which is symmetric by construction.
+  // The rect geometry only ever names three kinds of coordinate: a grid line, a
+  // grid line + `stripW`, or a grid line − `stripW` (runs are trimmed by stripW,
+  // bottom/right strips sit at cs − stripW, corner patches at ±stripW). Each part
+  // is snapped separately — grid line to a device pixel, stripW to a whole number
+  // of device pixels, the SAME number everywhere — so widths never get rounded on
+  // their own. `grid` is the cell size; a coordinate counts as "on the grid"
+  // within a hair of a multiple of it.
   //
-  // `dir` disambiguates a coordinate that lands exactly ON a banded grid line:
-  // +1 = the rect's interior lies above this edge (use the band's high edge),
-  // -1 = it lies below (use the low edge). Offsets (±SW) need no hint — they are
+  // `bandLines` (grid indices carrying a centre border) + `bandWidth` let a banded
+  // grid line report TWO anchors instead of one — the centre band's low and high
+  // edge — so strips are measured outward from the edge on their own side and sit
+  // flush against the band rather than under it. Unbanded lines keep the single
+  // grid-line anchor, which is symmetric by construction.
+  //
+  // `dir` disambiguates a coordinate landing exactly ON a banded grid line:
+  // +1 = the rect's interior is above this edge (take the band's high edge),
+  // −1 = below (take the low edge). The ±stripW cases need no hint — they are
   // always the far edge of a strip that starts at the band, on the matching side.
-  function makeAxisSnap(s, o, grid, widths, bandLines, bandWidth) {
+  function makeAxisSnap(s, o, grid, stripW, bandLines, bandWidth) {
     var as = Math.abs(s);
-    var qw = (widths || []).map(function (w) { return Math.max(1, Math.round(w * as)) / as; });
+    var qw = Math.max(1, Math.round(stripW * as)) / as;
     var bn = (bandWidth > 0) ? Math.max(1, Math.round(bandWidth * as)) : 0;
     function q(u) { return (Math.round(u * s + o) - o) / s; }
     function toU(dev) { return (dev - o) / s; }
-    // Device edges of the centre band straddling grid line `g`, [low-u, high-u],
-    // or null when `g` carries no centre border. Must agree with snapCenteredBand.
+    // Device edges of the centre band straddling grid line `g`, as [low-u, high-u],
+    // or null when `g` carries no centre border. MUST agree with snapCenteredBand.
     function edges(g) {
       if (!bn || !bandLines || !bandLines[Math.round(g / grid)]) return null;
       var st = Math.round(g * s + o - bn / 2);
@@ -3256,17 +3230,17 @@
     return function (u, dir) {
       var g = Math.round(u / grid) * grid, d = u - g;
       var e = edges(g);
-      if (Math.abs(d) < 1e-6) return e ? toU(dir < 0 ? e[0] : e[1]) : q(g);
-      for (var i = 0; i < qw.length; i++) {
-        if (Math.abs(d - widths[i]) < 1e-6) return (e ? toU(e[1]) : q(g)) + qw[i];
-        if (Math.abs(d + widths[i]) < 1e-6) return (e ? toU(e[0]) : q(g)) - qw[i];
-      }
+      if (Math.abs(d) < 1e-6)       return e ? toU(dir < 0 ? e[0] : e[1]) : q(g);
+      if (Math.abs(d - stripW) < 1e-6) return (e ? toU(e[1]) : q(g)) + qw;
+      if (Math.abs(d + stripW) < 1e-6) return (e ? toU(e[0]) : q(g)) - qw;
       return q(u);
     };
   }
-  // A band of nominal width `len` CENTRED on `uc` (the centre border straddles the
-  // boundary). Width is a whole number of device pixels at every boundary — the
-  // even/odd instability disappears because we never round two edges separately.
+  // A band of nominal width `len` CENTRED on `uc` — the centre border straddles the
+  // boundary rather than sitting to one side of it. Rounding the width once and
+  // placing the band from it (instead of rounding two edges separately) is what
+  // makes an odd width sit on the pixel containing the grid line and an even width
+  // split evenly across the nearest pixel boundary.
   function snapCenteredBand(uc, len, s, o) {
     if (!(len > 0) || !s) return { u0: uc - len / 2, len: len };
     var dc = uc * s + o, n = Math.max(1, Math.round(len * Math.abs(s)));
@@ -3374,8 +3348,7 @@
     var bandX = null, bandY = null;
     if (snap && needCenterBorder) {
       bandX = {}; bandY = {};
-      var cgEl0 = document.getElementById('cell-grids');
-      if (cgEl0) cgEl0.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
+      if (cellGridsEl) cellGridsEl.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
         var d0 = p.getAttribute('d') || '';
         if (!pathIsRectilinear(d0)) return;
         rectilinearSegments(d0).forEach(function (sg) {
@@ -3384,11 +3357,8 @@
         });
       });
     }
-    // The strip width SW is the only offset-from-a-grid-line the rect geometry uses
-    // (runs are trimmed by it, bottom/right strips sit at cs−SW, corner patches at
-    // ±SW), so it is the one width the axis quantizers need to know about.
-    var snapX = snap ? makeAxisSnap(snap.sx, snap.ox, cs, [SW], bandX, centerWidth) : null;
-    var snapY = snap ? makeAxisSnap(snap.sy, snap.oy, cs, [SW], bandY, centerWidth) : null;
+    var snapX = snap ? makeAxisSnap(snap.sx, snap.ox, cs, SW, bandX, centerWidth) : null;
+    var snapY = snap ? makeAxisSnap(snap.sy, snap.oy, cs, SW, bandY, centerWidth) : null;
 
     var mainGroup = document.createElementNS(NS, 'g');
     mainGroup.setAttribute('data-spdr-region-split', '1');
@@ -3577,7 +3547,6 @@
     // strokes appear BELOW #underlay (z=3), so circles, pills, and other feature
     // elements render above the center border rather than behind it.
     if (needCenterBorder) {
-      var cellGridsEl = document.getElementById('cell-grids');
       if (cellGridsEl) {
         var centerStroke = hexToRgba(settings.regionBorderColor, settings.regionBorderOpacity);
         // centerWidth is hoisted above — the colour-strip quantizers need it too.
@@ -3652,14 +3621,13 @@
       var cgClone = cgp.cloneNode(false);
       cgClone.removeAttribute('data-spdr-orig-d');
       cgClone.setAttribute('data-spdr-kind', 'cell');  // highlight target (Cell borders / grid lines)
-      // mainGroup carries shape-rendering:crispEdges (needed so the border-strip
-      // rects don't anti-alias into a dark fringe). But the thin cell-grid lines
-      // (1px in user units, ~1.33px after the SVG's ~1.33× scale) must NOT be
-      // pixel-snapped: crispEdges rounds each line to 1px or 2px depending on its
-      // sub-pixel position, so some dividers render brighter/wider than others,
-      // and the rounding differs per browser. The original path.cell-grid used
-      // shape-rendering:auto; override the inherited crispEdges back to smooth so
-      // the clone matches it.
+      // Pin geometricPrecision rather than inherit from mainGroup. mainGroup falls
+      // back to crispEdges when the transform is unusable, and crispEdges would
+      // round these thin cell-grid lines to 1px or 2px depending on their sub-pixel
+      // position — some dividers rendering brighter/wider than others, differently
+      // per browser. The original path.cell-grid draws with shape-rendering:auto;
+      // this keeps the clone matching it. (The border bands don't need crispEdges:
+      // they are snapped to whole device pixels, which is strictly better.)
       cgClone.setAttribute('shape-rendering', 'geometricPrecision');
 
       // Suppress grid line on region boundaries (Center-borders sub-option): rebuild
@@ -4274,7 +4242,10 @@
     });
 
     var unit = document.createElement('span');
-    unit.textContent = 'px';
+    // NOT "px". These are board units: everything here is scaled by SudokuPad's
+    // fractional, window-dependent board scale and then snapped to whole device
+    // pixels, so a value of 3 is not 3 screen pixels at any particular window size.
+    unit.textContent = 'units';
     Object.assign(unit.style, { color: '#a6adc8', fontSize: '11px' });
 
     input.addEventListener('input', function () {
@@ -4351,7 +4322,10 @@
     });
 
     var unit = document.createElement('span');
-    unit.textContent = 'px';
+    // NOT "px". These are board units: everything here is scaled by SudokuPad's
+    // fractional, window-dependent board scale and then snapped to whole device
+    // pixels, so a value of 3 is not 3 screen pixels at any particular window size.
+    unit.textContent = 'units';
     Object.assign(unit.style, { color: '#a6adc8', fontSize: '11px' });
 
     input.addEventListener('input', function () {
@@ -11780,7 +11754,7 @@
           background:'#313244', color:'#cdd6f4', fontSize:'12px',
         });
         var sizeUnit = document.createElement('span');
-        sizeUnit.textContent = 'px';
+        sizeUnit.textContent = 'units';   // board units, not screen px — see makeWidthRow
         Object.assign(sizeUnit.style, { color:'#a6adc8', fontSize:'11px' });
         sizeInput.addEventListener('input', function () {
           var v = sizeInput.value.trim();

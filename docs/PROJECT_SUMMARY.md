@@ -495,16 +495,29 @@ way so it stays low-maintenance.
   so drawn and highlighted marks match. Settings: `zipperCenterDotEnabled`, `zipperCenterDotScale`.
   Regression-tested in `validator_harness.mjs` against `k9mm1xgca5`, which marks all seven of its
   own fold centres.
-- **Region-border pixel snapping (v3.124, reworked v3.125):** `borderSnapCtx` / `makeAxisSnap` /
-  `snapCenteredBand` + `rectilinearSegments`, used inside `drawRegionSplitBorders` (`addRect` and
-  the centre-border block). **Unconditional — no setting**; falls back to the plain path only when
-  the board transform is missing, rotated or skewed. One rounding decision per band type for the
-  whole board (`round(nominal × scale)`, which is provably the majority-vote outcome), and every
-  edge goes through a per-axis quantizer that understands "grid line ± a known band width", so
-  abutting geometry shares exact device pixels and corners close with no gap. Covers the colour
-  strips, the centre border and the outer frame alike. See LESSONS_LEARNED "Border-strip drawing"
-  for the measurements, the majority-vote proof, and the independent-snapping trap that caused
-  the v3.124 corner gaps.
+- **Region-border device-pixel snapping (v3.124, settled v3.129):** `borderSnapCtx` /
+  `makeAxisSnap` / `snapCenteredBand` + `rectilinearSegments`, used inside
+  `drawRegionSplitBorders` (`addRect` and the centre-border block). **Unconditional — no
+  setting**; falls back to unsnapped drawing only when there's no board or the transform is
+  rotated/skewed. Three rules, and they are the whole design:
+  1. One rounding decision per band type for the whole board (`round(nominal × scale)`, provably
+     the majority-vote outcome) — never per segment.
+  2. Quantize edge INPUTS, never widths; a width is always the difference of two snapped edges,
+     so abutting geometry shares exact device pixels and corners close with no gap.
+  3. The centre band and the colour strips share one quantizer per axis and know each other's
+     extent (`makeAxisSnap`'s `bandLines`), so strips sit flush against the centre band instead
+     of being painted over by it.
+
+  `borderSnapCtx` **measures** the user-unit → device-pixel transform with a probe rect rather
+  than deriving it from `getScreenCTM()`, which is wrong on Gecko — that was the root cause of
+  the width inconsistency that survived v3.124–v3.128. Covers colour strips, centre border and
+  outer frame alike. See LESSONS_LEARNED for the cross-engine measurements.
+- **Border diagnostics:** `window.spdrBorderProbe({center:[…],color:[…]})` sweeps width settings
+  without touching the UI and reports, per combination, the raw device-pixel width histogram for
+  each band type plus `fracMax` (worst edge's distance from a whole device pixel) and both the
+  calibrated and `getScreenCTM` scales. `fracMax ≈ 0` with one width per band = correct;
+  `scale ≠ ctmScale` identifies an engine where the CTM can't be trusted. Restores settings
+  afterwards, persists nothing.
 - **Pencilmark sort / reflow:** `sortCandidateTspans`/`startCandidateSortPatch` (centre),
   `reorderCornerCell`/`startCornerReflowPatch` (corner), `fixCenterTspan`/`fixCornerText` (validity
   colours).
