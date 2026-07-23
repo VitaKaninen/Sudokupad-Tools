@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.127.0
+// @version      3.128.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.127.0';
+  var SCRIPT_VERSION = '3.128.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -458,19 +458,26 @@
     var centers = opts.center || [parseFloat(cs0) || 3];
     var colors  = opts.color  || [parseFloat(cw0) || 3];
     var rows = [];
-    function widths(kind, nominal) {
-      var nom = nominal * scale, lo = nom * 0.5, hi = nom * 2, out = {}, frac = 0;
+    // NO nominal-width filter. An earlier cut only counted dimensions near the
+    // expected width, which would have silently DROPPED a band that rendered at
+    // the wrong size — the exact thing being hunted. Every dimension under 14
+    // device px is a band thickness; full-cell fills are far larger and drop out
+    // on their own. Counts are reported so a rare outlier can't hide in a crowd.
+    function widths(kind) {
+      var out = {}, frac = 0, n = 0;
       svg.querySelectorAll('rect[data-spdr-kind="' + kind + '"]').forEach(function (r) {
         var b = r.getBoundingClientRect();
+        n++;
         [b.width * dpr, b.height * dpr].forEach(function (d) {
-          if (d >= lo && d <= hi) { var k = Math.round(d * 100) / 100; out[k] = (out[k] || 0) + 1; }
+          if (d < 14) { var k = Math.round(d * 100) / 100; out[k] = (out[k] || 0) + 1; }
         });
         [b.left * dpr, b.top * dpr, b.right * dpr, b.bottom * dpr].forEach(function (e) {
           frac = Math.max(frac, Math.abs(e - Math.round(e)));
         });
       });
-      return { list: Object.keys(out).map(Number).sort(function (a, b) { return a - b; }),
-               counts: out, frac: frac };
+      var list = Object.keys(out).map(Number).sort(function (a, b) { return a - b; });
+      return { list: list, counts: out, frac: frac, rects: n,
+               text: list.map(function (v) { return v + '×' + out[v]; }).join(' | ') || '—' };
     }
     try {
       centers.forEach(function (cv) {
@@ -478,10 +485,17 @@
           settings.regionBorderWidth = String(cv);
           settings.regionColorStripeWidth = String(kv);
           drawRegionSplitBorders(svg);
-          var C = widths('center', cv), M = widths('multi', kv);
-          rows.push({ center: cv, color: kv,
-                      wCenter: C.list.join(' | ') || '—', wColor: M.list.join(' | ') || '—',
+          var C = widths('center'), M = widths('multi');
+          // Centre segments whose path isn't rectilinear fall back to a STROKED
+          // path clone, which gets no snapping at all — a genuine second source of
+          // an odd width, so count them rather than assume there are none.
+          var fb = 0;
+          svg.querySelectorAll('[data-spdr-kind="center"]').forEach(function (e) {
+            if (e.tagName.toLowerCase() !== 'rect') fb++;
+          });
+          rows.push({ center: cv, color: kv, wCenter: C.text, wColor: M.text,
                       okCenter: C.list.length === 1, okColor: M.list.length === 1,
+                      unsnappedPaths: fb,
                       fracMax: +Math.max(C.frac, M.frac).toFixed(3) });
         });
       });
