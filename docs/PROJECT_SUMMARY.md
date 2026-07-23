@@ -471,16 +471,17 @@ way so it stays low-maintenance.
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
-  removed v3.104). **Remove vs Highlight (v3.133)** — a switch at the bottom of the menu
-  (`validateHighlightMode`): Highlight paints the unsupported candidates **orange** instead of
-  deleting them and turns each validator row into an on/off toggle
-  (`validatorHilite` store, `toggleValidatorHighlight` / `runAllValidatorsHighlight`,
+  removed v3.104). **Remove vs Highlight (v3.133, control reworked v3.134)** — a segmented control at
+  the bottom of the menu (`addModeSegments`, `validateHighlightMode`): Highlight paints the
+  unsupported candidates **orange** instead of deleting them and turns each validator row into an
+  on/off toggle (`validatorHilite` store, `toggleValidatorHighlight` / `runAllValidatorsHighlight`,
   `validatorHiliteFillFor` inside `fixCenterTspan`). An orange mark reads as invalid to
-  `readValidatorBoardState` and `fsScanValid`, so validators still cross-feed; flags are dropped on
-  any board edit. **Fog lockout (v3.133)** — `puzzleHasFog()` disables the ENTIRE validator feature
-  (`validateBlockedByFog`, and the menu lists a note instead of items) *and* Easy Shade
-  (`effRegionColorFill` / `effShadedRegionColor`) on any Fog of War puzzle; both leaked what was
-  still hidden. Full detail in [VALIDATORS.md](VALIDATORS.md). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
+  `readValidatorBoardState`, `fsScanValid` and the Clear/Clear All sweep, so validators still
+  cross-feed; flags are dropped on any board edit. **Fog (v3.133)** — the per-clue gate
+  (`combineFogFilter`) still governs runs, but the 👁 preview is disabled on a fog puzzle
+  (`puzzleHasFog()`, tooltip explains why) because it draws clues that are still hidden; the same
+  predicate disables Easy Shade outright (`effRegionColorFill` / `effShadedRegionColor`). Full detail
+  in [VALIDATORS.md](VALIDATORS.md). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
   rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
   circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than

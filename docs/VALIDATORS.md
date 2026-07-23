@@ -237,23 +237,29 @@ fog) by hit-testing cell centres against the rendered `#fog-path` path with
 naive per-subpath rect scan over-counts because it ignores the holes). Gating is unit-level ("the
 entire clue must be revealed"), matching the selection-filter contract.
 
-**FOG LOCKOUT — the whole feature is off on a fog puzzle (v3.133).** The per-clue gate above is no
-longer the outer boundary: on any puzzle with fog the validator menu now lists nothing, previews
-nothing and runs nothing (`puzzleHasFog()` → an explanatory note instead of the item list;
-`validateBlockedByFog()` toasts and bails from `onValidatorItemClick`/`onRunAllClick`). The per-clue
-gate leaked in three ways that no amount of unit filtering fixes: the LIST itself announces which
-constraints the puzzle contains, the 👁 eyeballs draw exactly where they are, and validating a
-*revealed* clue still narrows the candidates of cells that neighbour hidden ones. `combineFogFilter`
-and `getFogTester` stay — they're still the correct per-cell semantics, and they now only ever run on
-a puzzle whose fog is fully lifted. The same policy disables **Easy Shade** (`effRegionColorFill` /
-`effShadedRegionColor` — region colouring painted region shapes straight through the fog, and the
-button greys out with a tooltip). `puzzleHasFog` is a property of the PUZZLE, not of the reveal
-state: model `currentPuzzle.fogofwar`/`.foglight` (non-empty — they're cell lists, so a bare
-truthiness test false-positives on `[]`), then the native payload, then the rendered `#fog-path`.
+**The 👁 EYEBALL is disabled under fog (v3.133).** The unit-level gate makes *running* a validator
+safe, but the hover preview isn't a run — `validatorClueObjects` draws EVERY clue of that type,
+including ones still under fog, so it showed the player exactly what they hadn't uncovered. So
+`makeValidatorEye`'s `mouseenter` bails on `puzzleHasFog()` and shows a tooltip saying why (and that
+the validator itself still works). Nothing else about the menu changes: a fog puzzle still lists,
+greys, runs and toasts normally.
+
+**`puzzleHasFog()`** — a property of the PUZZLE, not of the current reveal state (unlike
+`getFogTester`, which empties out once everything is uncovered): model
+`currentPuzzle.fogofwar`/`.foglight` first (tested **non-empty** — they're cell lists, so a bare
+truthiness test false-positives on `[]`), then the native payload, then the rendered `#fog-path`. It
+also disables **Easy Shade** outright (`effRegionColorFill`/`effShadedRegionColor` AND it in at every
+render site, and the button greys out with a tooltip) — region colouring painted region shapes
+straight through the fog, and unlike a validator there is no per-clue narrowing that makes it safe.
 
 ## Remove vs Highlight (v3.133)
 
-The menu's bottom row is a two-position switch, `settings.validateHighlightMode` (persisted):
+The menu's bottom row is a **segmented control** — caption "When a validator finds an invalid digit:"
+over two mutually-exclusive buttons, `[ Remove it | Highlight it ]`, the chosen one filled
+(`addModeSegments`, `settings.validateHighlightMode`, persisted). It is deliberately NOT an on/off
+switch: v3.133 shipped one labelled "Remove invalid digits" in its off position, which reads as
+"removing is turned OFF" and invites you to switch it on — getting you the opposite behaviour. Two
+actions, neither of which is "nothing", is a segmented control, not a toggle.
 
 - **Remove** (default) — unchanged: a validator deletes the unsupported candidates via the paste
   path and arms the post-run Undo.
@@ -265,8 +271,12 @@ The menu's bottom row is a two-position switch, `settings.validateHighlightMode`
 Flags live in `validatorHilite.byName` as per-validator sets of `"col,row,digit"`, flattened into
 `validatorHilite.keys` for lookup. Three properties carry the design:
 
-1. **An orange mark is invalid everywhere.** `readValidatorBoardState` drops a flagged digit exactly
-   as it drops a red `.conflict` one, and `fsScanValid` (Auto-fill) does the same. So highlight-mode
+1. **An orange mark is invalid everywhere** — that's the whole claim, so every reader of "invalid"
+   honours it: `readValidatorBoardState` drops a flagged digit exactly as it drops a red `.conflict`
+   one, `fsScanValid` (Auto-fill) does the same, and the **Clear / Clear All buttons sweep orange
+   marks along with red ones** (`_removeInvalidPencilmarksInternal` collects them after the two
+   `.conflict` scans, deduped against those; `countVisibleConflicts` counts them so the multi-pass
+   loop's "anything left?" test sees them). So highlight-mode
    validators cross-feed each other precisely the way a remove-mode run-all does —
    `runAllValidatorsHighlight` is the same fixpoint loop with "add to the flag set" in place of
    "apply removals", and it is fully synchronous (compute only, no DOM ops to await).
