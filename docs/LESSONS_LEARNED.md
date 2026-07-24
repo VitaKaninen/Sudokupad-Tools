@@ -582,20 +582,20 @@ landed on one, in all 16 width combinations — so every band rasterised accordi
 sub-pixel fraction it happened to get. The snapping arithmetic was never the problem; its
 **input** was wrong on one engine.
 
-**Fix:** `borderSnapCtx()` now measures the transform empirically — append a 1000×1000
-user-unit probe rect, read `getBoundingClientRect()`, derive scale and origin, remove it.
-`getBoundingClientRect()` reports what layout will actually paint on every engine.
-Details that matter:
-- **1000 units, not 1** — Gecko quantises layout to 1/60 CSS px, so a large probe pushes that
-  quantisation down to ~1e-5 of relative scale error instead of dominating the measurement.
-- **`fill:#000` + `opacity:0`**, not `fill:none` or `visibility:hidden` — the box must be
-  painted to be measurable; BCR ignores opacity.
-- **Tag it `data-spdr-region-split`** so the cage-box MutationObserver treats it as one of ours
-  (`isOwnNode`) and doesn't fire a redraw loop.
-- `getScreenCTM()` is still used, but *only* to reject rotated/skewed transforms (`b`/`c`).
+**Fix:** `borderSnapCtx()` measures the transform empirically from
+`getBoundingClientRect()`, which reports what layout will actually paint on every engine —
+scale = `bcr.width / viewBox.width`, origin from the viewBox min-x/min-y. `getScreenCTM()` is
+still used, but *only* to reject rotated/skewed transforms (`b`/`c`).
 
-Verified after the change: Chrome `scale === ctmScale` (1.278), `fracMax 0`, all 16 combos
-single-width — the calibration is equivalent where the CTM was already right.
+**⚠️ Do NOT measure this by appending a probe rect (regression, v3.129 → v3.135).** v3.129's
+first cut appended a 1000×1000-user-unit invisible rect to `#svgrenderer`, read its BCR, and
+removed it — on *every* region-border redraw. The numbers were right, but the 1000-unit rect is
+far larger than the ~608-unit board, and appending it + forcing a synchronous reflow left a
+**large empty band above the board on Gecko** (LibreWolf; Blink was unaffected — the
+`overflow:hidden` board box is fixed there, but Gecko's reflow with the transient giant child
+was not). The board is a square viewBox filling a square box edge-to-edge, so its own
+`getBoundingClientRect()` gives the identical transform (equal to ~1e-6 on Blink) with **nothing
+added to the DOM** — always prefer measuring an element already on the page over injecting one.
 
 **Generalisation:** any time correctness depends on where something lands in *device* pixels,
 measure it, don't derive it from a transform API. And when a rendering bug survives a fix that

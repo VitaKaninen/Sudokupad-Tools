@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.134.0
+// @version      3.135.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.134.0';
+  var SCRIPT_VERSION = '3.135.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3216,8 +3216,9 @@
   // setting. Falls back to unsnapped drawing only when the transform is unusable
   // (no board, or rotated/skewed).
 
-  // Calibrate the user-unit → device-pixel transform EMPIRICALLY, by measuring a
-  // probe rect of known size, rather than trusting getScreenCTM().
+  // Calibrate the user-unit → device-pixel transform EMPIRICALLY, from the board's
+  // OWN rendered box (getBoundingClientRect vs. viewBox), rather than trusting
+  // getScreenCTM().
   //
   // WHY (v3.129). `getScreenCTM() × devicePixelRatio` is NOT the transform the
   // engine actually paints with on Gecko. Measured in LibreWolf at dpr 2, reported
@@ -3230,11 +3231,17 @@
   // happened to give, which is the width inconsistency that kept coming back.
   //
   // getBoundingClientRect() reports what layout will actually paint, on every
-  // engine, so the scale and origin come from it instead. The probe is 1000 user
-  // units so that Gecko's 1/60-CSS-px layout quantisation lands ~1e-5 of relative
-  // scale error instead of dominating the measurement. It carries
-  // `data-spdr-region-split` so the cage-box MutationObserver treats it as one of
-  // ours and doesn't fire a redraw loop, and it is removed before we return.
+  // engine, so the scale and origin come from it. We derive them from the board's
+  // existing box — bcr.width / viewBox.width for scale, and the viewBox origin for
+  // ox/oy — because the board is a square viewBox filling a square box, so the map
+  // is edge-to-edge with no letterboxing.
+  //
+  // HISTORY (v3.135). v3.129 measured this by appending a 1000-user-unit probe rect
+  // and reading its BCR. That produced the right numbers but forced a synchronous
+  // reflow with a transiently huge (1000 ≫ 608-unit board) SVG child on every
+  // region-border redraw — which on Gecko left a large empty band above the board
+  // (LibreWolf, not Blink). Measuring the board itself gives the identical transform
+  // (verified equal to ~1e-6 on Blink) with nothing added to the DOM.
   function borderSnapCtx() {
     var board = document.getElementById('svgrenderer');
     if (!board) return null;
@@ -3244,21 +3251,14 @@
       var m; try { m = board.getScreenCTM(); } catch (e) { m = null; }
       if (m && (Math.abs(m.b) > 1e-6 || Math.abs(m.c) > 1e-6)) return null;
     }
-    var K = 1000;
-    var probe = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-    probe.setAttribute('data-spdr-region-split', '1');
-    probe.setAttribute('x', '0');           probe.setAttribute('y', '0');
-    probe.setAttribute('width', String(K)); probe.setAttribute('height', String(K));
-    probe.setAttribute('fill', '#000');     // painted (so it has a box) but…
-    probe.setAttribute('opacity', '0');     // …invisible; BCR ignores opacity
-    probe.setAttribute('pointer-events', 'none');
-    var b = null;
-    board.appendChild(probe);
-    try { b = probe.getBoundingClientRect(); } finally { probe.remove(); }
+    var vb = board.viewBox && board.viewBox.baseVal;
+    if (!vb || !(vb.width > 0) || !(vb.height > 0)) return null;
+    var b = board.getBoundingClientRect();
     if (!b || !(b.width > 0) || !(b.height > 0)) return null;
     var dpr = window.devicePixelRatio || 1;
-    return { sx: b.width / K * dpr, sy: b.height / K * dpr,
-             ox: b.left * dpr,      oy: b.top * dpr };
+    var kx = b.width / vb.width, ky = b.height / vb.height;
+    return { sx: kx * dpr,                sy: ky * dpr,
+             ox: (b.left - vb.x * kx) * dpr, oy: (b.top - vb.y * ky) * dpr };
   }
   // ONE QUANTIZER PER AXIS — every colour-strip edge goes through it, so any two
   // rects naming the same edge land on the same device pixel by construction.
