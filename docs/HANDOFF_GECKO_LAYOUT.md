@@ -150,3 +150,28 @@ behaviour lives. A fresh review should look at these commit ranges / regions:
   `spdrBoardLog` for anything board-scale related, and read it *before* running the full probe.
 - Decisive triage test for any "is this ours?" cross-engine layout bug: **disable the userscript and
   retry in the same engine.**
+
+---
+
+## 7. RESOLVED (v3.142, 2026-07-24) — root cause found and fixed
+
+The fresh look happened. The user supplied a **second** trigger puzzle (`4ideo8pjl2`), which made
+the bug **puzzle-specific**, and the shared feature cracked it: both puzzles have emoji glyphs in
+the board SVG (⬅ arrows / fogged 👟), which SudokuPad's **FeatureEmoji** replaces with twemoji
+`<image>` elements using **div-by-zero math** (`x/y/width/height="Infinity"`) and a CSS-origin
+rotation whose geometry **Gecko's ancestor getBBox ignores**. `App.resize`'s getBBox union picks
+the phantom geometry up on every resize → board shrinks, empty band. Full mechanism, harness
+numbers, and the fix: LESSONS_LEARNED **"The Gecko board-shrink root cause: SudokuPad's twemoji
+replacement (v3.142)"**.
+
+Status of §5's open items:
+1. **Real user resize shrinking the board — FIXED** (the repair sanitises the geometry SudokuPad
+   measures; no more misfit to trigger).
+2. **Arrow glyphs as blue diamonds — EXPLAINED & FIXED** (same root cause, never a red herring:
+   Gecko rendered the broken `Infinity`-attr image at a default 150×150; Chrome rendered it 0×0 —
+   both engines now show correctly placed twemoji arrows).
+3. **Gecko footer-scale refresh — RESTORED** (v3.141's blanket `IS_GECKO` gate narrowed to
+   `IS_GECKO && hasBrokenTwemoji()`).
+4. **White-colours race in LibreWolf — still open**, untouched (separate dark-substrate race).
+5. **Diagnostics — kept** for verifying this fix in the field; `spdrBoardLog`'s scale regex now
+   also parses `scale(...)` (was matrix-only, logged null).

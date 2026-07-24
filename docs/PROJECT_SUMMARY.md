@@ -153,7 +153,8 @@ One IIFE. Major regions, in order:
    `nativePadWidth` / `nativeControlsReady` / `applyControlsWidthCap` / `watchNativePadWidth`,
    `rightColW` / `collapsedRightColW` / `rightColOverhang` / `setRightColWidth`,
    `applyStaticColWidths` / `alignNativeAuxRow` / `centerControlsFooter`,
-   `injectRightColCss` / `updateRightColCss` / `injectRulesWidthCss`
+   `injectRightColCss` / `updateRightColCss` / `injectRulesWidthCss`; SudokuPad twemoji repair
+   (`patchEmojiFeature` / `repairTwemojiImages` / `installTwemojiRepair` / `hasBrokenTwemoji`, v3.142)
 10. `buildAllUI` — orchestrates the above on DOMContentLoaded
 
 ### SVG z-order (DOM order in `#svgrenderer`; earlier = rendered behind)
@@ -522,10 +523,12 @@ way so it stays low-maintenance.
      extent (`makeAxisSnap`'s `bandLines`), so strips sit flush against the centre band instead
      of being painted over by it.
 
-  `borderSnapCtx` **measures** the user-unit → device-pixel transform with a probe rect rather
-  than deriving it from `getScreenCTM()`, which is wrong on Gecko — that was the root cause of
-  the width inconsistency that survived v3.124–v3.128. Covers colour strips, centre border and
-  outer frame alike. See LESSONS_LEARNED for the cross-engine measurements.
+  `borderSnapCtx` **measures** the user-unit → device-pixel transform from the board's own
+  `getBoundingClientRect` vs its `viewBox` (v3.135; the v3.129 probe rect it replaced measured
+  the same thing but forced a reflow per redraw) rather than deriving it from `getScreenCTM()`,
+  which is wrong on Gecko — that was the root cause of the width inconsistency that survived
+  v3.124–v3.128. Covers colour strips, centre border and outer frame alike. See LESSONS_LEARNED
+  for the cross-engine measurements.
 - **Border diagnostics:** `window.spdrBorderProbe({center:[…],color:[…]})` sweeps width settings
   without touching the UI and reports, per combination, the raw device-pixel width histogram for
   each band type plus `fracMax` (worst edge's distance from a whole device pixel) and both the
@@ -721,6 +724,22 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   button; Easy Shade follows it into the Clear All column. Measured, not constant, and idempotent
   (a second run sees delta 0 and writes nothing) — ⚠️ it runs **before** `nativePadWidth()` in
   `applyControlsWidthCap`, since it changes what that measures.
+- **SudokuPad twemoji repair (v3.142):** `patchEmojiFeature()` replaces FeatureEmoji's
+  `getSvgRelativeBounds` (via `Framework.features.emoji`, instance + prototype) with a safe-scale
+  version — SudokuPad's own derives its px→user-unit scale by regexing `scale(` out of `#board`'s
+  transform, gets 0 before `App.resize` has run, and divides by it, writing
+  `x/y/width/height="Infinity"` on every twemoji `<image>` it substitutes for an emoji `<text>`
+  glyph (⬅ arrow clues, 👟 fog reveals…). Gecko renders those as a default-sized 150×150 image
+  (the stray "blue diamond") and — even with finite attrs — computes ANCESTOR getBBox from the
+  bare `rotate(a)` attribute about the origin, ignoring the feature's `transform-box: fill-box`
+  CSS. Both poison `App.resize`'s `getContentBounds` union → **the Gecko board-shrink / empty-band
+  bug (reproduces script-off)**. `repairTwemojiImages()` (rAF-coalesced via `twemojiRepairSoon`,
+  installed by `installTwemojiRepair`'s filtered MutationObserver) recovers geometry for broken
+  images (paired `rect.textbg`, else the feature's own restore+re-parse through the patched math)
+  and normalizes the rotation to `rotate(a cx cy)` + inline `transform-box: view-box;
+  transform-origin: 0 0` — verified pixel-identical and bbox-clean in both engines.
+  `hasBrokenTwemoji()` gates `syncAppResizeSoon`'s synthetic resize on Gecko (replaced v3.141's
+  blanket `IS_GECKO` skip) so the nudge never fires into un-repaired geometry.
 - `centerControlsFooter()` pins the "Created by Sven Neumann…" credit line. SudokuPad's
   `.controls-footer` is full-width under `#controls`, so it centres on the reserved width (which
   includes our strip) rather than on the keypad; the rule gives it `width = 2 × the Check button's

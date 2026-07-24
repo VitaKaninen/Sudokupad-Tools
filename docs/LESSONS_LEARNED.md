@@ -694,3 +694,67 @@ bug, but that is pre-existing and unavoidable from a userscript.
 synthetic `resize`; a synthetic global event re-runs the host's *entire* resize handler, so it
 carries every one of the host's resize-time bugs. Prefer the narrowest host API over a synthetic
 event, and don't dispatch one into an engine whose resize path you know is broken.
+
+### The Gecko board-shrink root cause: SudokuPad's twemoji replacement (v3.142 — fixes it)
+
+v3.141 stopped *triggering* the bug; v3.142 found and fixed the bug itself. It is **puzzle-
+specific**: only puzzles whose board SVG contains emoji-replaceable `<text>` glyphs are affected
+(`1tlg0akpxa` — 12 ⬅ U+2B05 arrow clues; `4ideo8pjl2` — 2 fogged 👟 U+1F45F). The same bug is
+also the "arrows render as blue diamonds in Firefox" report — they were never a red herring.
+
+**Mechanism (all in SudokuPad's `feature-emoji.js`, v0.611.0).** FeatureEmoji swaps each emoji
+`<text>` in `#svgrenderer` for an `<image class="twemoji">` (its own twemoji SVG asset), placed by
+`getSvgRelativeBounds`, whose px→user-unit scale comes from regexing `scale(` out of `#board`'s
+inline transform — **`|| 0`**. Two independent breaks:
+1. **Div-by-zero → `x/y/width/height="Infinity"`.** At parse time (feature attach, often before
+   `App.resize` first runs) the transform is `none` → scale 0 → every placement value divides to
+   Infinity and is written as an attribute. Blink parses `Infinity` as 0 and renders **nothing**
+   (the arrows are simply missing in a fresh Chrome). Gecko also parses 0 into `baseVal`, but
+   treats the invalid width/height as SVG2 **`auto`** → renders a default-sized **150×150** image
+   at the origin — the big blue "diamond" hanging off the board's corner, and ~150 units of
+   phantom geometry.
+2. **Bare `rotate(a)` + CSS origin poisons Gecko ancestor bboxes.** Rotated glyphs get
+   `transform="rotate(a)"` and rely on the feature's `image.twemoji { transform-box: fill-box;
+   transform-origin: center }` to pivot in place. Rendering honours that in both engines — but
+   when **Gecko** computes an ANCESTOR's `getBBox` (`#overlay`, the svg root), it applies the
+   child's attribute transform about the **user-space origin**, ignoring the CSS. A 16px arrow at
+   (280,88) contributes a phantom box near (−263,−139). Blink's ancestor bboxes honour the CSS.
+
+`App.resize` → `resizeBoard` → `getContentBounds` = a `getBBox({fill,stroke,markers})` union over
+**every** descendant of `#svgrenderer` **including container groups**, and that union IS
+`boardBounds` → the board scale and the svg viewBox. So on Gecko every resize after the glyphs
+exist unions phantom geometry → viewBox balloons (608 → 1072 in spdrBoardLog) → `scaleToFit`
+shrinks the board and the empty band opens. Chrome never sees either poison — which is why the
+bug was Gecko-only, resize-path-only, and only on emoji puzzles.
+
+**Harness numbers (standalone SVG, Firefox 153 vs Chrome, union = getContentBounds algorithm):**
+| variant | FF union | Chrome union | renders |
+|---|---|---|---|
+| broken (`Infinity` attrs) | −31,−31,607,607 | clean | FF: stray 150×150 diamond; Chrome: nothing |
+| finite attrs + bare `rotate(a)` | **−139,−263,715,839** | clean | both correct |
+| normalized (below) | **0,0,576,576** | clean | both correct, pixel-identical |
+
+**Fix (v3.142, engine-agnostic):** `patchEmojiFeature` replaces `getSvgRelativeBounds` on
+`Framework.features.emoji` (instance + prototype) with a safe-scale version (svg BCR width /
+viewBox width — the borderSnapCtx technique; can't divide by zero), so every future parse writes
+finite attributes. `repairTwemojiImages` sweeps existing images: recovers geometry for
+Infinity-attr ones (copy the paired `rect.textbg`; underlay glyphs have none → re-run the
+feature's own `handleParsePuzzle` restore+parse cycle through the patched math, once per puzzle),
+and rewrites a lone `rotate(a)` to `rotate(a cx cy)` + inline `transform-box: view-box;
+transform-origin: 0 0` so rendering and ancestor bboxes agree in both engines. A filtered
+MutationObserver re-runs the sweep when FeatureEmoji re-parses (every puzzle 'start').
+`syncAppResizeSoon`'s v3.141 blanket Gecko skip narrowed to `IS_GECKO && hasBrokenTwemoji()`.
+Side effect: Chrome gets the twemoji arrows back (they were invisibly zero-sized).
+
+**Lessons.**
+- **"Engine-specific" + "puzzle-specific" ⇒ hunt for the specific puzzle FEATURE first.** Two
+  trigger puzzles were enough: decode both payloads, diff for the shared feature (emoji glyph
+  text), and the bug fell out. The prior sessions lacked the second puzzle.
+- `x="Infinity"` in a DOM dump is a five-alarm signal — someone divided by a zero that only
+  exists during a load race. Grep the host's source for the producer before theorising.
+- The engines diverge on *invalid* SVG geometry (Blink → 0, Gecko → `auto` → intrinsic/default
+  size) and on *whose* transform semantics ancestor `getBBox` uses (Gecko: attribute-only,
+  ignores CSS transform-box/origin). Never leave an element relying on CSS transform-origin
+  inside an SVG whose bounds the host measures with getBBox unions.
+- Headless Firefox (`--headless --screenshot` + a page that renders its measurements as DOM
+  text) is a perfectly good Gecko lab from a Chrome-only session — no driver needed.

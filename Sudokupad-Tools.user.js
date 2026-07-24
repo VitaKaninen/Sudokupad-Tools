@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.141.0
+// @version      3.142.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.141.0';
+  var SCRIPT_VERSION = '3.142.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5717,28 +5717,25 @@
   // (gear / version / credit line) is left at the stale pre-reflow scale — "the bottom
   // elements are too low on first load, and resizing the window fixes it", and the same
   // on validate-menu open/close. rAF so the reflow has settled before App.resize measures.
-  // SudokuPad's own App.resize MISFITS the board on Gecko (Firefox/LibreWolf): its
-  // resize path recomputes a wrong board scale — the board shrinks and a large empty
-  // band opens above it. This is a SudokuPad bug, NOT ours: it reproduces with our
-  // script DISABLED the moment you resize the window on Firefox (the board loads
-  // correct, then any resize shrinks it). Confirmed via window.spdrBoardLog: the board
-  // sat correct at svg width 608 until a resize event, then jumped to 1072 (shrunk).
+  // SudokuPad's App.resize misfitting the board on Gecko (board shrinks, empty band
+  // above — the v3.141-era bug, reproduces script-off) turned out to be SudokuPad's
+  // broken twemoji replacement feeding phantom geometry into its getBBox union — see
+  // the "SudokuPad twemoji repair" section below, which fixes the geometry itself.
+  // v3.141 blanket-skipped this nudge on Gecko; now that the poison is repaired we
+  // only skip while a not-yet-repaired twemoji image is still present (the brief
+  // window between FeatureEmoji's parse and our sweep), so Firefox gets the cosmetic
+  // footer-scale refresh back on the vast majority of loads.
   var IS_GECKO = navigator.userAgent.indexOf('Gecko/') > -1;
   var _resizeSyncQueued = false;
   function syncAppResizeSoon() {
-    // Do NOT nudge App.resize on Gecko. The nudge's purpose is cosmetic (refresh the
-    // #controls/footer scale after a width change), but dispatching a resize there
-    // fires SudokuPad's broken board re-fit — which is exactly how our script turned a
-    // SudokuPad-only, resize-time bug into a "board shrinks on ~90% of loads" one:
-    // this synthetic resize hit it at load, with no user action. Skipping it lets the
-    // board keep its correct initial fit. (A real user resize still trips SudokuPad's
-    // bug, but that is pre-existing and unavoidable from here.) Blink's resize path is
-    // correct, so it keeps the nudge.
-    if (IS_GECKO) return;
+    if (IS_GECKO && hasBrokenTwemoji()) { twemojiRepairSoon(); return; }
     if (_resizeSyncQueued) return;
     _resizeSyncQueued = true;
     requestAnimationFrame(function () {
       _resizeSyncQueued = false;
+      // Re-check at dispatch time: a puzzle 'start' between queue and rAF can have
+      // re-parsed the glyphs back into the broken form.
+      if (IS_GECKO && hasBrokenTwemoji()) { twemojiRepairSoon(); return; }
       spdrBoardLog('our-resize-dispatch');
       window.dispatchEvent(new Event('resize'));
     });
@@ -5759,7 +5756,9 @@
       var svg = document.getElementById('svgrenderer');
       var scale = null;
       if (b && b.style && b.style.transform) {
-        var m = /matrix\(\s*([-\d.]+)/.exec(b.style.transform);
+        // The live transform is `translate(-50%,-50%) scale(s)`; matrix() is kept
+        // for completeness (its first argument is the x-scale).
+        var m = /(?:matrix|scale)\(\s*([-\d.]+)/.exec(b.style.transform);
         if (m) scale = +(+m[1]).toFixed(4);
       }
       window.spdrBoardLog.push({
@@ -5780,6 +5779,197 @@
     window.addEventListener('resize', function () { spdrBoardLog('win-resize'); });
     spdrBoardLog('install');
     return true;
+  }
+
+  // ── SudokuPad twemoji repair (the REAL Gecko board-shrink root cause) ───────
+  // SudokuPad's FeatureEmoji replaces emoji <text> glyphs in the board SVG (⬅
+  // arrow clues, 👟 fog reveals, …) with <image class="twemoji"> twemoji assets.
+  // That replacement is broken twice over, and BOTH breaks feed SudokuPad's own
+  // App.resize → getContentBounds (a getBBox union over every SVG descendant,
+  // container groups included), which is what sizes the board:
+  //  1. getSvgRelativeBounds derives its px→user-unit scale by regexing "scale("
+  //     out of #board's inline transform. Before App.resize has run (or whenever
+  //     the transform is 'none') that regex yields 0 and the division writes
+  //     x/y/width/height="Infinity" on the image. Blink parses those as 0 and
+  //     renders nothing (arrows silently missing); Gecko treats the missing
+  //     width/height as SVG2 'auto' and renders a default-sized 150×150 image —
+  //     the big blue "diamond" hanging off the board's corner on Firefox.
+  //  2. Even with finite attributes, the image is rotated with a bare
+  //     transform="rotate(a)" that only works via FeatureEmoji's CSS
+  //     `transform-box: fill-box; transform-origin: center`. Gecko computes the
+  //     ANCESTOR groups' getBBox with attribute-transform semantics (rotate
+  //     about the user-space origin, CSS origin ignored), so a 16px arrow at
+  //     (280,88) contributes a phantom box near (-263,-139) to #overlay's bbox.
+  //     Blink's ancestor bboxes honour the CSS, so it never sees this.
+  // Either way the next resize unions the phantom geometry into boardBounds →
+  // the board shrinks and an empty band opens (the original Gecko bug report;
+  // reproduces with this script disabled). Verified in a standalone harness,
+  // Firefox 153 vs Chrome: broken attrs → union -31,-31,607,607 (FF) vs clean
+  // (Chrome); finite attrs + bare rotate → union -139,-263,715,839 on FF; the
+  // normalized form below → union exactly 0,0,576,576 AND pixel-identical
+  // rendering in both engines.
+  //
+  // Repair = three cooperating pieces, all idempotent:
+  //  • patchEmojiFeature(): replace the feature's getSvgRelativeBounds with a
+  //    safe-scale version (svg BCR width / viewBox width — the borderSnapCtx
+  //    technique, no transform parsing, can't divide by zero), so every FUTURE
+  //    parse (puzzle 'start', puzzle swap) produces finite attributes.
+  //  • repairTwemojiImages(): sweep existing images — recover geometry for
+  //    Infinity-attr ones (from the paired rect.textbg, else re-run the site's
+  //    own restore+parse now that the math is patched), and normalize the
+  //    rotation to attribute form `rotate(a cx cy)` + inline
+  //    `transform-box: view-box; transform-origin: 0 0` (neutralises the CSS so
+  //    rendering and ancestor bboxes agree in BOTH engines).
+  //  • a MutationObserver so freshly replaced images get normalized as they
+  //    appear (FeatureEmoji re-parses on every puzzle 'start').
+  var _emojiPatched = false;
+  function patchEmojiFeature() {
+    if (_emojiPatched) return true;
+    var feat = (typeof Framework !== 'undefined' && Framework.features)
+      ? Framework.features.emoji : null;
+    if (!feat || typeof feat.getSvgRelativeBounds !== 'function') return false;
+    var patched = function (node) {
+      var svgEl = document.getElementById('svgrenderer');
+      if (!svgEl) return { x: 0, y: 0, width: 0, height: 0 };   // never throw inside site code
+      var svgRect = svgEl.getBoundingClientRect();
+      var vb = (svgEl.getAttribute('viewBox') || '').split(/\s+/).map(parseFloat);
+      if (vb.length !== 4 || !isFinite(vb[0])) vb = [0, 0, 0, 0];
+      var scale = vb[2] > 0 ? svgRect.width / vb[2] : 0;
+      if (!isFinite(scale) || scale <= 0) scale = 1;
+      // Same rotate-neutralised measurement the original does — only the scale
+      // source differs (theirs regexes #board's transform and can return 0).
+      var saved = node.getAttribute('transform');
+      if (typeof saved === 'string') {
+        node.setAttribute('transform', saved.replace(/rotate\s*\([^)]*\)/, 'rotate(0)'));
+      }
+      var r = node.getBoundingClientRect();
+      if (typeof saved === 'string') node.setAttribute('transform', saved);
+      var left = svgRect.left - vb[0] * scale;
+      var top = svgRect.top - vb[1] * scale;
+      return { x: (r.x - left) / scale, y: (r.y - top) / scale,
+               width: r.width / scale, height: r.height / scale };
+    };
+    feat.getSvgRelativeBounds = patched;                   // the (single) live instance
+    var proto = Object.getPrototypeOf(feat);
+    if (proto && typeof proto.getSvgRelativeBounds === 'function') {
+      proto.getSvgRelativeBounds = patched;
+    }
+    _emojiPatched = true;
+    twemojiRepairSoon();   // images parsed before the patch may need the reparse path
+    return true;
+  }
+  // Finite, positive geometry from an image's attributes, or null if any of the
+  // four is missing/Infinity/degenerate (parseFloat('Infinity') → Infinity).
+  function readTwemojiGeom(img) {
+    var x = parseFloat(img.getAttribute('x')), y = parseFloat(img.getAttribute('y'));
+    var w = parseFloat(img.getAttribute('width')), h = parseFloat(img.getAttribute('height'));
+    if (!isFinite(x) || !isFinite(y) || !isFinite(w) || !isFinite(h) || w <= 0 || h <= 0) return null;
+    return { x: x, y: y, w: w, h: h };
+  }
+  // A lone one-argument rotate is the CSS-origin-dependent form that poisons
+  // Gecko's ancestor bboxes; anything else (our 3-arg form, a pivoted triple,
+  // no transform) is left alone.
+  var RE_LONE_ROTATE = /^\s*rotate\(\s*(-?[0-9.]+)\s*\)\s*$/;
+  var _twemojiReparse = { id: null, tries: 0 };
+  function repairTwemojiImages() {
+    var svg = document.getElementById('svgrenderer');
+    if (!svg) return;
+    var imgs = svg.querySelectorAll('image.twemoji');
+    var needReparse = false, changed = false;
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      var geo = readTwemojiGeom(img);
+      if (!geo) {
+        // Infinity-attr image. The overlay renderer pairs each glyph with a
+        // rect.textbg carrying the intended box — copy it when present.
+        var prev = img.previousElementSibling;
+        if (prev && prev.tagName.toLowerCase() === 'rect' &&
+            /(^|\s)textbg(\s|$)/.test(prev.getAttribute('class') || '')) {
+          var rx = parseFloat(prev.getAttribute('x')), ry = parseFloat(prev.getAttribute('y'));
+          var rw = parseFloat(prev.getAttribute('width')), rh = parseFloat(prev.getAttribute('height'));
+          if (isFinite(rx) && isFinite(ry) && isFinite(rw) && isFinite(rh) && rw > 0 && rh > 0) {
+            img.setAttribute('x', rx); img.setAttribute('y', ry);
+            img.setAttribute('width', rw); img.setAttribute('height', rh);
+            geo = { x: rx, y: ry, w: rw, h: rh };
+            changed = true;
+          }
+        }
+        if (!geo) { needReparse = true; continue; }   // underlay glyphs have no textbg
+      }
+      var m = RE_LONE_ROTATE.exec(img.getAttribute('transform') || '');
+      if (m) {
+        img.setAttribute('transform', 'rotate(' + m[1] + ' ' +
+          (geo.x + geo.w / 2) + ' ' + (geo.y + geo.h / 2) + ')');
+        img.style.transformBox = 'view-box';
+        img.style.transformOrigin = '0 0';
+        changed = true;
+      }
+    }
+    if (needReparse) {
+      // Re-run the site's own restore+parse cycle (what it does on every puzzle
+      // 'start'): it puts the original <text> back and re-replaces it — through
+      // our patched math. Bounded per puzzle (isPuzzleReady can gate an early
+      // attempt; each parse re-triggers the observer, so a stubbornly broken
+      // glyph would otherwise loop).
+      var feat = (typeof Framework !== 'undefined' && Framework.features)
+        ? Framework.features.emoji : null;
+      if (feat && _emojiPatched && feat.parsedPuzzleId !== undefined) {
+        if (_twemojiReparse.id !== feat.parsedPuzzleId) {
+          _twemojiReparse.id = feat.parsedPuzzleId;
+          _twemojiReparse.tries = 0;
+        }
+        if (_twemojiReparse.tries < 3) {
+          _twemojiReparse.tries++;
+          try { feat.handleParsePuzzle(); } catch (e) {}
+        }
+      }
+    }
+    // Geometry just changed under SudokuPad's last board fit — nudge its
+    // App.resize so a board that was already mis-fitted (e.g. its own load-time
+    // resize ran while the broken images were present) re-fits against the now-
+    // sane bounds. No loop: the re-fit adds no twemoji images, and on the next
+    // sweep nothing changes so no further nudge fires.
+    if (changed && !needReparse) syncAppResizeSoon();
+  }
+  var _twemojiRepairQueued = false;
+  function twemojiRepairSoon() {
+    if (_twemojiRepairQueued) return;
+    _twemojiRepairQueued = true;
+    requestAnimationFrame(function () {
+      _twemojiRepairQueued = false;
+      repairTwemojiImages();
+    });
+  }
+  function installTwemojiRepair() {
+    var svg = document.getElementById('svgrenderer');
+    if (!svg || !window.MutationObserver) return false;
+    new MutationObserver(function (recs) {
+      for (var i = 0; i < recs.length; i++) {
+        var added = recs[i].addedNodes;
+        for (var j = 0; j < added.length; j++) {
+          var n = added[j];
+          if (n.nodeType !== 1) continue;
+          if ((n.matches && n.matches('image.twemoji')) ||
+              (n.querySelector && n.querySelector('image.twemoji'))) {
+            twemojiRepairSoon();
+            return;
+          }
+        }
+      }
+    }).observe(svg, { childList: true, subtree: true });
+    twemojiRepairSoon();
+    return true;
+  }
+  // True while any twemoji image still carries geometry/rotation that would
+  // poison a Gecko getContentBounds union — the window between FeatureEmoji's
+  // parse and our repair sweep.
+  function hasBrokenTwemoji() {
+    var imgs = document.querySelectorAll('#svgrenderer image.twemoji');
+    for (var i = 0; i < imgs.length; i++) {
+      if (!readTwemojiGeom(imgs[i])) return true;
+      if (RE_LONE_ROTATE.test(imgs[i].getAttribute('transform') || '')) return true;
+    }
+    return false;
   }
   // A few px of slack added to the cap so the native rows' content box sits just
   // WIDER than the pad's natural width, never exactly ON it. Without it the content
@@ -14309,6 +14499,9 @@
     // All of these live inside #controls now, so they must wait for SudokuPad to
     // build it (each returns false until its target container exists).
     poll(installBoardRecorder, 100, 100);    // passive board-fit log (window.spdrBoardLog)
+    poll(installTwemojiRepair, 100, 100);    // fix SudokuPad's broken twemoji <image> geometry
+    poll(patchEmojiFeature, 100, 200);       // …and its div-by-zero placement math at the source
+                                             // (FeatureEmoji registers late — waits for the app)
     poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)
     poll(watchNativePadWidth, 100, 100);     // …and re-applies it if the pad changes later
     // Safety net for the Gecko load race: the poll above stops at the first
