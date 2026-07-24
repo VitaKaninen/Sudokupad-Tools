@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.138.0
+// @version      3.139.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.138.0';
+  var SCRIPT_VERSION = '3.139.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5831,6 +5831,18 @@
       controlsButtons: box(document.querySelector('#controls .controls-buttons')),
       rightCol: box(document.getElementById('sp-right-col')),
       board: box(document.getElementById('svgrenderer')),
+      // The board's on-screen size is set by a `transform: scale()` on #board that
+      // SudokuPad's App.resize computes; a shrunk board is a smaller scale here. The
+      // chain up from #svgrenderer shows which ancestor carries it and what heights
+      // the fit is keying off (rules block, banner, the .game area).
+      boardChain: (function () {
+        var out = [], el = document.getElementById('svgrenderer'), n = 0;
+        while (el && n++ < 7) { out.push(box(el)); el = el.parentElement; }
+        return out;
+      })(),
+      rulesBox: box(document.querySelector('.puzzle-rules')),
+      rulesOffsetHeight: (document.querySelector('.puzzle-rules') || {}).offsetHeight,
+      bannerBox: box(document.querySelector('.puzzle-header')),
       rows: {
         app:  kids('.controls-app'),
         main: kids('.controls-main'),
