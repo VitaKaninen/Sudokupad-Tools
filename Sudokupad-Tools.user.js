@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.139.0
+// @version      3.140.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.139.0';
+  var SCRIPT_VERSION = '3.140.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5723,8 +5723,47 @@
     _resizeSyncQueued = true;
     requestAnimationFrame(function () {
       _resizeSyncQueued = false;
+      spdrBoardLog('our-resize-dispatch');
       window.dispatchEvent(new Event('resize'));
     });
+  }
+  // ── Diagnostics: PASSIVE board-fit recorder (window.spdrBoardLog) ───────────
+  // The board's on-screen size is set by SudokuPad via `transform: scale()` on
+  // #board and a `width` on #svgrenderer. Reading those back with
+  // getBoundingClientRect forces a reflow that RE-FITS the board, so the full probe
+  // masks the bug. This records every change to #board's transform / the svg's size
+  // as SudokuPad writes it — parsed from the inline `style`/`width` attributes only,
+  // never a layout read — plus each window resize and each resize WE dispatch, all
+  // timestamped. Reproduce the shrink, then read `window.spdrBoardLog` (pure data,
+  // no reflow) to see the sequence and what event preceded the bad scale.
+  window.spdrBoardLog = [];
+  function spdrBoardLog(src) {
+    try {
+      var b = document.getElementById('board');
+      var svg = document.getElementById('svgrenderer');
+      var scale = null;
+      if (b && b.style && b.style.transform) {
+        var m = /matrix\(\s*([-\d.]+)/.exec(b.style.transform);
+        if (m) scale = +(+m[1]).toFixed(4);
+      }
+      window.spdrBoardLog.push({
+        t: Math.round(performance.now()), src: src, scale: scale,
+        svgW: svg ? (svg.getAttribute('width') || (svg.style && svg.style.width) || null) : null,
+      });
+      if (window.spdrBoardLog.length > 300) window.spdrBoardLog.shift();
+    } catch (e) {}
+  }
+  function installBoardRecorder() {
+    var b = document.getElementById('board');
+    var svg = document.getElementById('svgrenderer');
+    if (!b || !svg || !window.MutationObserver) return false;
+    new MutationObserver(function () { spdrBoardLog('board-mut'); })
+      .observe(b, { attributes: true, attributeFilter: ['style'] });
+    new MutationObserver(function () { spdrBoardLog('svg-mut'); })
+      .observe(svg, { attributes: true, attributeFilter: ['width', 'height', 'style'] });
+    window.addEventListener('resize', function () { spdrBoardLog('win-resize'); });
+    spdrBoardLog('install');
+    return true;
   }
   // A few px of slack added to the cap so the native rows' content box sits just
   // WIDER than the pad's natural width, never exactly ON it. Without it the content
@@ -14253,6 +14292,7 @@
     suppressStartDialog();
     // All of these live inside #controls now, so they must wait for SudokuPad to
     // build it (each returns false until its target container exists).
+    poll(installBoardRecorder, 100, 100);    // passive board-fit log (window.spdrBoardLog)
     poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)
     poll(watchNativePadWidth, 100, 100);     // …and re-applies it if the pad changes later
     // Safety net for the Gecko load race: the poll above stops at the first
