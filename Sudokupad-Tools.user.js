@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.137.0
+// @version      3.138.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.137.0';
+  var SCRIPT_VERSION = '3.138.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5726,14 +5726,35 @@
       window.dispatchEvent(new Event('resize'));
     });
   }
+  // A few px of slack added to the cap so the native rows' content box sits just
+  // WIDER than the pad's natural width, never exactly ON it. Without it the content
+  // box lands at exactly nativePadWidth (cap − padding == pad), which is the wrap
+  // threshold for .controls-tool's second column — a sub-pixel under and it wraps.
+  var CAP_SLACK = 4;
   var lastControlsCap = null;
   function applyControlsWidthCap() {
     var ctrls = document.getElementById('controls');
     if (!ctrls || !nativeControlsReady()) return false;   // caller retries
+    // MEASURE THE PAD UNSQUEEZED. Our reservation (padding-right on .controls-buttons)
+    // narrows the native rows' content box to ~nativePadWidth. If a prior cap left
+    // that box even a hair narrow, .controls-tool wraps its 2nd column and
+    // nativePadWidth then measures the WRAPPED (half-width) pad — which re-derives the
+    // same narrow cap. That circular pair has a stable WRONG fixed point: Gecko settles
+    // the whole control block at half width, the board shrinks and a large empty band
+    // opens above it (measured: tool 138→69, pad 352→283, cap 495→426). Lifting the
+    // padding for the measurement makes nativePadWidth depend only on the native
+    // content, so the cap is the same whichever state we came from. Synchronous — the
+    // offset reads flush layout while padding is 0, and it is restored before we
+    // return — so nothing paints in between.
+    var cb = document.querySelector('#controls .controls-buttons');
+    var padRestore = cb ? cb.style.paddingRight : null;
+    if (cb) cb.style.paddingRight = '0px';
     alignNativeAuxRow();         // BEFORE measuring: it shifts a bottom-row button right,
                                  // which nativePadWidth would otherwise miss until the
-                                 // next re-cap
+                                 // next re-cap. Measured unsqueezed too (the aux row is
+                                 // not wrapped there), so its delta stays sane.
     var pad = nativePadWidth();
+    if (cb) cb.style.paddingRight = padRestore || '';   // '' → falls back to the stylesheet value
     if (!pad) return false;
     var changed = false;
     // The cap uses collapsedRightColW(), never rightColW(): opening the validate menu must
@@ -5745,7 +5766,7 @@
     // nothing downstream moves and no App.resize re-fit fires. Measured: the board never
     // shrank on open even under the old widening (it is height-bound with ~350px of slack to
     // its right), so this reserves nothing the board was actually using.
-    var cap = pad + RIGHT_COL_GAP + collapsedRightColW();
+    var cap = pad + RIGHT_COL_GAP + collapsedRightColW() + CAP_SLACK;
     if (cap !== lastControlsCap) {
       lastControlsCap = cap;
       ctrls.style.maxWidth = cap + 'px';
@@ -5758,7 +5779,7 @@
     // value and writes nothing. The Killer Calculator needs no counter-adjustment any more:
     // it centres on #controls' width (`margin-left: 50%`), and #controls no longer changes
     // width on a toggle, so it simply stays put.
-    var contentMaxW = pad + RIGHT_COL_GAP + collapsedRightColW() - 64;
+    var contentMaxW = cap - 64;
     if (updateContentWidthCss(contentMaxW)) changed = true;   // only ever after a real cap is in place
     applyStaticColWidths();      // keep our buttons pinned to the column's LEFT edge
     centerControlsFooter();      // credit line → centred on Check, not on #controls

@@ -635,3 +635,35 @@ depends on layout being settled* — "the element exists" ≠ "it has its final 
 any incremental geometric nudge **clamped and self-correcting** so a single bad transient
 measurement can't bake in permanently. Blink hides all of this because its first post-build
 measurement is already stable.
+
+### The real root cause was a bistable measurement loop, not the poll (v3.138)
+
+v3.136's ResizeObserver/clamp/re-runs did NOT fix it — `window.spdrLayoutProbe()` (added v3.137)
+showed why, and it is the important lesson. **Firefox vs. LibreWolf, same build, same window:**
+
+| | `nativePadWidth` | `.controls-tool` offW | cap | outcome |
+|---|---|---|---|---|
+| Firefox (wrong) | 283 | **69** (1 column) | 426 | board half-size, empty band |
+| LibreWolf (right) | 352 | **138** (2 columns) | 495 | correct |
+
+The cap and the measurement were **circular**: we reserve our column with `padding-right: 143px`
+on `.controls-buttons` and cap `#controls` at `nativePadWidth + 10 + 133`, which makes the native
+rows' content box land at *exactly* `nativePadWidth`. `.controls-main` needs `206 + 8 + 138 = 352`
+for `.controls-tool`'s two columns; when the content box is a hair under that, the 2nd column
+**wraps**, so `nativePadWidth` now measures the wrapped **283**, which re-derives cap **426**,
+which keeps it wrapped. **A stable wrong fixed point.** Firefox fell into it and every re-measure
+saw the already-squeezed pad, so it never climbed out (a window resize re-runs the cap and
+re-measures the squeezed pad → "resize instantly shrinks the board"). LibreWolf measured the pad
+unwrapped first and stuck to the right fixed point. Nothing to do with the border probe.
+
+**Fix (v3.138):** measure `nativePadWidth` with **our own reservation lifted** — set
+`.controls-buttons` `padding-right: 0` synchronously, read, restore (the offset reads flush layout
+while it's 0, nothing paints) — so the measurement reflects native content only and can't be
+squeezed by the previous cap. Plus `CAP_SLACK = 4px` so the content box sits just *wider* than the
+pad, never exactly on the wrap threshold.
+
+**Lesson.** When a measured quantity feeds a constraint that then changes that same quantity, you
+have a feedback loop that can have a **stable wrong fixed point** — and one engine can sit in it
+forever while another never does. Measure the input with your own influence removed. And a
+diagnostic that dumps *every* input on demand (`spdrLayoutProbe`) beat several rounds of reasoning
+about a bug on an engine that can't be driven from here — reach for that far sooner.
