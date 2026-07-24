@@ -667,3 +667,30 @@ have a feedback loop that can have a **stable wrong fixed point** — and one en
 forever while another never does. Measure the input with your own influence removed. And a
 diagnostic that dumps *every* input on demand (`spdrLayoutProbe`) beat several rounds of reasoning
 about a bug on an engine that can't be driven from here — reach for that far sooner.
+
+### The board-shrink was SudokuPad's own Gecko bug — we only TRIGGERED it (v3.141)
+
+A separate symptom of the same reports: the board loads full then shrinks to a small board with a
+big empty band above it, ~90% of Gecko loads, and any window resize shrinks it. It is **not our
+bug** — with the userscript **disabled**, resizing the window on Firefox/LibreWolf shrinks the
+board exactly the same way. SudokuPad's own App.resize (`scaleToFit(boardBounds, bounds)`, which
+reads `#controls`'s transform/geometry and a portrait/landscape switch) computes a wrong board
+scale on Gecko's *resize* path, though its initial *render* path is fine.
+
+The **passive** recorder `window.spdrBoardLog` (v3.140 — reads only inline `style`/attributes, so
+it doesn't force the reflow that heals the misfit the way `getBoundingClientRect` does; the full
+`spdrLayoutProbe` masks this bug) caught the trigger: the board sat correct at svg width **608**
+until a resize event, then jumped to **1072** (shrunk). And the resize was **ours** —
+`syncAppResizeSoon()` dispatches a synthetic `resize` after our width changes (to refresh the
+footer scale), which on Gecko fires SudokuPad's broken re-fit at load, with no user action.
+
+**Fix:** gate the dispatch — `if (IS_GECKO) return;` in `syncAppResizeSoon`. The board keeps its
+correct initial fit; we trade away only the cosmetic footer-scale refresh on Firefox. Blink's
+resize path is correct, so it keeps the nudge. A real user resize on Gecko still trips SudokuPad's
+bug, but that is pre-existing and unavoidable from a userscript.
+
+**Lesson.** Before assuming a cross-engine bug is yours, **reproduce it with the script disabled**
+— the single most decisive test, and it took one question to the user. Our only sin was firing a
+synthetic `resize`; a synthetic global event re-runs the host's *entire* resize handler, so it
+carries every one of the host's resize-time bugs. Prefer the narrowest host API over a synthetic
+event, and don't dispatch one into an engine whose resize path you know is broken.

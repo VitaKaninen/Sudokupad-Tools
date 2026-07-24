@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.140.0
+// @version      3.141.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.140.0';
+  var SCRIPT_VERSION = '3.141.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5717,8 +5717,24 @@
   // (gear / version / credit line) is left at the stale pre-reflow scale — "the bottom
   // elements are too low on first load, and resizing the window fixes it", and the same
   // on validate-menu open/close. rAF so the reflow has settled before App.resize measures.
+  // SudokuPad's own App.resize MISFITS the board on Gecko (Firefox/LibreWolf): its
+  // resize path recomputes a wrong board scale — the board shrinks and a large empty
+  // band opens above it. This is a SudokuPad bug, NOT ours: it reproduces with our
+  // script DISABLED the moment you resize the window on Firefox (the board loads
+  // correct, then any resize shrinks it). Confirmed via window.spdrBoardLog: the board
+  // sat correct at svg width 608 until a resize event, then jumped to 1072 (shrunk).
+  var IS_GECKO = navigator.userAgent.indexOf('Gecko/') > -1;
   var _resizeSyncQueued = false;
   function syncAppResizeSoon() {
+    // Do NOT nudge App.resize on Gecko. The nudge's purpose is cosmetic (refresh the
+    // #controls/footer scale after a width change), but dispatching a resize there
+    // fires SudokuPad's broken board re-fit — which is exactly how our script turned a
+    // SudokuPad-only, resize-time bug into a "board shrinks on ~90% of loads" one:
+    // this synthetic resize hit it at load, with no user action. Skipping it lets the
+    // board keep its correct initial fit. (A real user resize still trips SudokuPad's
+    // bug, but that is pre-existing and unavoidable from here.) Blink's resize path is
+    // correct, so it keeps the nudge.
+    if (IS_GECKO) return;
     if (_resizeSyncQueued) return;
     _resizeSyncQueued = true;
     requestAnimationFrame(function () {
