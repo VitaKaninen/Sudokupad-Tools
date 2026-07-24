@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.136.0
+// @version      3.137.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.136.0';
+  var SCRIPT_VERSION = '3.137.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5766,6 +5766,62 @@
                                         // menu toggle changes nothing here, so it never fires
     return true;
   }
+  // ── Diagnostics: window.spdrLayoutProbe() ─────────────────────────────────
+  // Dumps every value the #controls width cap is computed from, so a layout race
+  // (the board shrinking + an empty band above it on Gecko) can be diagnosed from
+  // the numbers instead of guessed at. Run it in the console in BOTH the broken and
+  // a good state and diff. Closes over the cap's own state (lastControlsCap etc.).
+  function spdrLayoutProbe() {
+    function box(el) {
+      if (!el) return null;
+      var r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+      return { w: +r.width.toFixed(1), h: +r.height.toFixed(1),
+               left: +r.left.toFixed(1), top: +r.top.toFixed(1),
+               cssWidth: cs.width, cssMaxWidth: cs.maxWidth,
+               position: cs.position, transform: cs.transform,
+               paddingRight: cs.paddingRight };
+    }
+    function kids(sel) {
+      var b = document.querySelector('#controls ' + sel);
+      if (!b) return null;
+      return { rowBox: box(b), children: [].map.call(b.children, function (c) {
+        return { tag: c.tagName, id: c.id || null,
+                 ctl: c.getAttribute('data-control'),
+                 cls: (c.getAttribute('class') || '').slice(0, 24),
+                 offLeft: c.offsetLeft, offTop: c.offsetTop, offW: c.offsetWidth,
+                 marginLeft: getComputedStyle(c).marginLeft };
+      }) };
+    }
+    var out = {
+      version: SCRIPT_VERSION,
+      engine: navigator.userAgent.indexOf('Gecko/') > -1 ? 'gecko' : 'other',
+      dpr: window.devicePixelRatio || 1,
+      innerWidth: window.innerWidth, innerHeight: window.innerHeight,
+      nativeControlsReady: nativeControlsReady(),
+      nativePadWidth: nativePadWidth(),
+      nativeButtonSize: nativeButtonSize(),
+      collapsedRightColW: collapsedRightColW(),
+      RIGHT_COL_GAP: RIGHT_COL_GAP,
+      computedCap: nativePadWidth() + RIGHT_COL_GAP + collapsedRightColW(),
+      lastControlsCap: lastControlsCap,
+      lastContentMaxW: lastContentMaxW,
+      rightColOpen: rightColOpen,
+      controls: box(document.getElementById('controls')),
+      controlsButtons: box(document.querySelector('#controls .controls-buttons')),
+      rightCol: box(document.getElementById('sp-right-col')),
+      board: box(document.getElementById('svgrenderer')),
+      rows: {
+        app:  kids('.controls-app'),
+        main: kids('.controls-main'),
+        aux:  kids('.controls-aux'),
+      },
+      rulesWidthCss: (document.getElementById('sp-rules-width-css') || {}).textContent || null,
+    };
+    try { console.log('[spdrLayoutProbe]', JSON.stringify(out, null, 2)); } catch (e) {}
+    return out;
+  }
+  window.spdrLayoutProbe = spdrLayoutProbe;
+
   // ── The STATIC column contents ─────────────────────────────────────────────
   // Auto-fill, Validate, the gear, the version label and SudokuPad's credit line must not
   // move when the validate menu opens. The column's LEFT edge is fixed at
