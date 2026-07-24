@@ -601,3 +601,37 @@ added to the DOM** — always prefer measuring an element already on the page ov
 measure it, don't derive it from a transform API. And when a rendering bug survives a fix that
 you have proven correct arithmetically, suspect the inputs and **check a second engine** — the
 cross-engine diff localised this in one run after several rounds of chasing the maths.
+
+## The #controls width cap must self-correct after layout settles — a one-shot measurement races on Gecko (v3.136)
+
+**Symptom (LibreWolf/Firefox only):** the board loads full-size, then shrinks, leaving a large
+empty band above it; the native aux row spreads full-width (Easy Shade flung left, our column
+flung right) and can wrap. Reload ~20× and a few loads stay correct — a classic layout race.
+Off with the script off. Was mis-attributed to the border-snapping work; it is the #controls
+width-cap machinery (`applyControlsWidthCap` / `nativePadWidth` / `alignNativeAuxRow`, v3.107–118).
+
+**Root cause.** `poll(applyControlsWidthCap, …)` stops at the FIRST successful measurement, and
+`nativeControlsReady()` tests *existence*, not layout *stability*. After that first success the
+cap is re-evaluated only by `watchNativePadWidth`'s **childList** observer — which never fires
+for a *size* settle (fonts loading, SVG icons getting final size, the aux-row realignment). On
+Gecko the first measurement routinely lands mid-layout, the wrong (too-wide) cap sticks, and
+nothing re-measures. `alignNativeAuxRow` made it worse: it shifts the 4th aux button by
+`delta = colLeft - target.offsetLeft`; measured mid-layout that delta is huge, shoving `select`
++ Easy Shade right, which `nativePadWidth` then reads as a huge extent → the cap balloons.
+
+**Fixes (all engine-agnostic, no Gecko-specific branch):**
+1. **`watchNativePadWidth` also attaches a `ResizeObserver`** on the three native rows. It fires
+   on the settle a childList observer can't see, so the cap self-corrects. No feedback loop: the
+   cap is derived from the buttons' own fixed, left-aligned extents (not the rows' stretched
+   width), so once the buttons are stable it recomputes the same value and writes nothing.
+2. **`alignNativeAuxRow` clamps** — skip when `|delta| > nativeButtonSize()`. The true correction
+   is only the 8px inter-block gap; anything bigger is an unsettled/wrapped measurement.
+3. **Bounded delayed re-runs** at load (`setTimeout` 400/1000/2500 ms) in case the observer
+   attaches a tick after the settle.
+
+**Lesson.** A `poll` that terminates on first truthy is wrong for anything whose *correct value
+depends on layout being settled* — "the element exists" ≠ "it has its final size". Prefer a
+`ResizeObserver` (fires on the actual settle) over a childList observer + one-shot poll, and make
+any incremental geometric nudge **clamped and self-correcting** so a single bad transient
+measurement can't bake in permanently. Blink hides all of this because its first post-build
+measurement is already stable.

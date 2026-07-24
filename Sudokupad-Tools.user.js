@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.135.0
+// @version      3.136.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.135.0';
+  var SCRIPT_VERSION = '3.136.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5806,6 +5806,17 @@
     if (!colLeft) return;
     var delta = colLeft - target.offsetLeft;
     if (!delta) return;                                  // already aligned
+    // SANITY CLAMP (Gecko load race). The true correction is only the 8px gap
+    // between .controls-input and .controls-tool — structurally a fraction of a
+    // button. A delta bigger than one button pitch means we are measuring a pad
+    // that has not finished laying out (or an aux row that momentarily WRAPPED,
+    // which reads offsetLeft off a lower line): applying it would shove `select`
+    // and everything after it — Easy Shade included — far right, and because
+    // nativePadWidth then measures that shifted extent, inflate the #controls cap
+    // and shrink the board. Skip; a later settle event re-runs us with a sane
+    // delta. (This is idempotent/self-correcting once run at steady state — the
+    // ResizeObserver in watchNativePadWidth guarantees it is.)
+    if (Math.abs(delta) > nativeButtonSize()) return;
     var cur = parseFloat(getComputedStyle(target).marginLeft) || 0;
     target.style.marginLeft = (cur + delta) + 'px';
   }
@@ -5842,6 +5853,25 @@
       var box = document.querySelector('#controls ' + sel);
       if (box) mo.observe(box, { childList: true });
     });
+    // A childList observer catches a puzzle swap adding/removing buttons, but NOT
+    // the pad simply finishing its layout — fonts loading, SVG icons getting their
+    // final size, the aux-row realignment settling. Those change the rows' SIZE
+    // with no childList mutation, and the load poll for applyControlsWidthCap stops
+    // at the FIRST successful measurement (nativeControlsReady is existence, not
+    // stability). On Gecko that first measurement often lands mid-layout, caps
+    // #controls wrong, and — with nothing re-measuring — sticks: the board shrinks
+    // and a large empty band opens above it. A ResizeObserver fires exactly on that
+    // settle, so the cap self-corrects. Safe from a feedback loop: the cap is
+    // derived from the native buttons' own (fixed, left-aligned) extents, not from
+    // the rows' stretched width, so once the buttons are stable it recomputes the
+    // same value and writes nothing.
+    if (window.ResizeObserver) {
+      var ro = new ResizeObserver(function () { applyControlsWidthCap(); });
+      NATIVE_ROW_SELECTORS.forEach(function (sel) {
+        var box = document.querySelector('#controls ' + sel);
+        if (box) ro.observe(box);
+      });
+    }
     return true;
   }
   // .controls-buttons reserves the column's strip with padding-right and becomes the
@@ -14136,6 +14166,13 @@
     // build it (each returns false until its target container exists).
     poll(applyControlsWidthCap, 100, 100);   // keeps #controls content-sized (see its comment)
     poll(watchNativePadWidth, 100, 100);     // …and re-applies it if the pad changes later
+    // Safety net for the Gecko load race: the poll above stops at the first
+    // successful cap, which can land before the pad's layout settles. The
+    // ResizeObserver in watchNativePadWidth catches most settles, but may attach a
+    // tick after one; these bounded re-runs re-measure once things are stable.
+    // applyControlsWidthCap writes nothing when the measurement is unchanged, so on
+    // an already-correct load these cost a measurement and no reflow.
+    [400, 1000, 2500].forEach(function (ms) { setTimeout(applyControlsWidthCap, ms); });
     poll(buildVersionLabel, 100, 100);
     poll(buildFillSingleButton, 100, 100);
     poll(buildValidateButton, 100, 100);
