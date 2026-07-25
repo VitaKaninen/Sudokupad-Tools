@@ -480,10 +480,14 @@ way so it stays low-maintenance.
   on/off toggle (`validatorHilite` store, `toggleValidatorHighlight` / `runValidatorHighlight`,
   `validatorHiliteFillFor` inside `fixCenterTspan`). An orange mark reads as invalid to
   `readValidatorBoardState`, `fsScanValid` and the Clear/Clear All sweep, so validators still
-  cross-feed. A highlight now **persists until the player switches that validator off**: a board edit
-  marks the flags *stale* (kept on screen, no longer trusted as input — `validatorHiliteRuledOut` vs
-  `validatorHiliteHas`) and the row's **↻ "Run this validator again"** recomputes it. Highlight mode
-  has **no run-all**; the bottom button is "Clear all highlights" (`clearAllValidatorHighlights`). **Fog (v3.133)** — the per-clue gate
+  cross-feed. A highlight **persists until the player clears it**: a board edit marks the flags
+  *stale* (kept on screen, no longer trusted as input — `validatorHiliteRuledOut` vs
+  `validatorHiliteHas`). Highlight mode has **no run-all**; the bottom button is "Clear all
+  highlights" (`clearAllValidatorHighlights`). **v3.146:** a row click is a plain one-shot run and no
+  control keeps an "on" look except the per-row **↻ auto-update toggle** (`validatorAuto`,
+  `runAutoValidators` — re-runs that validator on every board edit, debounced + silent; disabled
+  under "Validate selection only"), and the menu **sizes itself to its widest row**
+  (`fitValidateMenuWidth` → `setRightColOpenWidth`, `RIGHT_COL_W` is now a minimum). **Fog (v3.133)** — the per-clue gate
   (`combineFogFilter`) still governs runs, but the 👁 preview is disabled on a fog puzzle
   (`puzzleHasFog()`, tooltip explains why) because it draws clues that are still hidden; the same
   predicate disables Easy Shade outright (`effRegionColorFill` / `effShadedRegionColor`). Full detail
@@ -704,10 +708,11 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   childList MutationObserver over the three rows.
 - **The menu grows rightward into the empty band — it does NOT widen `#controls` (v3.118).**
   `rightColW()` returns `collapsedRightColW()` (= `2 × nativeButtonSize() + COL_BTN_GAP`, just the
-  Auto-fill/Validate row) while the validate menu is closed, and `RIGHT_COL_W = 200` while it is
+  Auto-fill/Validate row) while the validate menu is closed, and `rightColOpenW` while it is
   open; `setRightColWidth(open)` flips it (called by `openValidateMenu` / `closeValidateMenu`) and
-  sets the column width **and** its negative `right` offset (`rightColOverhang() = RIGHT_COL_W −
-  collapsedRightColW`), so the column expands rightward past `#controls`' edge into the empty band
+  `applyRightColWidth()` sets the column width **and** its negative `right` offset
+  (`rightColOverhang() = rightColW() − collapsedRightColW`), so the column expands rightward past
+  `#controls`' edge into the empty band
   while its LEFT edge stays put. The `.controls-buttons` padding and the `#controls` cap both use
   `collapsedRightColW()` and never change on a toggle → the board, keypad, banner, rules, footer and
   Killer Calculator all stay put, and no `App.resize` re-fit fires. Relies on `#controls` /
@@ -715,7 +720,11 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
   overflowing menu is not clipped. ⚠️ `rebuildValidateMenu()` removes the menu node directly instead
   of calling `closeValidateMenu()` — going through close would collapse and instantly re-expand the
   column on every in-menu toggle. (See LESSONS_LEARNED "The validate menu no longer widens
-  `#controls`" for the why and the narrow-window caveat.)
+  `#controls`" for the why and the narrow-window caveat.) **v3.146:** the open width is no longer the
+  constant `RIGHT_COL_W` — that is now a *minimum*, and `fitValidateMenuWidth()` measures the built
+  menu (`width:max-content`, wrapping rows forced to `nowrap`, `offsetWidth` = design px) and calls
+  `setRightColOpenWidth()`, clamped to `RIGHT_COL_MAX_W = 360` and to `maxOnScreenColW()` (room left
+  before the window edge; the scale comes from `rect.width / rightColW()`). Closing resets it.
 - **The column's LEFT edge is invariant** (`nativePadWidth() + RIGHT_COL_GAP`), so left-anchored
   contents are already still. `#sp-right-col-buttons` and `#sp-validate-undo-btn` still take a
   **fixed `collapsedRightColW()` width** instead of `100%` (`applyStaticColWidths()` keeps them in
