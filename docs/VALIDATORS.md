@@ -189,8 +189,19 @@ warning). Wired in `buildAllUI`; `getToastBottom` clears the new button. **Per-r
 checkbox) carries a `makeValidatorEye(def)` 👁 at its right edge (v3.143: inside `makeValidatorIcons`,
 alongside the highlight-mode ↻) — hovering highlights the actual
 clue **OBJECTS** this validator would act on (the dots, lines, cages, thermos, arrows — NOT the
-cells that hold them) via `spdrHi.showObjects(objs)` (same overlay the settings eyeballs use;
-hold-bright until mouse-out, click pulses). It draws **only what a plain click WOULD validate** —
+cells that hold them) via `spdrHi.showObjects(objs)` (same overlay the settings eyeballs use).
+**Three gestures (v3.147):** hover = draw, gone on mouse-out; **click = PIN** (the overlay stays
+after the pointer leaves, and the icon stays lit, until that eye — or another — is clicked again);
+**long press (350 ms) = blink** while held (`spdrHi.blink(on)`, the pulse cycle on `infinite`; the
+press timer also sets `longPressed`, which swallows the click that would otherwise toggle the pin,
+and is reset on `mouseleave` since releasing outside fires no click). `spdrHi` is ONE shared
+overlay, so the pin is a single `validatorEyePin` name (+ `validatorEyePinDef` for redraws), not a
+set: pinning a second eye replaces the first, hovering any other eye overwrites the layer and
+restores the pinned drawing on mouse-out (`redrawPinnedEye`). The pin is dropped by
+`closeValidateMenu` and `validatorHiliteCheckPuzzle`, so a pinned overlay can never outlive its off
+switch. Clicking repaints the eyes in place via `refreshValidatorEyeIcons` (each icon carries
+`data-spdr-eye` + a `_spdrEyeSync`) rather than rebuilding the menu, which would re-measure its
+width and drop hover state. It draws **only what a plain click WOULD validate** —
 the confidently-identified clues; an **ambiguous** line type (the puzzle leaves which-is-which to
 the solver, `SELF_DEDUCTION_RE`) draws nothing and pops a `spdrTip` explaining the lines can't be
 auto-identified. `validatorClueObjects(def)` (switch on `def.name`) **reuses each validator's own

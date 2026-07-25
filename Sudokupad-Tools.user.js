@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.146.0
+// @version      3.147.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.146.0';
+  var SCRIPT_VERSION = '3.147.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4837,6 +4837,18 @@
         if (d.style.display !== 'none') { d.style.animation = 'none'; void d.getBoundingClientRect(); d.style.animation = 'spdrHiPulse 520ms ease-in-out 2'; }
       }
     }
+    // Same cycle as pulse(), but running until it is switched off — the "hold the
+    // button down" gesture, so a highlight can be made obvious without watching for
+    // a one-shot flash. blink(false) restores the steady hold.
+    function blink(on) {
+      var anim = on ? 'spdrHiPulse 700ms ease-in-out infinite' : '';
+      [osvg, oexsvg].forEach(function (s) {
+        if (s && s.style.display !== 'none' && s.firstChild) s.style.animation = anim;
+      });
+      for (var i = 0; i < divPool.length; i++) {
+        if (divPool[i].style.display !== 'none') divPool[i].style.animation = anim;
+      }
+    }
     // Occlusion handling: if any target overlaps the settings panel, fade the panel
     // (while the highlight shows) so the user can see what's highlighted beneath it.
     function dimPanel(rects) {
@@ -4859,7 +4871,7 @@
       for (var i = 0; i < divPool.length; i++) divPool[i].style.display = 'none';
       if (dimmedPanel) { dimmedPanel.style.opacity = ''; dimmedPanel = null; }
     }
-    return { show: show, hide: hide, addText: addText, addLine: addLine, addCellBox: addCellBox, showObjects: showObjects, pulse: pulse };
+    return { show: show, hide: hide, addText: addText, addLine: addLine, addCellBox: addCellBox, showObjects: showObjects, pulse: pulse, blink: blink };
   })();
 
   // Tiny tooltip beside the mouse pointer — used on eyeball hover to say "nothing to
@@ -11230,9 +11242,27 @@
     }
     return out;
   }
-  // The 👁 span for a validator menu row. Hover highlights the objects a click
-  // would validate + a tooltip when the line type is the solver's own deduction;
-  // click pulses. stopPropagation so a click never triggers the row's run handler.
+  // The 👁 span for a validator menu row: three gestures on one icon (v3.147).
+  //   HOVER      — draw the objects this validator would act on; gone on mouse-out.
+  //   CLICK      — PIN them: they stay drawn after the pointer leaves, until the same
+  //                eye (or another one) is clicked again. The icon shows the pin.
+  //   LONG PRESS — blink them while held, for picking one overlay out of a busy grid.
+  // spdrHi is ONE shared overlay, so pinning a second eye replaces the first — the
+  // pin is a single name, not a set. It is dropped when the menu closes or the puzzle
+  // changes, so a pinned overlay can never outlive its off switch.
+  // stopPropagation so a click never triggers the row's run handler.
+  var validatorEyePin = null;      // def.name of the pinned eye, or null
+  var validatorEyePinDef = null;   // …and its def, so the overlay can be redrawn
+  function validatorEyeUnpin() {
+    if (!validatorEyePin) return;
+    validatorEyePin = null; validatorEyePinDef = null;
+    try { spdrHi.blink(false); spdrHi.hide(); } catch (e) {}
+  }
+  function redrawPinnedEye() {
+    if (!validatorEyePinDef) return;
+    var objs = []; try { objs = validatorClueObjects(validatorEyePinDef); } catch (e) {}
+    try { spdrHi.showObjects(objs); } catch (e) {}
+  }
   // Both row icons (👁 and ↻) live in identical fixed boxes, inside one right-aligned
   // container (makeValidatorIcons) — so they form two straight columns flush with the
   // menu's right edge on EVERY row, whatever else that row holds (the Thermo row's
@@ -11243,13 +11273,43 @@
     flexShrink: '0', lineHeight: '1', cursor: 'pointer',
     userSelect: 'none', pointerEvents: 'auto',
   };
+  // Repaint every eye in the open menu from the pin — cheaper and far less jarring
+  // than rebuilding the menu, which would re-measure its width and drop hover state.
+  function refreshValidatorEyeIcons() {
+    var menu = document.getElementById('sp-validate-menu');
+    if (!menu) return;
+    menu.querySelectorAll('[data-spdr-eye]').forEach(function (el) {
+      if (typeof el._spdrEyeSync === 'function') el._spdrEyeSync();
+    });
+  }
   function makeValidatorEye(def) {
+    var noun0 = def.unitNoun || def.name;
+    var pressTimer = null, longPressed = false, hovering = false;
     var ic = document.createElement('span');
     ic.textContent = '👁';
-    ic.title = 'Hover to highlight the ' + (def.unitNoun || def.name) + 's a click would validate; click to pulse';
+    ic.dataset.spdrEye = def.name;
     Object.assign(ic.style, VALIDATOR_ICON_BOX, { fontSize: '16px', opacity: '0.55', filter: 'grayscale(1)' });
+    function isPinned() { return validatorEyePin === def.name; }
+    // A pinned eye stays lit with the pointer away — that IS the pin's indicator.
+    function sync() {
+      var on = isPinned() || hovering;
+      ic.style.opacity = on ? '1' : '0.55';
+      ic.style.filter  = on ? 'none' : 'grayscale(1)';
+      ic.title = isPinned()
+        ? 'Click: stop showing the ' + noun0 + 's · hold: blink'
+        : 'Hover: show the ' + noun0 + 's · click: keep shown · hold: blink';
+    }
+    ic._spdrEyeSync = sync;
+    // Draw this validator's objects. Returns them, so the caller can tell "nothing
+    // to show" from "shown".
+    function draw() {
+      var objs = []; try { objs = validatorClueObjects(def); } catch (e2) {}
+      try { spdrHi.showObjects(objs); } catch (e2) {}
+      return objs;
+    }
+    sync();
     ic.addEventListener('mouseenter', function (e) {
-      ic.style.opacity = '1'; ic.style.filter = 'none';
+      hovering = true; sync();
       // FOG (v3.133): the preview is the one part of the validator feature that would
       // SHOW something hidden — it draws every clue of this type, including those still
       // under fog. The runs themselves are already safe (combineFogFilter skips any clue
@@ -11259,10 +11319,9 @@
         spdrTip.show(e.clientX, e.clientY, 'Preview disabled — this puzzle has Fog of War, and highlighting the ' + (def.unitNoun || def.name) + 's would show you clues you haven’t uncovered yet. The validator itself still works: it only checks clues whose cells are all revealed.');
         return;
       }
-      var objs = []; try { objs = validatorClueObjects(def); } catch (e2) {}
-      try { spdrHi.showObjects(objs); } catch (e2) {}
+      var objs = draw();
       var cls = null; try { cls = validatorClassify(def); } catch (e2) {}
-      var noun = def.unitNoun || def.name;
+      var noun = noun0;
       if (cls && cls.mode === 'ambiguous') {
         // Lines of this type exist but the puzzle leaves which-is-which to the
         // solver, so a plain click validates none of them.
@@ -11277,10 +11336,45 @@
     });
     ic.addEventListener('mousemove', function (e) { spdrTip.move(e.clientX, e.clientY); });
     ic.addEventListener('mouseleave', function () {
-      ic.style.opacity = '0.55'; ic.style.filter = 'grayscale(1)';
-      spdrHi.hide(); spdrTip.hide();
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      // Releasing outside the icon fires no click, so the long-press flag has to be
+      // dropped here too — otherwise it would swallow the NEXT click.
+      longPressed = false;
+      hovering = false; sync();
+      spdrTip.hide();
+      spdrHi.blink(false);
+      // A PINNED eye keeps its overlay when the pointer leaves — that is the pin.
+      // Any OTHER eye leaving restores the pinned overlay rather than clearing the
+      // screen, since hovering it overwrote the one shared layer.
+      if (isPinned()) { draw(); return; }
+      spdrHi.hide();
+      if (validatorEyePin) redrawPinnedEye();
     });
-    ic.addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); spdrHi.pulse(); });
+    // Hold to blink. The timer both starts the blink and marks the press as a long
+    // one, so releasing it doesn't also toggle the pin.
+    ic.addEventListener('mousedown', function (e) {
+      e.stopPropagation(); e.preventDefault();
+      longPressed = false;
+      if (puzzleHasFog()) return;
+      pressTimer = setTimeout(function () {
+        pressTimer = null; longPressed = true;
+        draw(); spdrHi.blink(true);
+      }, 350);
+    });
+    ic.addEventListener('mouseup', function (e) {
+      e.stopPropagation();
+      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
+      if (longPressed) spdrHi.blink(false);
+    });
+    ic.addEventListener('click', function (e) {
+      e.stopPropagation(); e.preventDefault();
+      if (longPressed) { longPressed = false; return; }   // that was the blink gesture
+      if (puzzleHasFog()) return;                         // mouseenter already said why
+      var wasPinned = isPinned();
+      validatorEyeUnpin();                                // one overlay ⇒ one pin
+      if (!wasPinned) { validatorEyePin = def.name; validatorEyePinDef = def; draw(); }
+      refreshValidatorEyeIcons();                         // repaint every eye's state
+    });
     return ic;
   }
   // The ↻ span (highlight mode only) — an AUTO-UPDATE TOGGLE, not a one-shot rerun
@@ -11708,6 +11802,7 @@
     if (validatorHilite.key === k) return;
     validatorHilite.key = k;
     validatorAutoClearAll();     // a different puzzle: its validators aren't this one's
+    validatorEyeUnpin();         // …and neither are its clue outlines
     validatorHiliteClearAll();
   }
   function validatorHiliteClearAll() {
@@ -11914,6 +12009,7 @@
   function closeValidateMenu() {
     var m = document.getElementById('sp-validate-menu');
     if (m) m.remove();
+    validatorEyeUnpin();          // its off switch goes with the menu
     setRightColWidth(false);      // collapse the column back to its two-button width
   }
   function toggleValidateMenu() {

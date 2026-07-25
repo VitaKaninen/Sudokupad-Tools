@@ -471,7 +471,8 @@ way so it stays low-maintenance.
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
-  `makeValidatorEye` / `makeValidatorIcons` / `makeValidatorRefresh`. Single toggle:
+  `makeValidatorEye` (v3.147: hover = show the clue objects, click = pin them on, long press =
+  blink) / `makeValidatorIcons` / `makeValidatorRefresh`. Single toggle:
   `showValidateButton` (the per-validator enable keys were
   removed v3.104). **Highlight vs Remove (v3.133, control reworked v3.134, highlight reworked +
   made the DEFAULT v3.143)** — a segmented control at
