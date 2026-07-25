@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.143.0
+// @version      3.144.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.143.0';
+  var SCRIPT_VERSION = '3.144.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9358,7 +9358,11 @@
       });
       return runs;
     }
-    var lineData = lines.map(function (keys) { return { keys: keys, runs: runsFor(keys.length) }; })
+    // A closed loop's duplicated endpoint is dropped (v3.144) — kept, it inflates
+    // the run length by one and asks the same cell for two different digits, which
+    // over-removes. A renban loop is just its set of distinct cells.
+    var lineData = lines.map(function (keys) { return (keys.length > 2 && keys[0] === keys[keys.length - 1]) ? keys.slice(0, -1) : keys; })
+                        .map(function (keys) { return { keys: keys, runs: runsFor(keys.length) }; })
                         .filter(function (ld) { return ld.runs.length > 0; });   // impossible line → dropped
 
     // Does some run admit a full fill with digit d in cell C? Fix d→C, then require
@@ -9401,6 +9405,33 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, renbanCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // Split a region-sum line's cell chain into maximal same-region runs.
+  // `regionOf(key)` → an opaque region id. A CLOSED LOOP's segments are CYCLIC
+  // (v3.144): expandLineChain only collapses CONSECUTIVE duplicates, so a loop
+  // arrives with its start cell repeated at the end, and walking that chain
+  // linearly cuts the wrap-around run at whatever point the setter happened to
+  // start drawing. On `gz8mfm0r3a` (m1n3, "Visible Inclusions") that left the
+  // repeated r2c4 as a 1-cell "segment" — read as "this cell alone = S", which
+  // capped S at 9 (real range 6–24) and stripped correct candidates off every
+  // 3-cell segment. So: drop the duplicate endpoint, then join the final run onto
+  // the first when they share a region. Kept pure + top-level so the harness can
+  // test it (the validator itself needs the live board).
+  function regionSumSegments(keys, regionOf) {
+    if (!keys || keys.length === 0) return [];
+    var loop = keys.length > 2 && keys[0] === keys[keys.length - 1];
+    if (loop) keys = keys.slice(0, -1);
+    var segs = [], cur = [keys[0]], curId = regionOf(keys[0]);
+    for (var i = 1; i < keys.length; i++) {
+      var id = regionOf(keys[i]);
+      if (id === curId) cur.push(keys[i]);
+      else { segs.push(cur); cur = [keys[i]]; curId = id; }
+    }
+    segs.push(cur);
+    if (loop && segs.length > 1 && curId === regionOf(keys[0]))
+      segs[0] = segs.pop().concat(segs[0]);              // wrap run: tail belongs in front of the head
+    return segs;
   }
 
   // ── Region-sum-line validator ─────────────────────────────────────────────
@@ -9453,16 +9484,11 @@
       if (masked && !selection.has(C)) return false;
       return true;
     }
-    // Split a line into maximal same-region runs; keep only lines with ≥2 segments.
+    // Maximal same-region runs (loop-aware — see regionSumSegments); keep only
+    // lines with ≥2 segments, since one segment carries no constraint.
     var lineData = [];
     lines.forEach(function (keys) {
-      var segs = [], cur = [keys[0]], curId = regionId(keys[0]);
-      for (var i = 1; i < keys.length; i++) {
-        var id = regionId(keys[i]);
-        if (id === curId) cur.push(keys[i]);
-        else { segs.push(cur); cur = [keys[i]]; curId = id; }
-      }
-      segs.push(cur);
+      var segs = regionSumSegments(keys, regionId);
       if (segs.length >= 2) lineData.push({ keys: keys, segs: segs });
     });
     if (lineData.length === 0) return { noRegionSum: true };

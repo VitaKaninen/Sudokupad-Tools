@@ -85,7 +85,7 @@ const NAMES = [
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
-  'expandLineChain', 'fpuzCellKey',
+  'expandLineChain', 'fpuzCellKey', 'regionSumSegments',
   // region colouring
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
@@ -448,6 +448,28 @@ check('chain: adjacent duplicates collapse',
 check('chain: closed loop keeps the repeated endpoint (dedupe is the VALIDATOR\'s job, v3.85)',
   F.expandLineChain([[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5], [0.5, 0.5]]),
   ['0,0', '1,0', '1,1', '0,1', '0,0']);
+// ── region-sum segmentation (loop-aware, v3.144) ─────────────────────────────
+// Regular 3x3 boxes over a 9x9, keyed "col,row" like the validators.
+const box9 = k => { const [c, r] = k.split(',').map(Number); return `${Math.floor(r / 3)}:${Math.floor(c / 3)}`; };
+check('region-sum: straight line splits on the box border',
+  F.regionSumSegments(['0,0', '1,0', '2,0', '3,0', '4,0'], box9),
+  [['0,0', '1,0', '2,0'], ['3,0', '4,0']]);
+// `gz8mfm0r3a` (m1n3, "Visible Inclusions") — the blue loop. Its repeated start
+// cell r2c4 ("3,1") used to become a 1-cell segment forcing S ≤ 9.
+check('region-sum: closed loop drops the repeated endpoint, no 1-cell wrap segment',
+  F.regionSumSegments(['3,1', '4,1', '5,2', '6,3', '7,4', '6,5', '5,6', '4,7', '3,7', '2,7',
+                       '1,6', '1,5', '1,4', '1,3', '1,2', '2,1', '3,1'], box9),
+  [['3,1', '4,1', '5,2'], ['6,3', '7,4', '6,5'], ['5,6', '4,7', '3,7'], ['2,7', '1,6'],
+   ['1,5', '1,4', '1,3'], ['1,2', '2,1']]);
+// Same loop, drawn starting one cell later (mid-segment): the wrap run must be
+// JOINED, not left split across the two ends.
+check('region-sum: loop starting mid-segment joins the wrap run',
+  F.regionSumSegments(['4,1', '5,2', '6,3', '7,4', '6,5', '5,6', '4,7', '3,7', '2,7',
+                       '1,6', '1,5', '1,4', '1,3', '1,2', '2,1', '3,1', '4,1'], box9),
+  [['3,1', '4,1', '5,2'], ['6,3', '7,4', '6,5'], ['5,6', '4,7', '3,7'], ['2,7', '1,6'],
+   ['1,5', '1,4', '1,3'], ['1,2', '2,1']]);
+check('region-sum: loop inside ONE box collapses to a single segment (no constraint)',
+  F.regionSumSegments(['0,0', '1,0', '1,1', '0,1', '0,0'], box9).length, 1);
 check('fpuzCellKey R3C6 → col,row', F.fpuzCellKey('R3C6'), '5,2');
 check('fpuzCellKey r10c1', F.fpuzCellKey('r10c1'), '0,9');
 check('fpuzCellKey garbage → null', F.fpuzCellKey('X9Y9'), null);

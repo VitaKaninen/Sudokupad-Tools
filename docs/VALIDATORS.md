@@ -664,6 +664,21 @@ silently drops the line — no candidate is supported, so the pass WIPES its mar
 them), which the run toast surfaces as the red "no valid combination" ERROR. (The old silent-drop
 gave a false all-clear on an invalid line — the v3.77 fix; see the Validate Constraints toast note
 above.) Registered in `constraintValidators()`; `detect: renbanDetected`/`regionSumDetected`.
+**Closed loops (v3.144).** `expandLineChain` only collapses CONSECUTIVE duplicate cells, so a line
+drawn as a loop arrives with its start cell REPEATED at the end — the dedupe is each validator's
+job (parity and entropic already did it; renban and region-sum did not). For region-sum the repeat
+is worse than a stray cell: segmentation is CYCLIC on a loop, and walking the chain linearly cuts
+the wrap-around run at whatever point the setter began drawing. On `gz8mfm0r3a` (m1n3, "Visible
+Inclusions" — a 16-cell diagonal blue loop) that left the repeated r2c4 as a **1-cell segment**,
+read as "this cell alone = S", capping S at 9 against a real range of 6–24 and stripping correct
+candidates from every 3-cell segment. Segmentation now lives in the pure top-level
+**`regionSumSegments(keys, regionOf)`** (harness-tested): drop the duplicate endpoint, then join the
+final run onto the first when they share a region (a loop drawn starting mid-segment). A loop inside
+one region collapses to a single segment → no constraint, line dropped, as before. Renban got the
+plain endpoint drop in the same change — kept, it inflated the run length by one and asked the same
+cell for two different digits (over-removal). **Zipper still does NOT dedupe a loop endpoint**: it
+would pair `keys[0]` with itself (forcing S = 2d), but the correct fold for a closed zipper is
+undefined, so it needs a decision rather than a copy of this fix.
 
 ## Parity + zipper-line validators
 
