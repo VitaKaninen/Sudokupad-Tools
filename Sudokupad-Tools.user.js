@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.150.0
+// @version      3.151.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.150.0';
+  var SCRIPT_VERSION = '3.151.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -11242,6 +11242,64 @@
     }
     return out;
   }
+  // ── "MISSING CANDIDATES" WARNING (v3.151) ─────────────────────────────────
+  // A cell with no usable candidate — no value/given and no valid centre mark (marks
+  // that are ALL red count as none) — is read by every validator as "any digit could go
+  // here" (readValidatorBoardState → fullSet). That is the only sound direction: an
+  // unmarked cell means the player hasn't pencilled it, not that nothing fits, and the
+  // strict reading would make every clue touching a blank cell a contradiction. But a
+  // clue containing one is checked FAR more weakly than the player is likely to assume
+  // (a 2-cell 10-cage with a blank partner loses only the 5), so the result toast now
+  // LEADS with a warning naming how many clues were affected, and turns amber.
+  // Clue cell groups come from validatorClueObjects — the same detection the compute
+  // reads, so this can't drift from what actually ran.
+  function validatorClueCellGroups(def) {
+    var objs = []; try { objs = validatorClueObjects(def) || []; } catch (e) { return []; }
+    var out = [];
+    objs.forEach(function (o) {
+      if (!o) return;
+      var keys = o.keys;
+      if (!keys && o.type === 'dot') keys = [o.a, o.b];
+      if (!keys && o.type === 'arrow') keys = [o.circle].concat(o.shaft || []);
+      if (keys && keys.length) out.push(keys);
+    });
+    return out;
+  }
+  // → { n, total } over the clues this run actually covers (same unitFilter), or null
+  // when there is nothing to report. Read the board BEFORE the run: removing (or
+  // flagging) a cell's last usable mark would otherwise count as "was already blank".
+  function countCluesMissingCandidates(def, unitFilter) {
+    var st = null; try { st = readValidatorBoardState(); } catch (e) {}
+    if (!st) return null;
+    var n = 0, total = 0;
+    validatorClueCellGroups(def).forEach(function (keys) {
+      if (unitFilter && !unitFilter(keys)) return;
+      total++;
+      if (keys.some(function (k) { return st.values[k] == null && !st.centre[k]; })) n++;
+    });
+    return total ? { n: n, total: total } : null;
+  }
+  // list = [{ def, mc }] — one entry per validator, so the run-all toast can name each
+  // type in one sentence. Returns '' when nothing is affected.
+  function missingCandidatesWarning(list) {
+    var parts = [], hit = 0;
+    (list || []).forEach(function (x) {
+      if (!x || !x.mc || !x.mc.n) return;
+      hit += x.mc.n;
+      // No denominator: the toast's own "across N cages" count can legitimately differ
+      // (a clue the validator dropped as structurally impossible isn't in it), and two
+      // disagreeing totals in one sentence read as a bug.
+      parts.push(x.mc.n + ' ' + pluralUnit(x.def.unitNoun || x.def.name, x.mc.n));
+    });
+    if (!parts.length) return '';
+    var joined = parts.length === 1 ? parts[0]
+      : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
+    var many = hit !== 1;
+    return '⚠ ' + joined + ' ' + (many ? 'were' : 'was') + ' not fully validated — ' +
+      (many ? 'they contain cells' : 'it contains a cell') + ' with no candidates, and an empty cell ' +
+      'has to be read as "any digit could go here". Pencil ' + (many ? 'those cells' : 'that cell') +
+      ' in (the Auto-fill button will do it) and run again for a stricter check.';
+  }
   // The 👁 span for a validator menu row: two gestures on one icon (v3.148).
   //   HOVER — ISOLATE: draw only this validator's objects (any pinned ones step aside
   //           for as long as the pointer is on the icon), and after 350ms start
@@ -11890,6 +11948,11 @@
     // A re-run supersedes the previous result, so drop it up front — otherwise a
     // "nothing found this time" outcome would leave the old orange sitting there.
     if (validatorHiliteActive(def.name)) validatorHiliteClear(def.name);
+    // Counted BEFORE flagging: the new orange can take a cell's last usable mark, which
+    // would then read as "was already blank".
+    var mcWarn = missingCandidatesWarning([{ def: def, mc: countCluesMissingCandidates(def, unitFilter) }]);
+    function withWarn(msg) { return mcWarn ? mcWarn + ' ' + msg : msg; }
+    function okType() { return mcWarn ? 'warning' : 'success'; }
     var comp;
     try { comp = def.compute(unitFilter); }
     catch (e) {
@@ -11914,14 +11977,14 @@
     // no cell text changed, so the board observer will never notice. Kick them.
     scheduleAutoValidators();
     rebuildValidateMenu();
-    if (removals.length === 0) { showRemoveInvalidToast(withNote('Checked ' + checked + ' — no invalid candidates to highlight.'), 'success'); return; }
+    if (removals.length === 0) { showRemoveInvalidToast(withWarn(withNote('Checked ' + checked + ' — no invalid candidates to highlight.')), okType()); return; }
     var emptied = countEmptiedSince(before);
     if (emptied > 0) { showRemoveInvalidToast(noValidComboHighlightMsg(checked, removals.length, emptied), 'error'); return; }
     var tail = validatorAutoOn(def.name)
       ? ' Auto-update (↻) is on, so they refresh as you solve.'
       : ' They stay until you press "Clear all highlights" — press ↻ on the row to keep them updated as you solve.';
-    showRemoveInvalidToast(withNote('Highlighted ' + removals.length + ' invalid candidate' +
-      (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail), 'success');
+    showRemoveInvalidToast(withWarn(withNote('Highlighted ' + removals.length + ' invalid candidate' +
+      (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail)), okType());
   }
 
   // Highlight mode has NO run-all (v3.143): the bottom button is "Clear all
@@ -11976,6 +12039,10 @@
     var before = markedCellKeys();
     var preSnap = snapshotPencilmarks();
     var t0 = performance.now();
+    // Counted against the PRE-run board: a removal can take a cell's last mark.
+    var mcWarn = missingCandidatesWarning([{ def: def, mc: countCluesMissingCandidates(def, unitFilter) }]);
+    function withWarn(msg) { return mcWarn ? mcWarn + ' ' + msg : msg; }
+    function okType() { return mcWarn ? 'warning' : 'success'; }
     applyOneValidator(def, unitFilter).then(function (res) {
       function withNote(msg) { return res.note ? msg + ' ' + res.note : msg; }
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
@@ -11989,12 +12056,12 @@
       // A removal made changes → offer a post-run Undo (one native-undo group).
       if (res.removed > 0) validatorArmUndo(1, preSnap);
       var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
-      if (res.removed === 0) { showRemoveInvalidToast(withNote('Checked ' + checked + ' — no invalid candidates to remove.'), 'success'); return; }
+      if (res.removed === 0) { showRemoveInvalidToast(withWarn(withNote('Checked ' + checked + ' — no invalid candidates to remove.')), okType()); return; }
       var emptied = countEmptiedSince(before);
       if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, res.removed, emptied), 'error'); return; }
       var msg = 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
                 ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
-      showRemoveInvalidToast(withNote(msg), 'success');
+      showRemoveInvalidToast(withWarn(withNote(msg)), okType());
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -12011,6 +12078,12 @@
     var before = markedCellKeys();
     var preSnap = snapshotPencilmarks();
     var t0 = performance.now();
+    // One combined warning naming every affected type, off the PRE-run board.
+    var mcWarn = missingCandidatesWarning(defs.map(function (d) {
+      return { def: d, mc: countCluesMissingCandidates(d, unitFilter) };
+    }));
+    function withWarn(msg) { return mcWarn ? mcWarn + ' ' + msg : msg; }
+    function okType() { return mcWarn ? 'warning' : 'success'; }
     (async function () {
       var totalRemoved = 0, undoSteps = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
       var notes = {};   // informational notes (e.g. bulbless thermos), deduped across passes
@@ -12041,13 +12114,13 @@
         return;
       }
       var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
-      if (s.totalRemoved === 0) { showRemoveInvalidToast(withNotes('Checked ' + checked + ' — no invalid candidates to remove.'), 'success'); return; }
+      if (s.totalRemoved === 0) { showRemoveInvalidToast(withWarn(withNotes('Checked ' + checked + ' — no invalid candidates to remove.')), okType()); return; }
       var emptied = countEmptiedSince(before);
       if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, s.totalRemoved, emptied), 'error'); return; }
       var msg = 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
                 ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
                 ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
-      showRemoveInvalidToast(withNotes(msg), 'success');
+      showRemoveInvalidToast(withWarn(withNotes(msg)), okType());
     }).finally(function () { actionInProgress = false; });
   }
 

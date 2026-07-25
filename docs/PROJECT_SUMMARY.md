@@ -473,7 +473,9 @@ way so it stays low-maintenance.
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye` (v3.148: hover = show this validator's clue objects alone, blinking after
   350 ms; click = pin them on, and pins accumulate — `redrawPinnedEyes`) / `makeValidatorIcons` /
-  `makeValidatorRefresh`. Single toggle:
+  `makeValidatorRefresh` / `countCluesMissingCandidates` (v3.151: clues holding a cell with no
+  candidates are checked only weakly — an empty cell reads as the full digit set — so the result
+  toast leads with an amber warning naming how many). Single toggle:
   `showValidateButton` (the per-validator enable keys were
   removed v3.104). **Highlight vs Remove (v3.133, control reworked v3.134, highlight reworked +
   made the DEFAULT v3.143)** — a segmented control at

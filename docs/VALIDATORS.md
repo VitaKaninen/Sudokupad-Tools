@@ -389,6 +389,27 @@ flattened into **two** lookups: `validatorHilite.keys` = every flag (what is **p
 An **emptied cell** (every candidate flagged) is reported the same way a remove-mode run reports it,
 via `noValidComboHighlightMsg` — a red ⛔ toast, not a false all-clear.
 
+### "Missing candidates" warning (v3.151)
+
+An empty cell (no value/given, no valid centre mark — marks that are ALL red count as none) reads as
+the **full digit set** everywhere (`readValidatorBoardState` → `st.fullSet`, "empty cell →
+unconstrained, never modified"). That is the only sound direction — an unmarked cell means the
+player hasn't pencilled it, not that nothing fits; the strict reading would make every clue touching
+a blank cell a contradiction and turn a mid-solve grid entirely orange. But it makes such a clue far
+weaker than a player expects: a 2-cell 10-cage with a blank partner loses only the 5 (no-repeat
+combos are 19/28/37/46), and a black dot with a blank partner loses only 5/7/9 (no ×2 or ÷2 partner
+exists in 1–9 at all).
+
+So the result toast now **leads with an amber warning** naming how many clues were affected, then
+the normal "Highlighted/Removed N … across M …" text. `countCluesMissingCandidates(def, unitFilter)`
+counts them off the **pre-run** board (a removal, or new orange, can take a cell's last usable mark)
+over clue cell-groups from `validatorClueCellGroups` → `validatorClueObjects` — the same detection
+the compute reads, so it can't drift. Wired into `runValidatorHighlight`, `runSingleValidator` and
+`runAllValidators` (one combined sentence naming each type). Deliberately **no denominator** — the
+toast's own "across N cages" can legitimately differ (a structurally impossible clue is dropped from
+it), and two disagreeing totals in one sentence read as a bug. Not applied to the `emptied > 0`
+contradiction path (already a red error) or to the silent auto-update pass.
+
 ## The candidate-elimination contract (every current + future validator)
 
 **CANDIDATE-ELIMINATION CONTRACT (every current + future validator follows this — renban,
