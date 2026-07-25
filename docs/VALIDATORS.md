@@ -311,11 +311,20 @@ is forced on **once** and the flag remembers that it happened — a later delibe
      `validatorAutoOn`/`validatorAutoSet`/`validatorAutoClearAll`, all gated by
      `validatorAutoAllowed()`.
    - Wiring: the cell-layer observer → `validatorHiliteOnBoardChange` = `validatorHiliteMarkStale`
-     (everything becomes untrusted) **+** a 150 ms debounced `runAutoValidators` (the ↻-on ones
-     recompute, in list order, so each still reads the previous one's fresh orange). It is
-     **silent** — no toasts, since it fires on ordinary solving — and rebuilds the menu only when
-     "is anything highlighted at all" flips.
-   - The observer now stays connected while any ↻ is on, not only while a flag is fresh.
+     (everything becomes untrusted) **+** `scheduleAutoValidators()`, a 150 ms debounced
+     `runAutoValidators`. It is **silent** — no toasts, since it fires on ordinary solving — and
+     rebuilds the menu only when "is anything highlighted at all" flips.
+   - **ITERATED TO A FIXPOINT (v3.149).** Each validator reads the fresh orange of the ones before
+     it as invalid, so a single pass in list order only feeds FORWARD — the last validator's new
+     flags never reached the first, which is why the auto-update looked like it "ran once". The
+     pass now repeats until a whole round changes nothing (`MAX_AUTO_ROUNDS = 12` is a safety cap
+     only; flags accumulate, so it settles in a few rounds). `validatorHiliteSet` /
+     `validatorHiliteClear` return whether the stored set actually moved — that is the loop's
+     signal.
+   - **A manual run also kicks the auto pass** (v3.149): `runValidatorHighlight` calls
+     `scheduleAutoValidators()` after flagging. Its new orange is a new "this digit is impossible"
+     for every ↻-on validator, but it changes no cell text, so the observer would never see it.
+   - The observer stays connected while any ↻ is on, not only while a flag is fresh.
    - **Disabled while "Validate selection only" is ticked** (an auto re-run would keep re-reading a
      selection the player has since moved): `validatorAutoAllowed()` returns false, the icons render
      greyed with a tooltip saying why, and ticking the checkbox calls `validatorAutoClearAll()`. Also

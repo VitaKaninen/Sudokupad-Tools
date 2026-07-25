@@ -488,7 +488,9 @@ way so it stays low-maintenance.
   highlights" (`clearAllValidatorHighlights`). **v3.146:** a row click is a plain one-shot run and no
   control keeps an "on" look except the per-row **↻ auto-update toggle** (`validatorAuto`,
   `runAutoValidators` — re-runs that validator on every board edit, debounced + silent; disabled
-  under "Validate selection only"), and the menu **sizes itself to its widest row**
+  under "Validate selection only"; **v3.149** iterates the ↻-on set to a FIXPOINT instead of one
+  forward-only pass, and a manual highlight run kicks it too via `scheduleAutoValidators`), and the
+  menu **sizes itself to its widest row**
   (`fitValidateMenuWidth` → `setRightColOpenWidth`, `RIGHT_COL_W` is now a minimum). **Fog (v3.133)** — the per-clue gate
   (`combineFogFilter`) still governs runs, but the 👁 preview is disabled on a fog puzzle
   (`puzzleHasFog()`, tooltip explains why) because it draws clues that are still hidden; the same

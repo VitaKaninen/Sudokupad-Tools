@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.148.0
+// @version      3.149.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.148.0';
+  var SCRIPT_VERSION = '3.149.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -11330,13 +11330,13 @@
         return;
       }
       // ISOLATE while hovered: this draw overwrites the pinned union, so the eye under
-      // the pointer is the only thing on screen. After 350ms it starts blinking, which
-      // is the old long-press gesture made passive. mouseleave restores the pins.
+      // the pointer is the only thing on screen. After a second it starts blinking,
+      // which is the old long-press gesture made passive. mouseleave restores the pins.
       var objs = draw();
       if (objs.length) blinkTimer = setTimeout(function () {
         blinkTimer = null;
         try { spdrHi.blink(true); } catch (e2) {}
-      }, 350);
+      }, 1000);
       var cls = null; try { cls = validatorClassify(def); } catch (e2) {}
       var noun = noun0;
       if (cls && cls.mode === 'ambiguous') {
@@ -11739,12 +11739,19 @@
       validatorHilite.observer = null;
     }
   }
-  function validatorHiliteOnBoardChange() {
-    validatorHiliteMarkStale();
+  // Debounced kick of the auto pass. Two callers: the board observer below (a digit or
+  // candidate changed), and a MANUAL highlight run (runValidatorHighlight) — a row
+  // click paints new orange, which is a new "this digit is impossible" for every other
+  // validator, but it changes no cell text, so the observer never sees it.
+  function scheduleAutoValidators() {
     if (!validatorAutoAny()) return;
-    // Debounced: one edit is several mutations, and a fast typist is many edits.
+    // One edit is several mutations, and a fast typist is many edits.
     if (validatorAutoTimer) clearTimeout(validatorAutoTimer);
     validatorAutoTimer = setTimeout(runAutoValidators, 150);
+  }
+  function validatorHiliteOnBoardChange() {
+    validatorHiliteMarkStale();
+    scheduleAutoValidators();
   }
   // The board changed: every flag is now a snapshot of an older board. The orange
   // STAYS (a highlight lives until the player clears it) but stops counting as proof
@@ -11757,8 +11764,16 @@
   }
   // Re-run every ↻-on validator against the board as it is now. SILENT: no toasts —
   // this fires on ordinary solving, and a toast per keystroke would be unusable.
-  // Runs them in list order, so each one still reads the previous one's fresh orange
-  // as invalid (the cross-feed a manual run gets).
+  //
+  // ITERATED TO A FIXPOINT (v3.149). Each validator reads the fresh orange of the ones
+  // before it as invalid (readValidatorBoardState → validatorHiliteRuledOut), so ONE
+  // pass in list order only feeds forward: the last validator's new flags never reach
+  // the first. So the pass repeats until a whole round changes nothing — the same
+  // "keep going until it settles" the Remove mode's run-all does. validatorHiliteSet /
+  // Clear report whether the stored set actually moved, which is the loop's signal.
+  // MAX_AUTO_ROUNDS is a safety cap only: flags accumulate (more orange ⇒ more
+  // eliminations, never fewer), so this settles in a handful of rounds in practice.
+  var MAX_AUTO_ROUNDS = 12;
   function runAutoValidators() {
     validatorAutoTimer = null;
     if (!validatorAutoAny()) return;
@@ -11767,31 +11782,44 @@
     if (!defs.length) return;
     var hadAny = validatorHiliteAny();
     var filter = combineFogFilter(null);   // fog gate only; selection-only can't be on here
-    defs.forEach(function (def) {
-      var comp;
-      try { comp = def.compute(filter); }
-      catch (e) { console.error('[spDR-fix] VALIDATE auto-update failed', def.name, e); return; }
-      if (comp.unsupported) return;
-      if (comp[def.noneKey]) { validatorHiliteClear(def.name); return; }
-      validatorHiliteSet(def.name, comp.removals || []);
-    });
+    for (var round = 0; round < MAX_AUTO_ROUNDS; round++) {
+      var changed = false;
+      defs.forEach(function (def) {
+        var comp;
+        try { comp = def.compute(filter); }
+        catch (e) { console.error('[spDR-fix] VALIDATE auto-update failed', def.name, e); return; }
+        if (comp.unsupported) return;
+        if (comp[def.noneKey]) { if (validatorHiliteClear(def.name)) changed = true; return; }
+        if (validatorHiliteSet(def.name, comp.removals || [])) changed = true;
+      });
+      if (!changed) break;
+    }
     // Nothing in the menu tracks a highlight's CONTENT, only whether any exists at
     // all ("Clear all highlights" greys out) — so only that flip needs a rebuild.
     if (hadAny !== validatorHiliteAny() && document.getElementById('sp-validate-menu')) rebuildValidateMenu();
   }
+  // Returns whether the stored flags actually CHANGED (different members, or the same
+  // ones promoted from stale to fresh) — that is the fixpoint signal runAutoValidators
+  // loops on, so it can tell "this pass found something new" from "settled".
   function validatorHiliteSet(name, removals) {
     var s = new Set();
     removals.forEach(function (r) { s.add(r.cellKey + ',' + r.digit); });
+    var prev = validatorHilite.byName[name];
+    var same = !!prev && !prev.stale && prev.set.size === s.size;
+    if (same) s.forEach(function (k) { if (!prev.set.has(k)) same = false; });
     validatorHilite.byName[name] = { set: s, stale: false };
     validatorHiliteRebuildKeys();
     validatorHiliteWatch();
     validatorHiliteRepaint();
+    return !same;
   }
   function validatorHiliteClear(name) {
+    if (!validatorHilite.byName[name]) return false;
     delete validatorHilite.byName[name];
     validatorHiliteRebuildKeys();
     validatorHiliteWatch();
     validatorHiliteRepaint();
+    return true;
   }
   // SPA navigation: flags are meaningless on a different puzzle. The board observer
   // normally catches the re-render, but it holds references to the OLD layer nodes if
@@ -11856,6 +11884,9 @@
     var removals = comp.removals || [];
     var before   = markedCellKeys();          // cells that still had a usable candidate
     validatorHiliteSet(def.name, removals);   // …flagging makes them unusable, so diff after
+    // New orange here is new "this digit is impossible" for every ↻-on validator, and
+    // no cell text changed, so the board observer will never notice. Kick them.
+    scheduleAutoValidators();
     rebuildValidateMenu();
     if (removals.length === 0) { showRemoveInvalidToast(withNote('Checked ' + checked + ' — no invalid candidates to highlight.'), 'success'); return; }
     var emptied = countEmptiedSince(before);
