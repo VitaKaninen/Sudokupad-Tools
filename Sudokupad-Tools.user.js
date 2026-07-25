@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.142.0
+// @version      3.143.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.142.0';
+  var SCRIPT_VERSION = '3.143.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -290,7 +290,8 @@
     showFillSingleButton:         true,   // show/hide the floating Auto-fill (single candidate) button
     showValidateButton:           true,   // show/hide the floating "Validate Constraints" button — the single on/off for the whole validator feature (the old per-validator validate*Enabled keys were removed in v3.104; the menu already lists only detected constraints)
     validateSelectionOnly:        false,  // "Validate Constraints" menu checkbox: only validate clues whose EVERY cell is inside the current selection (session-only)
-    validateHighlightMode:        false,  // "Validate Constraints" menu toggle: HIGHLIGHT unsupported candidates in orange (each validator row becomes an on/off toggle) instead of REMOVING them
+    validateHighlightMode:        true,   // "Validate Constraints" menu mode (DEFAULT since v3.143): HIGHLIGHT unsupported candidates in orange (each validator row becomes an on/off toggle) instead of REMOVING them
+    validateHighlightModeDefaulted: false, // one-shot migration flag: forces validateHighlightMode on once for a profile saved before v3.143 (which stored the old `false` default)
     validateHighlightColor:       '#ff9800',  // colour of a highlighted-invalid centre mark (no UI — a localStorage-only escape hatch, like disambiguateColors)
     fsSelectDelayMs:              100,    // Auto-fill: pause (ms) after selecting a cell, before placing its digit
     fsFillDelayMs:                0,      // Auto-fill: pause (ms) after placing a digit, before selecting the next cell
@@ -340,6 +341,14 @@
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
   }
   var settings = loadSettings();
+  // v3.143 made HIGHLIGHT the default mode. A profile saved before that carries the
+  // old `false`, which Object.assign keeps — so flip it once (and remember that we
+  // did, so a later deliberate switch back to "Remove it" sticks).
+  if (settings.validateHighlightModeDefaulted !== true) {
+    settings.validateHighlightMode = true;
+    settings.validateHighlightModeDefaulted = true;
+    saveSettings(settings);
+  }
 
   function hexToRgba(hex, opacity) {
     if (typeof hex !== 'string' || hex.charAt(0) !== '#' || hex.length !== 7) return hex;
@@ -7110,7 +7119,9 @@
         // Orange (highlight-mode) marks are invalid for exactly the same reason a red
         // one is — a validator has already ruled them out — so they are not partners
         // either. This is what makes several highlight-mode validators cross-feed.
-        if (validatorHiliteHas(ck, Number(dv))) return;
+        // STALE flags (the board changed since they were computed) don't count: they
+        // stay on screen, but reasoning from them would be an unsound elimination.
+        if (validatorHiliteRuledOut(ck, Number(dv))) return;
         s.add(Number(dv));
       });
       if (s.size === 0) delete centre[ck];
@@ -11130,11 +11141,21 @@
   // The 👁 span for a validator menu row. Hover highlights the objects a click
   // would validate + a tooltip when the line type is the solver's own deduction;
   // click pulses. stopPropagation so a click never triggers the row's run handler.
+  // Both row icons (👁 and ↻) live in identical fixed boxes, inside one right-aligned
+  // container (makeValidatorIcons) — so they form two straight columns flush with the
+  // menu's right edge on EVERY row, whatever else that row holds (the Thermo row's
+  // "Slow" checkbox) and however far its label wraps.
+  var VALIDATOR_ICON_BOX = {
+    width: '18px', height: '18px', display: 'inline-flex',
+    alignItems: 'center', justifyContent: 'center',
+    flexShrink: '0', lineHeight: '1', cursor: 'pointer',
+    userSelect: 'none', pointerEvents: 'auto',
+  };
   function makeValidatorEye(def) {
     var ic = document.createElement('span');
     ic.textContent = '👁';
     ic.title = 'Hover to highlight the ' + (def.unitNoun || def.name) + 's a click would validate; click to pulse';
-    Object.assign(ic.style, { fontSize: '16px', lineHeight: '1', cursor: 'pointer', opacity: '0.55', flexShrink: '0', userSelect: 'none', filter: 'grayscale(1)', marginLeft: '10px', pointerEvents: 'auto' });
+    Object.assign(ic.style, VALIDATOR_ICON_BOX, { fontSize: '16px', opacity: '0.55', filter: 'grayscale(1)' });
     ic.addEventListener('mouseenter', function (e) {
       ic.style.opacity = '1'; ic.style.filter = 'none';
       // FOG (v3.133): the preview is the one part of the validator feature that would
@@ -11170,16 +11191,61 @@
     ic.addEventListener('click', function (e) { e.stopPropagation(); e.preventDefault(); spdrHi.pulse(); });
     return ic;
   }
+  // The ↻ span (highlight mode only). A highlight is a one-shot snapshot that stays
+  // until the player switches it off — this is how they ask for it to be recomputed
+  // against the board as it is NOW. It brightens once the board has moved on from the
+  // flags it shows (stale), which is exactly when re-running is worth doing.
+  // `active` false → the slot is rendered but blank and inert, so the icon columns
+  // still line up on rows whose validator isn't currently highlighting.
+  function makeValidatorRefresh(def, active, stale) {
+    var ic = document.createElement('span');
+    ic.textContent = '↻';
+    Object.assign(ic.style, VALIDATOR_ICON_BOX, {
+      fontSize: '15px', fontWeight: '700',
+      opacity: stale ? '0.95' : '0.55',
+    });
+    if (!active) {
+      ic.style.visibility = 'hidden';
+      ic.style.pointerEvents = 'none';
+      ic.style.cursor = 'default';
+      return ic;
+    }
+    ic.title = 'Run this validator again';
+    if (stale) ic.style.setProperty('color', validatorHighlightColor(), 'important');
+    ic.addEventListener('mouseenter', function () { ic.style.opacity = '1'; });
+    ic.addEventListener('mouseleave', function () { ic.style.opacity = stale ? '0.95' : '0.55'; });
+    ic.addEventListener('click', function (e) {
+      e.stopPropagation(); e.preventDefault();
+      onValidatorRefreshClick(def);
+    });
+    return ic;
+  }
+  // The right-hand icon column(s) for one validator row: 👁 always, ↻ in highlight
+  // mode. One container with marginLeft:auto, so the row's own gap/justify can't
+  // shift them out of column.
+  function makeValidatorIcons(def) {
+    var box = document.createElement('span');
+    Object.assign(box.style, {
+      display: 'inline-flex', alignItems: 'center', gap: '4px',
+      marginLeft: 'auto', flexShrink: '0',
+    });
+    box.appendChild(makeValidatorEye(def));
+    if (validatorHighlightMode())
+      box.appendChild(makeValidatorRefresh(def, validatorHiliteActive(def.name), validatorHiliteStale(def.name)));
+    return box;
+  }
 
   // ── "Validate Constraints" button: menu + runners ─────────────────────────
   // The button TOGGLES a popup menu (toggleValidateMenu) that stays open across
   // runs — only the button (or a window resize) closes it. The menu lists one
   // item per validator DETECTED in the current puzzle (re-checked each open);
   // clicking an item runs just that validator. Below the items:
-  //   • a "Run all above functions" button — runs every detected validator in
-  //     sequence, repeating the whole cycle until a full pass removes nothing —
-  //     a cross-constraint fixpoint (e.g. a cage removal that unlocks a further
-  //     Kropki removal). Disabled while selection-only is ticked.
+  //   • REMOVE mode: a "Run all above functions" button — runs every detected
+  //     validator in sequence, repeating the whole cycle until a full pass removes
+  //     nothing — a cross-constraint fixpoint (e.g. a cage removal that unlocks a
+  //     further Kropki removal). Disabled while selection-only is ticked.
+  //     HIGHLIGHT mode: no run-all — the same slot is "Clear all highlights", which
+  //     switches every currently-highlighting validator off.
   //   • "Validate selection only" (session-only checkbox) — validators only
   //     consider clues whose ENTIRE cell list is inside the current selection; a
   //     partially-selected clue is skipped outright (never half-checked).
@@ -11368,32 +11434,38 @@
     }
   }
 
-  // ── HIGHLIGHT MODE (v3.133) ────────────────────────────────────────────────
-  // The toggle at the bottom of the validator menu switches what a validator DOES
-  // with the candidates it finds unsupported:
-  //   Remove    (default) — the original behaviour: delete them via the paste path.
-  //   Highlight — leave them on the board and paint them ORANGE, so the player does
-  //               the removing. Each validator's menu row then behaves as an ON/OFF
-  //               TOGGLE: press once to flag, press again to send its marks back to
-  //               blue. Nothing on the board is modified, so there is nothing to undo
-  //               (the post-run Undo button never arms in this mode).
+  // ── HIGHLIGHT MODE (v3.133; persistent since v3.143) ───────────────────────
+  // The segmented control at the bottom of the validator menu switches what a
+  // validator DOES with the candidates it finds unsupported:
+  //   Highlight (default) — leave them on the board and paint them ORANGE, so the
+  //               player does the removing. Each validator's menu row then behaves as
+  //               an ON/OFF TOGGLE: press once to flag, press again to send its marks
+  //               back to blue. Nothing on the board is modified, so there is nothing
+  //               to undo (the post-run Undo button never arms in this mode).
+  //   Remove    — the original behaviour: delete them via the paste path.
   //
-  // Flags live per validator as sets of "col,row,digit", so a row owns exactly what it
-  // flagged and can drop exactly that. `keys` is their flattened union — the hot lookup
-  // used by the two readers below.
+  // Flags live per validator as { set:Set("col,row,digit"), stale:bool }, so a row owns
+  // exactly what it flagged and can drop exactly that. `keys` is their flattened union
+  // (what is PAINTED); `liveKeys` is the union of the non-stale sets only (what other
+  // code is allowed to REASON from) — see the staleness note below.
   //
-  // AN ORANGE MARK IS INVALID EVERYWHERE. readValidatorBoardState() treats a flagged
-  // mark exactly like a red .conflict one, so running several validators in highlight
-  // mode cross-feeds precisely the way a remove-mode run-all does; fsScanValid() does
-  // the same, so the Auto-fill button won't place a digit this feature has ruled out.
+  // AN ORANGE MARK IS INVALID EVERYWHERE. readValidatorBoardState() treats a fresh
+  // flagged mark exactly like a red .conflict one, so several highlight-mode validators
+  // cross-feed; fsScanValid() does the same, so the Auto-fill button won't place a digit
+  // this feature has ruled out. The Clear / Clear All buttons sweep every orange mark
+  // (fresh or stale) — those act on what the player can SEE, not on our reasoning.
   //
-  // Highlights are a SNAPSHOT of the board they were computed from, so the moment the
-  // player edits any cell they are ALL dropped (validatorHiliteWatch) — a stale flag
-  // would silently feed a wrong "this digit is impossible" into the next run, and an
-  // unsound elimination is exactly what the candidate-elimination contract forbids.
-  // Colouring is not an edit (it only sets inline `style`, which the observer doesn't
-  // watch), so our own repaint can't self-revoke.
-  var validatorHilite = { byName: Object.create(null), keys: new Set(), observer: null, key: null };
+  // STALENESS (v3.143). A highlight now PERSISTS until the player switches that
+  // validator off — it is not revoked when the board changes, and the validator does
+  // NOT re-run by itself. But a flag computed against an older board must never feed a
+  // wrong "this digit is impossible" into a later run (an unsound elimination is exactly
+  // what the candidate-elimination contract forbids), so the cell-layer observer MARKS
+  // every flag stale on the first edit instead of deleting it: the orange stays on
+  // screen, and the ↻ button on the row re-runs that validator against the current
+  // board (which makes its flags fresh again). Colouring is not an edit (it only sets
+  // inline `style`, which the observer doesn't watch), so our own repaint can't
+  // self-stale.
+  var validatorHilite = { byName: Object.create(null), keys: new Set(), liveKeys: new Set(), observer: null, key: null };
 
   function validatorHighlightMode() { return settings.validateHighlightMode === true; }
   function validatorHighlightColor() { return settings.validateHighlightColor || DEFAULTS.validateHighlightColor; }
@@ -11406,13 +11478,26 @@
   }
   function validatorHiliteActive(name) { return !!validatorHilite.byName[name]; }
   function validatorHiliteAny() { return Object.keys(validatorHilite.byName).length > 0; }
+  function validatorHiliteStale(name) {
+    var e = validatorHilite.byName[name];
+    return !!e && e.stale === true;
+  }
+  function validatorHiliteAnyFresh() {
+    return Object.keys(validatorHilite.byName).some(function (n) { return !validatorHilite.byName[n].stale; });
+  }
+  // VISIBLE orange (fresh or stale) — what is painted, counted and swept by Clear.
   function validatorHiliteHas(cellKey, digit) { return validatorHilite.keys.has(cellKey + ',' + digit); }
+  // TRUSTED orange (fresh only) — the "this digit is impossible" input other code is
+  // allowed to reason from (readValidatorBoardState, Auto-fill).
+  function validatorHiliteRuledOut(cellKey, digit) { return validatorHilite.liveKeys.has(cellKey + ',' + digit); }
   function validatorHiliteRebuildKeys() {
-    var all = new Set();
+    var all = new Set(), live = new Set();
     Object.keys(validatorHilite.byName).forEach(function (n) {
-      validatorHilite.byName[n].forEach(function (k) { all.add(k); });
+      var e = validatorHilite.byName[n];
+      e.set.forEach(function (k) { all.add(k); if (!e.stale) live.add(k); });
     });
     validatorHilite.keys = all;
+    validatorHilite.liveKeys = live;
   }
   // Repaint the centre marks. fixCenterTspan reads the flag store directly, so re-running
   // the ordinary colour pass is the whole of "apply the highlight" — and because the
@@ -11422,23 +11507,35 @@
     var cc = document.getElementById('cell-candidates');
     if (cc) fixAllCenterTspans(cc);
   }
+  // The observer only has to catch the FIRST edit after a run (it marks everything
+  // stale), so it disconnects once nothing is fresh any more.
   function validatorHiliteWatch() {
-    var want = validatorHiliteAny();
+    var want = validatorHiliteAnyFresh();
     if (want && !validatorHilite.observer) {
       var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
         .map(function (s) { return document.querySelector(s); }).filter(Boolean);
       if (!targets.length) return;
-      validatorHilite.observer = new MutationObserver(function () { validatorHiliteClearAll(); });
+      validatorHilite.observer = new MutationObserver(function () { validatorHiliteMarkStale(); });
       targets.forEach(function (t) { validatorHilite.observer.observe(t, { childList: true, subtree: true, characterData: true }); });
     } else if (!want && validatorHilite.observer) {
       validatorHilite.observer.disconnect();
       validatorHilite.observer = null;
     }
   }
+  // The board changed: every flag is now a snapshot of an older board. The orange
+  // STAYS (a highlight lives until the player turns it off) but stops counting as
+  // proof, and each row's ↻ offers to recompute it.
+  function validatorHiliteMarkStale() {
+    if (!validatorHiliteAnyFresh()) return;
+    Object.keys(validatorHilite.byName).forEach(function (n) { validatorHilite.byName[n].stale = true; });
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();
+    if (document.getElementById('sp-validate-menu')) rebuildValidateMenu();
+  }
   function validatorHiliteSet(name, removals) {
     var s = new Set();
     removals.forEach(function (r) { s.add(r.cellKey + ',' + r.digit); });
-    validatorHilite.byName[name] = s;
+    validatorHilite.byName[name] = { set: s, stale: false };
     validatorHiliteRebuildKeys();
     validatorHiliteWatch();
     validatorHiliteRepaint();
@@ -11463,6 +11560,7 @@
     if (!validatorHiliteAny()) return;
     validatorHilite.byName = Object.create(null);
     validatorHilite.keys = new Set();
+    validatorHilite.liveKeys = new Set();
     validatorHiliteWatch();
     validatorHiliteRepaint();
     if (document.getElementById('sp-validate-menu')) rebuildValidateMenu();
@@ -11478,17 +11576,27 @@
            'removed; press the same button again to clear the highlight.';
   }
 
-  // Run ONE validator in highlight mode. Pure compute + flag, synchronous, no board
-  // edit — and a straight toggle: an already-flagged validator just clears its flags.
+  // Run ONE validator in highlight mode: a straight toggle — an already-flagged
+  // validator just clears its flags (that is the only way a highlight ever ends).
   function toggleValidatorHighlight(def, unitFilter) {
     if (actionInProgress) return;
-    var label = validatorLabel(def);
     if (validatorHiliteActive(def.name)) {
       validatorHiliteClear(def.name);
       rebuildValidateMenu();
-      showRemoveInvalidToast('Cleared the "' + label + '" highlight — those candidates are back to normal.', 'success');
+      showRemoveInvalidToast('Cleared the "' + validatorLabel(def) + '" highlight — those candidates are back to normal.', 'success');
       return;
     }
+    runValidatorHighlight(def, unitFilter);
+  }
+  // The flagging half: pure compute + flag, synchronous, no board edit. Replaces
+  // whatever this validator had flagged before (the ↻ re-run path), so it never
+  // merges a fresh result into a stale set.
+  function runValidatorHighlight(def, unitFilter) {
+    if (actionInProgress) return;
+    var label = validatorLabel(def);
+    // A re-run supersedes the previous result, so drop it up front — otherwise a
+    // "nothing found this time" outcome would leave the old orange sitting there.
+    if (validatorHiliteActive(def.name)) validatorHiliteClear(def.name);
     var comp;
     try { comp = def.compute(unitFilter); }
     catch (e) {
@@ -11518,70 +11626,17 @@
       '" again to clear the highlight.'), 'success');
   }
 
-  // Run EVERY detected validator in highlight mode, to the same cross-constraint
-  // fixpoint as the remove-mode run-all: each pass re-reads the board, and because a
-  // flagged mark reads as invalid, one validator's flags immediately constrain the
-  // next. Also a toggle — with anything highlighted, this button clears everything.
-  function runAllValidatorsHighlight(unitFilter) {
+  // Highlight mode has NO run-all (v3.143): the bottom button is "Clear all
+  // highlights" instead, the one master off-switch for every active validator.
+  // (A highlight-mode fixpoint over all validators existed in v3.133–v3.142; it was
+  // removed with the mode's rework — validators are now switched on individually and
+  // stay on, so a one-shot "run everything at once" no longer fits the model.)
+  function clearAllValidatorHighlights() {
     if (actionInProgress) return;
-    if (validatorHiliteAny()) {
-      validatorHiliteClearAll();
-      rebuildValidateMenu();
-      showRemoveInvalidToast('Cleared every highlighted candidate — the board is back to normal.', 'success');
-      return;
-    }
-    var defs = detectedValidators();
-    if (defs.length === 0) { showRemoveInvalidToast('No supported constraints were detected in this puzzle.', 'warning'); return; }
-    var before = markedCellKeys();
-    var t0 = performance.now();
-    var present = {}, notes = {}, unsupported = false, total = 0, passes = 0;
-    var changed = true, guard = 0;
-    while (changed && guard++ < 50) {
-      changed = false;
-      for (var i = 0; i < defs.length; i++) {
-        var def = defs[i], comp;
-        try { comp = def.compute(unitFilter); }
-        catch (e) { console.error('[spDR-fix] VALIDATE highlight failed', def.name, e); continue; }
-        if (comp.note) notes[comp.note] = 1;
-        if (comp.unsupported) { unsupported = true; break; }
-        if (comp[def.noneKey]) continue;
-        present[def.name] = { count: comp[def.countKey] || 0, unitNoun: def.unitNoun };
-        var s = validatorHilite.byName[def.name] || new Set();
-        var added = 0;
-        (comp.removals || []).forEach(function (r) {
-          var k = r.cellKey + ',' + r.digit;
-          if (!s.has(k)) { s.add(k); added++; }
-        });
-        validatorHilite.byName[def.name] = s;   // ran → the row is "on" even if it flagged nothing
-        if (added > 0) { validatorHiliteRebuildKeys(); total += added; changed = true; }
-      }
-      passes++;
-      if (unsupported) break;
-    }
-    if (unsupported) {
-      validatorHilite.byName = Object.create(null); validatorHilite.keys = new Set();
-      showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning');
-      return;
-    }
-    validatorHiliteRebuildKeys();
-    validatorHiliteWatch();
-    validatorHiliteRepaint();
+    if (!validatorHiliteAny()) return;
+    validatorHiliteClearAll();
     rebuildValidateMenu();
-    var noteList = Object.keys(notes);
-    function withNotes(msg) { return noteList.length ? msg + ' ' + noteList.join(' ') : msg; }
-    var names = Object.keys(present);
-    if (names.length === 0) {
-      var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
-      showRemoveInvalidToast(withNotes(noneFoundMsg(nouns, !!unitFilter)), noteList.length ? 'warning' : 'success');
-      return;
-    }
-    var checked = names.map(function (nm) { var p = present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
-    if (total === 0) { showRemoveInvalidToast(withNotes('Checked ' + checked + ' — no invalid candidates to highlight.'), 'success'); return; }
-    var emptied = countEmptiedSince(before);
-    if (emptied > 0) { showRemoveInvalidToast(noValidComboHighlightMsg(checked, total, emptied), 'error'); return; }
-    showRemoveInvalidToast(withNotes('Highlighted ' + total + ' invalid candidate' + (total === 1 ? '' : 's') +
-      ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
-      ' (' + passes + ' pass' + (passes === 1 ? '' : 'es') + '). Press "Clear all highlights" to undo.'), 'success');
+    showRemoveInvalidToast('Cleared every highlighted candidate — the board is back to normal.', 'success');
   }
 
   // Apply ONE validator against the CURRENT board (compute → apply its removals
@@ -11737,16 +11792,25 @@
     if (validatorHighlightMode()) { toggleValidatorHighlight(def, filter); return; }
     runSingleValidator(def, filter);
   }
-  // The "Run all above functions" button: same selection + fog resolution as a
-  // single item, then the cross-constraint fixpoint over every detected validator.
+  // The bottom button. In REMOVE mode it is "Run all above functions": same selection
+  // + fog resolution as a single item, then the cross-constraint fixpoint over every
+  // detected validator. In HIGHLIGHT mode there is no run-all — the same slot is
+  // "Clear all highlights".
   function onRunAllClick() {
     if (actionInProgress) return;
-    if (validatorHighlightMode() && validatorHiliteAny()) { runAllValidatorsHighlight(null); return; }   // = "clear all highlights"
+    if (validatorHighlightMode()) { clearAllValidatorHighlights(); return; }
     var sf = selectionUnitFilter();
     if (!sf.ok) return;
-    var filter = combineFogFilter(sf.filter);
-    if (validatorHighlightMode()) { runAllValidatorsHighlight(filter); return; }
-    runAllValidators(filter);
+    runAllValidators(combineFogFilter(sf.filter));
+  }
+  // The ↻ on a row: run THIS validator again against the board as it is now,
+  // replacing its previous (usually stale) highlight. Same selection + fog gates as
+  // a first run.
+  function onValidatorRefreshClick(def) {
+    if (actionInProgress) return;
+    var sf = selectionUnitFilter();
+    if (!sf.ok) return;
+    runValidatorHighlight(def, combineFogFilter(sf.filter));
   }
   function openValidateMenu() {
     var btn = document.getElementById('sp-validate-btn');
@@ -11791,7 +11855,9 @@
       if (opts.title) it.title = opts.title;
       Object.assign(it.style, {
         display: 'flex', alignItems: 'center', gap: '6px',
-        padding: '6px 9px', borderRadius: '6px',
+        // Small right padding (vs 9px on the left): the icon column is meant to sit
+        // flush with the menu's right edge, in line with the buttons below.
+        padding: '6px 4px 6px 9px', borderRadius: '6px',
         cursor: disabled ? 'default' : 'pointer',
         fontSize: '12px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
@@ -11806,7 +11872,7 @@
       it.appendChild(lbl);
       // The 👁 opts back into pointer-events even on a disabled (ambiguous) row, so a
       // player can still preview which lines it thinks are candidates.
-      if (opts.eyeDef) it.appendChild(makeValidatorEye(opts.eyeDef));
+      if (opts.eyeDef) it.appendChild(makeValidatorIcons(opts.eyeDef));
       it.style.setProperty('color', text, 'important');
       it.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onClick(); });
       if (!disabled) {
@@ -11860,7 +11926,7 @@
       menu.appendChild(sep);
     }
     // A prominent, filled action button (vs the plain validator items) — used for
-    // "Run all above functions".
+    // "Run all above functions" / "Clear all highlights".
     function addButton(label, onClick, tip, opts) {
       opts = opts || {};
       var disabled = opts.disabled === true;
@@ -11894,7 +11960,7 @@
       var row = document.createElement('div');
       Object.assign(row.style, {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-        padding: '6px 9px', borderRadius: '6px', cursor: 'pointer',
+        padding: '6px 4px 6px 9px', borderRadius: '6px', cursor: 'pointer',
         fontSize: '12px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
       });
@@ -11918,7 +11984,7 @@
       slowLbl.appendChild(cb);
       slowLbl.appendChild(document.createTextNode('Slow'));
       row.appendChild(slowLbl);
-      row.appendChild(makeValidatorEye(def));
+      row.appendChild(makeValidatorIcons(def));
 
       var thermoRestBg = thermoActive ? highlightRowBg() : 'transparent';
       row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
@@ -11993,8 +12059,8 @@
         }
         bar.appendChild(b);
       }
+      seg('Highlight it', true, 'Leave the candidates in place and colour them orange — you decide when to remove them. Each validator button works as an on/off toggle: its highlight stays until you switch it off (it does NOT re-run by itself — use the ↻ on the row to run it again against the current board). Orange candidates count as invalid everywhere else (the other validators, Auto-fill, and the Clear buttons).');
       seg('Remove it', false, 'Delete the impossible candidates from the board. A post-run Undo button appears.');
-      seg('Highlight it', true, 'Leave the candidates in place and colour them orange — you decide when to remove them. Each validator button then works as an on/off toggle, and orange candidates count as invalid everywhere else (the other validators, Auto-fill, and the Clear buttons).');
       menu.appendChild(bar);
     }
 
@@ -12019,7 +12085,9 @@
         else if (amb)
           tip = 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
         else if (act)
-          tip = 'Highlighting is ON for this validator — click to clear its orange candidates.';
+          tip = validatorHiliteStale(def.name)
+            ? 'Highlighting is ON for this validator, but the board has changed since it ran — press ↻ to run it again, or click here to switch it off.'
+            : 'Highlighting is ON for this validator — click to clear its orange candidates.';
         // An ACTIVE highlight row stays clickable even when it would otherwise be
         // greyed out: turning a highlight off must never be blocked.
         addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
@@ -12031,18 +12099,24 @@
     // selection-only: that mode narrows every validator to the player's selection
     // (and re-enables the ambiguous ones, which would then apply every rival line
     // type to the same selected line). With it ticked, run validators one at a time.
-    // In highlight mode it doubles as the master "clear everything" button.
+    // HIGHLIGHT mode has no run-all at all (v3.143): validators are switched on one at
+    // a time and STAY on, so the slot is the master off-switch instead — greyed out
+    // while nothing is highlighted.
     if (detected.length > 0) {
-      var clearAll = hiMode && validatorHiliteAny();
-      addButton(clearAll ? 'Clear all highlights' : 'Run all above functions', onRunAllClick,
-        clearAll
-          ? 'Send every highlighted candidate back to its normal colour.'
-          : (selOnly
+      if (hiMode) {
+        var anyHi = validatorHiliteAny();
+        addButton('Clear all highlights', onRunAllClick,
+          anyHi
+            ? 'Switch every highlighting validator off — all orange candidates go back to their normal colour.'
+            : 'Nothing is highlighted right now. Click a validator above to highlight its invalid candidates.',
+          { disabled: !anyHi, active: anyHi });
+      } else {
+        addButton('Run all above functions', onRunAllClick,
+          selOnly
             ? 'Disabled while "Validate selection only" is ticked — run the validators one at a time from the list above.'
-            : (hiMode
-              ? 'Run every validator listed above in a loop until nothing more can be flagged, highlighting the results in orange (each validator reads the previous one\'s orange marks as invalid).'
-              : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).')),
-        { disabled: selOnly && !clearAll, active: clearAll });
+            : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).',
+          { disabled: selOnly });
+      }
     }
     addCheckbox('Validate selection only', 'validateSelectionOnly',
       'Only validate clues whose every cell is inside the current selection — a partially-selected clue is skipped. Also re-enables any greyed-out validator whose line type couldn\'t be identified, and disables "Run all above functions". Exception: German whisper lines DO run on a partial selection (only the selected cells change; the rest of the line is still read). Resets on page reload.',
@@ -13924,7 +13998,7 @@
         if (sp.classList.contains('conflict')) return;              // red = invalid
         var d = sp.getAttribute('data-val');
         if (!d) return;
-        if (validatorHiliteHas(ck, Number(d))) return;              // orange = a validator ruled it out
+        if (validatorHiliteRuledOut(ck, Number(d))) return;         // fresh orange = a validator ruled it out
         digits.push(d);
       });
       map[ck] = digits;

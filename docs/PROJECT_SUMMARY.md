@@ -471,14 +471,19 @@ way so it stays low-maintenance.
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
-  `makeValidatorEye`. Single toggle: `showValidateButton` (the per-validator enable keys were
-  removed v3.104). **Remove vs Highlight (v3.133, control reworked v3.134)** — a segmented control at
+  `makeValidatorEye` / `makeValidatorIcons` / `makeValidatorRefresh`. Single toggle:
+  `showValidateButton` (the per-validator enable keys were
+  removed v3.104). **Highlight vs Remove (v3.133, control reworked v3.134, highlight reworked +
+  made the DEFAULT v3.143)** — a segmented control at
   the bottom of the menu (`addModeSegments`, `validateHighlightMode`): Highlight paints the
   unsupported candidates **orange** instead of deleting them and turns each validator row into an
-  on/off toggle (`validatorHilite` store, `toggleValidatorHighlight` / `runAllValidatorsHighlight`,
+  on/off toggle (`validatorHilite` store, `toggleValidatorHighlight` / `runValidatorHighlight`,
   `validatorHiliteFillFor` inside `fixCenterTspan`). An orange mark reads as invalid to
   `readValidatorBoardState`, `fsScanValid` and the Clear/Clear All sweep, so validators still
-  cross-feed; flags are dropped on any board edit. **Fog (v3.133)** — the per-clue gate
+  cross-feed. A highlight now **persists until the player switches that validator off**: a board edit
+  marks the flags *stale* (kept on screen, no longer trusted as input — `validatorHiliteRuledOut` vs
+  `validatorHiliteHas`) and the row's **↻ "Run this validator again"** recomputes it. Highlight mode
+  has **no run-all**; the bottom button is "Clear all highlights" (`clearAllValidatorHighlights`). **Fog (v3.133)** — the per-clue gate
   (`combineFogFilter`) still governs runs, but the 👁 preview is disabled on a fog puzzle
   (`puzzleHasFog()`, tooltip explains why) because it draws clues that are still hidden; the same
   predicate disables Easy Shade outright (`effRegionColorFill` / `effShadedRegionColor`). Full detail

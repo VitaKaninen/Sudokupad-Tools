@@ -186,7 +186,8 @@ Ambiguous mode REQUIRES a selection → `{needSelection:true}` (tailored toast i
 (`actionInProgress` lock, full `revertToSnapshot` on abort, combined toast incl. an emptied-cells ⚠
 warning). Wired in `buildAllUI`; `getToastBottom` clears the new button. **Per-row hover eyeball
 (v3.91; objects + ambiguity v3.92):** every validator menu row (incl. the thermo row with its Slow
-checkbox) carries a `makeValidatorEye(def)` 👁 at its right edge — hovering highlights the actual
+checkbox) carries a `makeValidatorEye(def)` 👁 at its right edge (v3.143: inside `makeValidatorIcons`,
+alongside the highlight-mode ↻) — hovering highlights the actual
 clue **OBJECTS** this validator would act on (the dots, lines, cages, thermos, arrows — NOT the
 cells that hold them) via `spdrHi.showObjects(objs)` (same overlay the settings eyeballs use;
 hold-bright until mouse-out, click pulses). It draws **only what a plain click WOULD validate** —
@@ -252,39 +253,71 @@ also disables **Easy Shade** outright (`effRegionColorFill`/`effShadedRegionColo
 render site, and the button greys out with a tooltip) — region colouring painted region shapes
 straight through the fog, and unlike a validator there is no per-clue narrowing that makes it safe.
 
-## Remove vs Highlight (v3.133)
+## Highlight vs Remove (v3.133; reworked v3.143)
 
 The menu's bottom row is a **segmented control** — caption "When a validator finds an invalid digit:"
-over two mutually-exclusive buttons, `[ Remove it | Highlight it ]`, the chosen one filled
+over two mutually-exclusive buttons, `[ Highlight it | Remove it ]`, the chosen one filled
 (`addModeSegments`, `settings.validateHighlightMode`, persisted). It is deliberately NOT an on/off
 switch: v3.133 shipped one labelled "Remove invalid digits" in its off position, which reads as
 "removing is turned OFF" and invites you to switch it on — getting you the opposite behaviour. Two
 actions, neither of which is "nothing", is a segmented control, not a toggle.
 
-- **Remove** (default) — unchanged: a validator deletes the unsupported candidates via the paste
-  path and arms the post-run Undo.
-- **Highlight** — nothing on the board is modified. The unsupported candidates are painted **orange**
-  and each validator row becomes an **on/off toggle** (press again → back to blue); the run-all
-  button becomes **"Clear all highlights"** while anything is flagged. Since no edit is made, the
-  post-run Undo never arms.
+- **Highlight** (**the default since v3.143**, and the left segment) — nothing on the board is
+  modified. The unsupported candidates are painted **orange** and each validator row is an **on/off
+  toggle** (press again → back to blue). Since no edit is made, the post-run Undo never arms.
+- **Remove** — a validator deletes the unsupported candidates via the paste path and arms the
+  post-run Undo.
 
-Flags live in `validatorHilite.byName` as per-validator sets of `"col,row,digit"`, flattened into
-`validatorHilite.keys` for lookup. Three properties carry the design:
+`validateHighlightModeDefaulted` is a one-shot migration flag (checked right after `loadSettings()`):
+a profile saved before v3.143 stores the old `false`, which `Object.assign` would keep, so the mode
+is forced on **once** and the flag remembers that it happened — a later deliberate switch back to
+"Remove it" sticks.
+
+### The v3.143 highlight rework
+
+1. **No run-all in highlight mode.** The bottom button is always **"Clear all highlights"** (greyed
+   with an explanatory tooltip when nothing is flagged) — the master off-switch,
+   `clearAllValidatorHighlights()`. `runAllValidatorsHighlight` (the highlight-mode fixpoint over
+   every detected validator, v3.133–v3.142) is **gone**: validators are now switched on one at a
+   time and stay on, so a one-shot "run everything" no longer fits the model. Remove mode keeps
+   "Run all above functions" unchanged.
+2. **A highlight persists until the player switches it off** — see the staleness rule below. It
+   never re-runs by itself and never updates as the grid changes.
+3. **Per-row ↻ "Run this validator again"** (`makeValidatorRefresh` → `onValidatorRefreshClick` →
+   `runValidatorHighlight`, the flagging half split out of `toggleValidatorHighlight`). It applies
+   the same selection + fog gates as a first run and **drops the row's previous flags up front**, so
+   a "nothing found this time" outcome can't leave the old orange behind. Rendered only in highlight
+   mode; on a row whose validator isn't currently highlighting the slot is present but
+   `visibility:hidden` + inert, which keeps the icon columns aligned.
+4. **Icon alignment.** `makeValidatorIcons(def)` wraps 👁 (+ ↻) in one `marginLeft:auto` container,
+   each icon in an identical fixed 18px box (`VALIDATOR_ICON_BOX`), and the rows' right padding
+   dropped 9px → 4px — so both icons form straight columns flush with the menu's right edge on every
+   row, including the Thermo row with its "Slow" checkbox (whose own `gap` used to shift them).
+
+Flags live in `validatorHilite.byName` as per-validator `{ set:Set("col,row,digit"), stale:bool }`,
+flattened into **two** lookups: `validatorHilite.keys` = every flag (what is **painted**, via
+`validatorHiliteHas`) and `validatorHilite.liveKeys` = the non-stale flags only (what other code may
+**reason from**, via `validatorHiliteRuledOut`). Three properties carry the design:
 
 1. **An orange mark is invalid everywhere** — that's the whole claim, so every reader of "invalid"
    honours it: `readValidatorBoardState` drops a flagged digit exactly as it drops a red `.conflict`
    one, `fsScanValid` (Auto-fill) does the same, and the **Clear / Clear All buttons sweep orange
    marks along with red ones** (`_removeInvalidPencilmarksInternal` collects them after the two
    `.conflict` scans, deduped against those; `countVisibleConflicts` counts them so the multi-pass
-   loop's "anything left?" test sees them). So highlight-mode
-   validators cross-feed each other precisely the way a remove-mode run-all does —
-   `runAllValidatorsHighlight` is the same fixpoint loop with "add to the flag set" in place of
-   "apply removals", and it is fully synchronous (compute only, no DOM ops to await).
-2. **Highlights are a snapshot.** A `MutationObserver` on the cell layers drops **all** flags the
-   moment the player edits anything (`validatorHiliteWatch`), and `validatorHiliteCheckPuzzle` drops
-   them on SPA navigation. A stale flag would feed a wrong "this digit is impossible" into the next
-   run — an unsound elimination, which the contract below forbids. Our own repaint only sets inline
-   `style` (not observed), so it can't self-revoke.
+   loop's "anything left?" test sees them). So highlight-mode validators still cross-feed: turning
+   one on, then another, gives the second the first's orange as invalid. The **reasoning** readers
+   (`readValidatorBoardState`, `fsScanValid`) use `validatorHiliteRuledOut` (fresh only); the
+   **visual/WYSIWYG** ones (painting, the Clear sweep, `countVisibleConflicts`) use
+   `validatorHiliteHas` (everything the player can see is orange).
+2. **Highlights are a snapshot — and they PERSIST (v3.143).** A flag is *not* revoked when the
+   player edits; the `MutationObserver` on the cell layers instead marks every flag **stale**
+   (`validatorHiliteMarkStale`), so the orange stays on screen until the player switches that
+   validator off, while stopping short of counting as proof: a stale flag would feed a wrong "this
+   digit is impossible" into the next run — an unsound elimination, which the contract below
+   forbids. The row's ↻ recomputes it against the current board (fresh again); the ↻ brightens to
+   the highlight colour while stale. The observer disconnects once nothing is fresh (its only job is
+   catching the first edit after a run). `validatorHiliteCheckPuzzle` still drops flags outright on
+   SPA navigation. Our own repaint only sets inline `style` (not observed), so it can't self-stale.
 3. **Red stays red.** `fixCenterTspan` checks the flag store *after* the `.conflict` and `.given`
    branches, so only ordinary blue marks are recoloured. Rendering reads the store rather than the
    run, so the orange survives every board repaint for free — the pencilmark observer already
