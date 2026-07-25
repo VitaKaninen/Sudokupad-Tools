@@ -321,6 +321,16 @@ is forced on **once** and the flag remembers that it happened — a later delibe
      only; flags accumulate, so it settles in a few rounds). `validatorHiliteSet` /
      `validatorHiliteClear` return whether the stored set actually moved — that is the loop's
      signal.
+   - **NEVER REASON FROM YOUR OWN CONCLUSION (v3.150)** — the rule that makes the loop above sound.
+     A validator's flags were derived from those candidates being PRESENT, so a re-run that trusts
+     its own orange sees the clue as already satisfied, returns zero removals, and **wipes the
+     highlight it was refreshing**. (v3.149's loop did exactly that: round 1 flagged, round 2
+     erased, and 12 rounds ended on an erase — so every board edit blanked the orange while the ↻
+     stayed lit, and the accumulated result was unstable/under-reported.) The manual path was
+     always safe (`runValidatorHighlight` drops its own flags before computing);
+     `runAutoValidators` wraps each `compute` in `validatorHiliteSuppressOwn(def.name)` instead —
+     `validatorHiliteRuledOut` then reads `liveKeys` MINUS that validator's own keys, so a key
+     another fresh validator also flagged still counts, and no paint flickers.
    - **A manual run also kicks the auto pass** (v3.149): `runValidatorHighlight` calls
      `scheduleAutoValidators()` after flagging. Its new orange is a new "this digit is impossible"
      for every ↻-on validator, but it changes no cell text, so the observer would never see it.

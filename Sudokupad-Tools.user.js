@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.149.0
+// @version      3.150.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.149.0';
+  var SCRIPT_VERSION = '3.150.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -11677,7 +11677,30 @@
   function validatorHiliteHas(cellKey, digit) { return validatorHilite.keys.has(cellKey + ',' + digit); }
   // TRUSTED orange (fresh only) — the "this digit is impossible" input other code is
   // allowed to reason from (readValidatorBoardState, Auto-fill).
-  function validatorHiliteRuledOut(cellKey, digit) { return validatorHilite.liveKeys.has(cellKey + ',' + digit); }
+  //
+  // NEVER REASON FROM YOUR OWN CONCLUSION (v3.150). A validator RE-RUN must not see its
+  // own flags: they were derived from these candidates being present, so trusting them
+  // makes the clue look already-satisfied and the re-run returns ZERO removals — which
+  // then wipes the very highlight it was refreshing. The manual path avoids this by
+  // dropping its flags before computing (runValidatorHighlight); the auto pass can't
+  // (it would flicker the paint N×12 times), so it SUPPRESSES them for the duration of
+  // that one compute: liveKeys minus this validator's own keys, so a key another fresh
+  // validator also flagged still counts.
+  var validatorHiliteSuppressKeys = null;
+  function validatorHiliteSuppressOwn(name) {
+    validatorHiliteSuppressKeys = null;
+    if (!name) return;
+    var live = new Set();
+    Object.keys(validatorHilite.byName).forEach(function (n) {
+      if (n === name) return;
+      var e = validatorHilite.byName[n];
+      if (!e.stale) e.set.forEach(function (k) { live.add(k); });
+    });
+    validatorHiliteSuppressKeys = live;
+  }
+  function validatorHiliteRuledOut(cellKey, digit) {
+    return (validatorHiliteSuppressKeys || validatorHilite.liveKeys).has(cellKey + ',' + digit);
+  }
   function validatorHiliteRebuildKeys() {
     var all = new Set(), live = new Set();
     Object.keys(validatorHilite.byName).forEach(function (n) {
@@ -11786,8 +11809,11 @@
       var changed = false;
       defs.forEach(function (def) {
         var comp;
+        // Its own flags are suppressed for this compute — see validatorHiliteRuledOut.
+        validatorHiliteSuppressOwn(def.name);
         try { comp = def.compute(filter); }
         catch (e) { console.error('[spDR-fix] VALIDATE auto-update failed', def.name, e); return; }
+        finally { validatorHiliteSuppressOwn(null); }
         if (comp.unsupported) return;
         if (comp[def.noneKey]) { if (validatorHiliteClear(def.name)) changed = true; return; }
         if (validatorHiliteSet(def.name, comp.removals || [])) changed = true;
