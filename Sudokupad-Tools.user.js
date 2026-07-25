@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.147.0
+// @version      3.148.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.147.0';
+  var SCRIPT_VERSION = '3.148.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -11242,25 +11242,35 @@
     }
     return out;
   }
-  // The 👁 span for a validator menu row: three gestures on one icon (v3.147).
-  //   HOVER      — draw the objects this validator would act on; gone on mouse-out.
-  //   CLICK      — PIN them: they stay drawn after the pointer leaves, until the same
-  //                eye (or another one) is clicked again. The icon shows the pin.
-  //   LONG PRESS — blink them while held, for picking one overlay out of a busy grid.
-  // spdrHi is ONE shared overlay, so pinning a second eye replaces the first — the
-  // pin is a single name, not a set. It is dropped when the menu closes or the puzzle
+  // The 👁 span for a validator menu row: two gestures on one icon (v3.148).
+  //   HOVER — ISOLATE: draw only this validator's objects (any pinned ones step aside
+  //           for as long as the pointer is on the icon), and after 350ms start
+  //           BLINKING them, for picking one overlay out of a busy grid. On mouse-out
+  //           the pinned set comes straight back.
+  //   CLICK — PIN them: they stay drawn after the pointer leaves. Pins ACCUMULATE —
+  //           several eyes can be on at once. Clicking a lit eye drops just that one.
+  // spdrHi is one shared overlay, but showObjects takes a LIST, so several pins are
+  // simply drawn from the concatenated descriptors of every pinned def — there is no
+  // "one pin at a time" limit. Pins are dropped when the menu closes or the puzzle
   // changes, so a pinned overlay can never outlive its off switch.
   // stopPropagation so a click never triggers the row's run handler.
-  var validatorEyePin = null;      // def.name of the pinned eye, or null
-  var validatorEyePinDef = null;   // …and its def, so the overlay can be redrawn
-  function validatorEyeUnpin() {
-    if (!validatorEyePin) return;
-    validatorEyePin = null; validatorEyePinDef = null;
+  var validatorEyePins = [];       // [{name, def}] in click order; the drawn set
+  function validatorEyePinned(name) {
+    return validatorEyePins.some(function (p) { return p.name === name; });
+  }
+  function validatorEyeUnpin() {   // drop them ALL (menu close / puzzle change)
+    if (!validatorEyePins.length) return;
+    validatorEyePins = [];
     try { spdrHi.blink(false); spdrHi.hide(); } catch (e) {}
   }
-  function redrawPinnedEye() {
-    if (!validatorEyePinDef) return;
-    var objs = []; try { objs = validatorClueObjects(validatorEyePinDef); } catch (e) {}
+  // Draw the union of every pinned eye — one showObjects call over the concatenated
+  // descriptors, so the sets share the layer instead of replacing one another.
+  function redrawPinnedEyes() {
+    if (!validatorEyePins.length) { try { spdrHi.hide(); } catch (e) {} return; }
+    var objs = [];
+    validatorEyePins.forEach(function (p) {
+      try { objs = objs.concat(validatorClueObjects(p.def) || []); } catch (e) {}
+    });
     try { spdrHi.showObjects(objs); } catch (e) {}
   }
   // Both row icons (👁 and ↻) live in identical fixed boxes, inside one right-aligned
@@ -11284,20 +11294,20 @@
   }
   function makeValidatorEye(def) {
     var noun0 = def.unitNoun || def.name;
-    var pressTimer = null, longPressed = false, hovering = false;
+    var blinkTimer = null, hovering = false;
     var ic = document.createElement('span');
     ic.textContent = '👁';
     ic.dataset.spdrEye = def.name;
     Object.assign(ic.style, VALIDATOR_ICON_BOX, { fontSize: '16px', opacity: '0.55', filter: 'grayscale(1)' });
-    function isPinned() { return validatorEyePin === def.name; }
+    function isPinned() { return validatorEyePinned(def.name); }
     // A pinned eye stays lit with the pointer away — that IS the pin's indicator.
     function sync() {
       var on = isPinned() || hovering;
       ic.style.opacity = on ? '1' : '0.55';
       ic.style.filter  = on ? 'none' : 'grayscale(1)';
       ic.title = isPinned()
-        ? 'Click: stop showing the ' + noun0 + 's · hold: blink'
-        : 'Hover: show the ' + noun0 + 's · click: keep shown · hold: blink';
+        ? 'Click: stop showing the ' + noun0 + 's · hover: show these alone, blinking'
+        : 'Hover: show the ' + noun0 + 's (they blink after a moment) · click: keep shown';
     }
     ic._spdrEyeSync = sync;
     // Draw this validator's objects. Returns them, so the caller can tell "nothing
@@ -11319,7 +11329,14 @@
         spdrTip.show(e.clientX, e.clientY, 'Preview disabled — this puzzle has Fog of War, and highlighting the ' + (def.unitNoun || def.name) + 's would show you clues you haven’t uncovered yet. The validator itself still works: it only checks clues whose cells are all revealed.');
         return;
       }
+      // ISOLATE while hovered: this draw overwrites the pinned union, so the eye under
+      // the pointer is the only thing on screen. After 350ms it starts blinking, which
+      // is the old long-press gesture made passive. mouseleave restores the pins.
       var objs = draw();
+      if (objs.length) blinkTimer = setTimeout(function () {
+        blinkTimer = null;
+        try { spdrHi.blink(true); } catch (e2) {}
+      }, 350);
       var cls = null; try { cls = validatorClassify(def); } catch (e2) {}
       var noun = noun0;
       if (cls && cls.mode === 'ambiguous') {
@@ -11336,44 +11353,27 @@
     });
     ic.addEventListener('mousemove', function (e) { spdrTip.move(e.clientX, e.clientY); });
     ic.addEventListener('mouseleave', function () {
-      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-      // Releasing outside the icon fires no click, so the long-press flag has to be
-      // dropped here too — otherwise it would swallow the NEXT click.
-      longPressed = false;
+      if (blinkTimer) { clearTimeout(blinkTimer); blinkTimer = null; }
       hovering = false; sync();
       spdrTip.hide();
       spdrHi.blink(false);
-      // A PINNED eye keeps its overlay when the pointer leaves — that is the pin.
-      // Any OTHER eye leaving restores the pinned overlay rather than clearing the
-      // screen, since hovering it overwrote the one shared layer.
-      if (isPinned()) { draw(); return; }
-      spdrHi.hide();
-      if (validatorEyePin) redrawPinnedEye();
+      // Leaving the icon ends the isolate: whatever is pinned (this eye included, if
+      // it was clicked on) is redrawn as one union, or the layer clears if nothing is.
+      redrawPinnedEyes();
     });
-    // Hold to blink. The timer both starts the blink and marks the press as a long
-    // one, so releasing it doesn't also toggle the pin.
-    ic.addEventListener('mousedown', function (e) {
-      e.stopPropagation(); e.preventDefault();
-      longPressed = false;
-      if (puzzleHasFog()) return;
-      pressTimer = setTimeout(function () {
-        pressTimer = null; longPressed = true;
-        draw(); spdrHi.blink(true);
-      }, 350);
-    });
-    ic.addEventListener('mouseup', function (e) {
-      e.stopPropagation();
-      if (pressTimer) { clearTimeout(pressTimer); pressTimer = null; }
-      if (longPressed) spdrHi.blink(false);
-    });
+    // Swallow the press so it never reaches the row's run handler, and never starts a
+    // text selection. The pin toggles on `click`.
+    ic.addEventListener('mousedown', function (e) { e.stopPropagation(); e.preventDefault(); });
+    ic.addEventListener('mouseup', function (e) { e.stopPropagation(); });
     ic.addEventListener('click', function (e) {
       e.stopPropagation(); e.preventDefault();
-      if (longPressed) { longPressed = false; return; }   // that was the blink gesture
       if (puzzleHasFog()) return;                         // mouseenter already said why
-      var wasPinned = isPinned();
-      validatorEyeUnpin();                                // one overlay ⇒ one pin
-      if (!wasPinned) { validatorEyePin = def.name; validatorEyePinDef = def; draw(); }
-      refreshValidatorEyeIcons();                         // repaint every eye's state
+      if (isPinned()) validatorEyePins = validatorEyePins.filter(function (p) { return p.name !== def.name; });
+      else validatorEyePins.push({ name: def.name, def: def });
+      // The pointer is still on this icon, so the isolate view stays as it is — the
+      // new pin set only takes over on mouse-out. Only the icons need repainting, and
+      // in place: rebuilding the menu would re-measure its width and drop hover state.
+      refreshValidatorEyeIcons();
     });
     return ic;
   }
