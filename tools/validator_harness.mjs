@@ -85,7 +85,7 @@ const NAMES = [
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
-  'expandLineChain', 'fpuzCellKey', 'regionSumSegments',
+  'expandLineChain', 'fpuzCellKey', 'regionSumSegments', 'thermoBulbShaftCompatible',
   // region colouring
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
@@ -470,6 +470,25 @@ check('region-sum: loop starting mid-segment joins the wrap run',
    ['1,5', '1,4', '1,3'], ['1,2', '2,1']]);
 check('region-sum: loop inside ONE box collapses to a single segment (no constraint)',
   F.regionSumSegments(['0,0', '1,0', '1,1', '0,1', '0,0'], box9).length, 1);
+// ── thermo bulb/shaft colour family (v3.145) ─────────────────────────────────
+// Real thermos whose bulb is a DARKER SHADE of the shaft must still detect —
+// that's why the exact-fill test was dropped for geometry in v3.82.
+check('bulb: #999 bulb on #ccc shaft (9zsl8s2gjl, syvmhn0tqy)',
+  F.thermoBulbShaftCompatible('#999999', '#cccccc'), true);
+check('bulb: grey bulb on this puzzle\'s grey shaft (#cccf)',
+  F.thermoBulbShaftCompatible('#cccf', '#cccf'), true);
+check('bulb: dark red bulb on a light red shaft (same hue, different shade)',
+  F.thermoBulbShaftCompatible('#cc0000', '#ff9999'), true);
+// `gz8mfm0r3a` (m1n3, "Visible Inclusions") — a BLUE odd/even circle on the end
+// of an ORANGE Dutch whisper is not a bulb.
+check('bulb: blue parity circle on an orange whisper is NOT a bulb (gz8mfm0r3a)',
+  F.thermoBulbShaftCompatible('#09d7f47d', '#ffa600ff'), false);
+check('bulb: grey circle on a coloured shaft is not one object',
+  F.thermoBulbShaftCompatible('#999999', '#ffa600'), false);
+check('bulb: coloured circle on a grey shaft is not one object',
+  F.thermoBulbShaftCompatible('#09d7f4', '#cccccc'), false);
+check('bulb: unparseable colour falls back to geometry-only (pre-v3.145 behaviour)',
+  F.thermoBulbShaftCompatible('url(#grad)', '#ccc'), true);
 check('fpuzCellKey R3C6 → col,row', F.fpuzCellKey('R3C6'), '5,2');
 check('fpuzCellKey r10c1', F.fpuzCellKey('r10c1'), '0,9');
 check('fpuzCellKey garbage → null', F.fpuzCellKey('X9Y9'), null);

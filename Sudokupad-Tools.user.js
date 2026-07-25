@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.144.0
+// @version      3.145.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.144.0';
+  var SCRIPT_VERSION = '3.145.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9972,7 +9972,8 @@
   // Real thermometer BULBS as rendered in the DOM: near-full-cell CIRCULAR
   // `#underlay rect`s that aren't Kropki dots (white/black). Shared by the DOM
   // thermo reader (getThermoChainsFromDOM) and the model bulb-corroboration gate
-  // (getThermoChainsFromModel). Returns [{ cx, cy, fill }] in SVG pixel space.
+  // (getThermoChainsFromModel). Returns [{ cx, cy, raw }] in SVG pixel space —
+  // `raw` is the fill AS AUTHORED, for the colour-family test below.
   function getThermoBulbCentres(cs) {
     var bulbs = [];
     if (!cs) return bulbs;
@@ -9985,19 +9986,50 @@
       var fill = norm(r.getAttribute('fill'));
       if (!fill || fill === 'FFFFFF' || fill === '000000') return;                // not a Kropki-style dot
       var x = parseFloat(r.getAttribute('x') || 0), y = parseFloat(r.getAttribute('y') || 0);
-      bulbs.push({ cx: x + w / 2, cy: y + h / 2, fill: fill });
+      bulbs.push({ cx: x + w / 2, cy: y + h / 2, raw: r.getAttribute('fill') });
     });
     return bulbs;
   }
-  // The bulb cells as a { "col,row": 1 } set — the model gate below asks "is there
-  // a real rendered bulb at this chain endpoint?".
-  function getThermoBulbCellKeys() {
+  // ── A BULB AND ITS SHAFT ARE THE SAME COLOUR FAMILY (v3.145) ────────────────
+  // A cell-sized circle at one end of a line is NOT proof of a thermometer: every
+  // ODD/EVEN puzzle paints cell-sized circles too, and one landing on a whisper's
+  // endpoint made `gz8mfm0r3a` (m1n3, "Visible Inclusions") read its orange Dutch
+  // whisper R6C7→R9C8 as a thermo — a BLUE parity circle at R6C7, on a grid whose
+  // real thermos are grey circles on grey shafts.
+  // Setters draw a thermo as ONE object: bulb and shaft share a colour. What they
+  // do NOT share is a shade — the bulb is routinely darker (a #999 bulb on a #ccc
+  // line: `9zsl8s2gjl`, `syvmhn0tqy`), which is why the pre-v3.82 exact-fill test
+  // was dropped for pure geometry in the first place. So compare the FAMILY, not
+  // the value: same hue (±30°) for chromatic pairs, and grey-with-grey for
+  // achromatic ones (which is what a #999/#ccc pair is). A grey bulb on a red
+  // shaft, or this puzzle's blue-on-orange, is not one object.
+  // Deliberately one-sided: a mismatch means "not detectable as a thermo", never
+  // "detected as something else" — the line falls through to whatever validator
+  // its own rules cue (here the Dutch whisper), and a genuinely odd-coloured
+  // thermo is simply skipped rather than validated wrongly. Same safe
+  // under-detection policy as the rest of the thermo reader.
+  // Unparseable colour → true, so a shape we can't read a colour off behaves
+  // exactly as it did before this gate existed.
+  function thermoBulbShaftCompatible(bulbColor, shaftColor) {
+    var b = parseColor(bulbColor), s = parseColor(shaftColor);
+    if (!b || !s) return true;
+    var bh = rgbToHsl(b.r, b.g, b.b), sh = rgbToHsl(s.r, s.g, s.b);
+    function achromatic(c) { return c[1] <= 0.18 || c[2] <= 0.06 || c[2] >= 0.97; }
+    var ba = achromatic(bh), sa = achromatic(sh);
+    if (ba || sa) return ba && sa;                       // grey/black/white pairs only with its own kind
+    var d = Math.abs(bh[0] - sh[0]);
+    if (d > 0.5) d = 1 - d;                              // hue is a circle
+    return d <= 30 / 360;
+  }
+  // The bulb cells as { "col,row": [fill, …] } — the model gate below asks "is
+  // there a real rendered bulb at this chain endpoint, in this line's colour?".
+  function getThermoBulbCellFills() {
     var cs = getGridCellSize();
     if (!cs) return {};
     var N = detectGridSize(), set = {};
     getThermoBulbCentres(cs).forEach(function (b) {
       var col = Math.round(b.cx / cs - 0.5), row = Math.round(b.cy / cs - 0.5);
-      if (col >= 0 && col < N && row >= 0 && row < N) set[col + ',' + row] = 1;
+      if (col >= 0 && col < N && row >= 0 && row < N) (set[col + ',' + row] = set[col + ',' + row] || []).push(b.raw);
     });
     return set;
   }
@@ -10011,20 +10043,20 @@
     var N = detectGridSize();
     function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
 
-    var groups = new Map();   // line object identity -> wayPoints
+    var groups = new Map();   // line object identity -> the line (wayPoints + colour)
     cp.thermos.forEach(function (t) {
       if (!t || !t.line || !Array.isArray(t.line.wayPoints)) return;
-      if (!groups.has(t.line)) groups.set(t.line, t.line.wayPoints);
+      if (!groups.has(t.line)) groups.set(t.line, t.line);
     });
     var chains = [];
-    groups.forEach(function (wp) {
-      var chain = [];
+    groups.forEach(function (line) {
+      var wp = line.wayPoints, chain = [];
       for (var i = 0; i < wp.length; i++) {
         var col = Math.round(wp[i][0] - 0.5), row = Math.round(wp[i][1] - 0.5);
         if (!inGrid(col, row)) { chain = null; break; }
         chain.push(col + ',' + row);
       }
-      if (chain && chain.length >= 2) chains.push(chain);
+      if (chain && chain.length >= 2) chains.push({ keys: chain, color: line.color });
     });
 
     // cp.thermos IS NOT A RELIABLE "these are thermometers" LIST on scl/SudokuMaker
@@ -10038,11 +10070,19 @@
     // real rendered bulb sits at EXACTLY one endpoint, and orient it bulb-first
     // (buildThermoTrees roots at chain[0]). fpuz never reaches here — it reads
     // nativeLinesFor('thermo') instead — so this gate is scoped to the model path.
-    var bulbKeys = getThermoBulbCellKeys();
+    // The bulb must also be the LINE'S OWN COLOUR FAMILY (v3.145) — an odd/even
+    // circle that happens to sit on a dumped line's end is not a bulb; see
+    // thermoBulbShaftCompatible.
+    var bulbFills = getThermoBulbCellFills();
     var kept = [];
-    chains.forEach(function (chain) {
-      var atStart = bulbKeys[chain[0]] ? 1 : 0;
-      var atEnd = bulbKeys[chain[chain.length - 1]] ? 1 : 0;
+    chains.forEach(function (c) {
+      var chain = c.keys;
+      function bulbAt(k) {
+        var fills = bulbFills[k];
+        return !!fills && fills.some(function (f) { return thermoBulbShaftCompatible(f, c.color); });
+      }
+      var atStart = bulbAt(chain[0]) ? 1 : 0;
+      var atEnd = bulbAt(chain[chain.length - 1]) ? 1 : 0;
       if (atStart + atEnd !== 1) return;                 // no bulb / both ends → not a verifiable thermo
       kept.push(atStart ? chain : chain.slice().reverse());
     });
@@ -10101,15 +10141,21 @@
       }
 
       // A thermo shaft touches its bulb at exactly ONE end. Match by GEOMETRY
-      // (an endpoint coincides with a bulb centre), NOT by colour: the bulb is
-      // routinely a darker shade than the shaft (e.g. a #999 bulb on a #ccc
-      // line — sudokupad.app/9zsl8s2gjl, sudokupad.app/syvmhn0tqy), so the old
-      // bulb-fill === shaft-stroke test silently missed ordinary thermos.
+      // (an endpoint coincides with a bulb centre) plus COLOUR FAMILY — never the
+      // exact fill, because the bulb is routinely a darker shade than the shaft
+      // (a #999 bulb on a #ccc line — sudokupad.app/9zsl8s2gjl,
+      // sudokupad.app/syvmhn0tqy), which is what the old bulb-fill ===
+      // shaft-stroke test kept missing. Geometry ALONE isn't enough either: an
+      // odd/even circle sitting on some other line's endpoint claims it
+      // (`gz8mfm0r3a`) — see thermoBulbShaftCompatible.
       // Requiring EXACTLY one bulb-end keeps it narrow: a cosmetic line circled
       // at BOTH ends (e.g. a between-line or a palindrome) is not mistaken for a
       // thermometer.
+      var strokeRaw = p.getAttribute('stroke');
       function matches(pt) {
-        return bulbs.some(function (b) { return Math.hypot(b.cx - pt[0], b.cy - pt[1]) < tol; });
+        return bulbs.some(function (b) {
+          return Math.hypot(b.cx - pt[0], b.cy - pt[1]) < tol && thermoBulbShaftCompatible(b.raw, strokeRaw);
+        });
       }
       var startsAtBulb = matches(pts[0]), endsAtBulb = matches(pts[pts.length - 1]);
       if (startsAtBulb === endsAtBulb) return;                      // need exactly one bulb end

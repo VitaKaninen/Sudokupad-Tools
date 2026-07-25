@@ -422,10 +422,31 @@ per-cell "a-b" encoding was skipped in favour of reading what's actually rendere
 width/height `0.55–1.05×cellSize`, `rx≈width/2`, not black/white so Kropki dots are excluded)
 sitting at an endpoint of a plain `#arrows path` (`fill:none`, **no `marker-end`** — that attribute
 is how Arrow shafts carry their arrowhead marker, so it cleanly excludes Arrow lines even when
-they'd otherwise render a same-shaped bulb+shaft). **Matching is by GEOMETRY, NOT colour (v3.68
-fix):** the bulb is routinely a darker shade than the shaft (e.g. a `#999` bulb on a `#ccc` line —
-`9zsl8s2gjl` "Slinky", `syvmhn0tqy` "Foggy Thermo"), so the original v3.67.1 `bulb-fill ===
-shaft-stroke` test silently detected **zero** thermos on those (the reported bug). A shaft must
+they'd otherwise render a same-shaped bulb+shaft). **Matching is by GEOMETRY + COLOUR FAMILY, never
+by exact colour (v3.68, refined v3.145).** The bulb is routinely a darker shade than the shaft (e.g.
+a `#999` bulb on a `#ccc` line — `9zsl8s2gjl` "Slinky", `syvmhn0tqy` "Foggy Thermo"), so the
+original v3.67.1 `bulb-fill === shaft-stroke` test silently detected **zero** thermos on those (the
+reported bug) and v3.68 dropped colour entirely. Pure geometry is too weak in the other direction:
+**a cell-sized circle at a line end is not proof of a bulb** — every odd/even puzzle paints
+cell-sized circles, and one landing on a whisper's endpoint made `gz8mfm0r3a` (m1n3, "Visible
+Inclusions") read its ORANGE Dutch whisper as a thermo off a BLUE parity circle, on a grid whose
+real thermos are grey circles on grey shafts. **`thermoBulbShaftCompatible(bulbFill, shaftColor)`**
+(pure, harness-tested) restores the colour test at the right granularity: setters draw a thermo as
+ONE object, so bulb and shaft share a HUE (±30°) — or are both achromatic (sat ≤ 0.18, or near-black
+/ near-white), which is exactly what a `#999`/`#ccc` pair is. Grey-with-chromatic is not one object.
+An unparseable colour returns true, i.e. falls back to the v3.68 geometry-only behaviour.
+Applied at **both** bulb gates — `getThermoChainsFromDOM` (shaft stroke) and the model gate in
+`getThermoChainsFromModel` (the dumped line's own `line.color`, via
+`getThermoBulbCellFills`). **Catalog-verified** (81 scl/sxsm thermo puzzles resolvable to raw
+payloads, out of the 614 `thermo`-tagged; fpuz declares thermos natively and never reaches this
+path): 401 bulb↔endpoint pairs kept, 12 rejected across 7 puzzles, and every rejection is a genuine
+false positive — odd-circles on green whispers (`19gptz1pi2` "Green-Tree", 9 `#0003` odd circles;
+`9os1agpdp7` "German Beetles"), whisper ends on grey thermo bulbs (`mss23tnw9u` "Tetrafolium", ×4),
+an arrow line ending on a thermo bulb cell (`5ct3dss6pm`). No puzzle lost all its bulbs, and
+`x07h2149k1` (a blue AND a red circle stacked on the same bulb cell) is unaffected because the
+matching bulb still answers the `some()`. **A colour mismatch means "not detectable as a thermo",
+never "detected as something else"** — the line falls through to whatever validator its own rules
+cue, which is how the whisper on `gz8mfm0r3a` gets validated instead. A shaft must
 touch a bulb at **exactly one** end (`startsAtBulb !== endsAtBulb`) — a real thermo has a single
 bulb, and requiring the XOR keeps it narrow: a cosmetic line circled at BOTH ends (a between-line,
 some palindromes) is not mistaken for a thermometer. Between-lines are further excluded because
