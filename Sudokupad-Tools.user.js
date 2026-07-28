@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.152.0
+// @version      3.153.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.152.0';
+  var SCRIPT_VERSION = '3.153.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8452,6 +8452,54 @@
     return classifyCueLines(NABNER_CUE_RE, NABNER_CLAUSE_RE, null, 'nabner');
   }
 
+  // Ten lines: the line is divided into one or more CONTIGUOUS, NON-OVERLAPPING
+  // groups of cells, each of which sums to exactly 10 (every cell belongs to a
+  // group). Digits may repeat along the line, and even inside one group, except
+  // where ordinary Sudoku forbids it. No f-puzzles key exists, so it is cue-gated
+  // like renban/nabner. Three phrasing families, all catalogued:
+  //   • named — "ten line" / "10-line" / "tenline" (also on a ring or a snake);
+  //   • described — "each grey line consists of one or more contiguous groups of
+  //     cells, each of which sums to 10" / "must be broken into … strings … which
+  //     sum to 10" / "can be divided into segments … that sum to exactly 10";
+  //   • whole-line — "digits along a thin blue line always add up to 10"
+  //     (`kccvhsp1ff`, `yjy08cqz6p`, `p6660shn47`). That is the one-group case; the
+  //     partition rule is WEAKER than it (it also allows 2 groups = a total of 20),
+  //     so validating those lines under this rule can only under-remove.
+  // Four narrownesses, each measured against the catalog's 29 `ten_line` puzzles
+  // plus a false-positive sweep of all 6,260:
+  //   • the described branches bind to a drawn-object noun (the parity lesson) —
+  //     `el9sus7p0o`'s "her cells can be divided into … groups … each of which sum
+  //     to 10" is a cell-SET rule with no line;
+  //   • the windows stop at `;` `:` and at a " - " BULLET, because rules are often
+  //     one blob of dash-separated one-liners and an unbounded window walks from one
+  //     clue's "grey line" into another's "cells separated by an X add to 10"
+  //     (`19litary1w`, `buum97646q`);
+  //   • the 10 must not be the head of a LIST or a range — `(?!\s*(?:or|,)\s*\d)`
+  //     drops "segments which sum to either 1, 5, 10, 15 or 20" (`23fMD676d3`) and
+  //     "adjacent digits along a snake sum to 10 or 11" (`r2zxe5nquo`);
+  //   • TEN_LINE_ANTI_RE drops the rules that say "10" but mean something else:
+  //     "sum to 10 or more" (`6BDF4d9G7r`, titled "10-Line" — the NAME alone would
+  //     have claimed it), "a multiple of 10" (a line total, not a partition — 9,2,9
+  //     sums to 20 with no contiguous split into 10s, so this rule would
+  //     over-remove), and "the digit 1 has a value of 10" (`LPMhrPLMDQ` "Ace is
+  //     High" — a genuine ten line whose DIGIT VALUES are redefined, which this
+  //     compute cannot model; skipping it is the safe direction).
+  // Catalog-measured: 28 of the 29 tagged puzzles fire (the miss is "Ace is High",
+  // dropped on purpose by the ANTI), and every one of the 10 remaining hits outside
+  // the tag is a genuine untagged ten line, a whole-line "sum to 10" (safe, above)
+  // or `2yiw0yc01y`, whose ten-loop is the player's own drawing (nothing to claim).
+  // Kept as one literal so tools/cue_recall.py can parse it out of this file.
+  var TEN_LINE_CUE_RE = /\b(?:ten|10)[\s-]?(?:lines?|rings?|snakes?|paths?|loops?|snowflakes?)|\b(?:digits?|cells?)(?:(?!\s[-–—]\s)[^.;:\n]){0,50}(?:lines?|rings?|snakes?|paths?|loops?|snowflakes?)(?:(?!\s[-–—]\s)[^.;:\n]){0,30}(?:sums?|adds?|adding|total)\s+(?:up\s+)?to\s+(?:exactly\s+)?(?:10|ten)\b(?!\s*(?:or|,)\s*\d)|(?:lines?|rings?|snakes?|paths?|loops?|snowflakes?)(?:(?!\s[-–—]\s)[^.;:\n]){0,100}(?:divid|broken|break|split|separat|partition|consist|group|segment|string|section|chunk)\w*(?:(?!\s[-–—]\s)[^.;:\n]){0,75}(?:sums?|adds?|adding|total)\s+(?:up\s+)?to\s+(?:exactly\s+)?(?:10|ten)\b(?!\s*(?:or|,)\s*\d)/;
+  var TEN_LINE_ANTI_RE = /multiple of (?:10|ten)|(?:10|ten)\s+or\s+(?:more|greater|higher)|at least (?:10|ten)\b|value of (?:10|ten)/;
+  // Named-colour clause trigger: the name, or a "sums to 10" of its own. Bare "sum"
+  // is out (the region-sum lesson) and so is any grouping word on its own — those
+  // collide with every other summing clue in a legend.
+  var TEN_LINE_CLAUSE_RE = /\b(?:ten|10)[\s-]?lines?\b|(?:sums?|adds?|adding|total)\s+(?:up\s+)?to\s+(?:exactly\s+)?(?:10|ten)\b(?!\s*(?:or|,)\s*\d)/;
+  function classifyTenLines() {
+    if (TEN_LINE_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
+    return classifyCueLines(TEN_LINE_CUE_RE, TEN_LINE_CLAUSE_RE, null, 'tenline');
+  }
+
   // Region-sum lines: box/region borders split the line into segments of EQUAL sum.
   // Cue = "region sum", "box borders divide/split", or "same/equal sum in each
   // box/region". Clause trigger for the named-colour layer: region/box/segment or
@@ -9324,6 +9372,7 @@
     { key: 'dutch',       re: DUTCH_CLAUSE_RE },
     { key: 'renban',      re: RENBAN_CLAUSE_RE },
     { key: 'nabner',      re: NABNER_CLAUSE_RE },
+    { key: 'tenline',     re: TEN_LINE_CLAUSE_RE },
     { key: 'regionsum',   re: REGIONSUM_CLAUSE_RE },
     { key: 'parity',      re: PARITY_CLAUSE_RE },
     { key: 'zipper',      re: ZIPPER_CLAUSE_RE },
@@ -9590,6 +9639,173 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, nabnerCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // Which SEGMENT LENGTHS can sum to exactly 10 over `digitList` (digits may
+  // repeat inside a group), and can a line of L cells be tiled by them at all?
+  // This is the STRUCTURAL feasibility test — it ignores the current marks, so a
+  // false answer means the clue itself is impossible (a 1-cell ten line over 1-9)
+  // and the line is DROPPED rather than wiped, per the elimination contract. Pure +
+  // top-level so the harness can test it.
+  function tenLineSegSizes(digitList, maxLen) {
+    var sizes = [], cur = { 0: 1 }, s, nx;
+    for (s = 1; s <= maxLen; s++) {
+      nx = {};
+      Object.keys(cur).forEach(function (sum) {
+        digitList.forEach(function (d) { var t = +sum + d; if (t <= 10) nx[t] = 1; });
+      });
+      cur = nx;
+      if (Object.keys(cur).length === 0) break;
+      if (cur[10]) sizes.push(s);
+    }
+    return sizes;
+  }
+  function tenLinePartitionable(L, digitList) {
+    if (L <= 0) return false;
+    var sizes = tenLineSegSizes(digitList, L), ok = [true], k, i;
+    for (k = 1; k <= L; k++) {
+      ok[k] = false;
+      for (i = 0; i < sizes.length; i++) if (sizes[i] <= k && ok[k - sizes[i]]) { ok[k] = true; break; }
+    }
+    return ok[L];
+  }
+
+  // ── Ten-line validator ────────────────────────────────────────────────────
+  // A ten line: its cells split into one or more CONTIGUOUS, non-overlapping
+  // groups, each summing to exactly 10, and every cell is in a group. Digits may
+  // REPEAT (along the line and within a group) except where ordinary Sudoku
+  // forbids it — same row/col/box/uniqueness-cage — so this is the little-killer /
+  // arrow shape rather than renban's: a backtracking enumeration over the line
+  // under a per-clue conflict matrix, unioning the digits each cell can take.
+  // CANDIDATE-ELIMINATION CONTRACT: a candidate survives only if some COMPLETE
+  // legal fill of the whole line (a valid partition plus a digit for every cell)
+  // places it there. Iterated to a fixpoint; a node-cap overrun bails with no
+  // removals from that line; a structurally impossible line is dropped.
+  //
+  // A CLOSED LOOP'S PARTITION IS CYCLIC. The duplicated endpoint is dropped (the
+  // v3.144 renban lesson), and then the groups wrap: walking the ring linearly
+  // would force a group boundary at whatever cell the setter began drawing, which
+  // is STRICTER than the rule and would over-remove. So a loop is enumerated once
+  // per rotation and the per-cell support unioned — every cyclic partition has some
+  // boundary, and rotating the start to each cell reaches all of them.
+  // (`JHPNrLgRQH` "Baby Dragon" is exactly this: a grey ring split into groups of 10.)
+  function computeTenLineRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyTenLines();
+    if (cls.mode === 'none') return { noTenLine: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noTenLine: true, needSelection: true };
+    if (res.lines.length === 0) return { noTenLine: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+    var mustDiffer = makeMustDiffer();
+
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
+    var hasZero = digitList.indexOf(0) >= 0;
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;           // fogged neighbour reads as unconstrained
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                          // empty cell → unconstrained, never modified
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    var lineData = lines.map(function (keys) {
+      var loop = keys.length > 2 && keys[0] === keys[keys.length - 1];
+      return { keys: loop ? keys.slice(0, -1) : keys, loop: loop };
+    }).filter(function (ld) { return tenLinePartitionable(ld.keys.length, digitList); });
+
+    // Union of the digits each cell can hold over every complete legal fill.
+    // `null` = the search bailed on the node cap (leave the line alone this pass).
+    function lineSupport(ld) {
+      var keys = ld.keys, n = keys.length;
+      var diff = keys.map(function (a) { return keys.map(function (b) { return mustDiffer(a, b); }); });
+      var support = keys.map(function () { return new Set(); });
+      var nodes = 0, CAP = 300000, bailed = false;
+      var rots = ld.loop ? n : 1;
+      for (var r = 0; r < rots && !bailed; r++) {
+        (function (rot) {
+          var idxOf = [];                                          // walk position → line index
+          for (var i = 0; i < n; i++) idxOf.push((rot + i) % n);
+          var sets = idxOf.map(function (i) { return Array.from(cellSet(keys[i])).sort(function (a, b) { return a - b; }); });
+          if (sets.some(function (s) { return s.length === 0; })) return;
+          var sufMin = new Array(n + 1), sufMax = new Array(n + 1);
+          sufMin[n] = 0; sufMax[n] = 0;
+          for (var j = n - 1; j >= 0; j--) {
+            sufMin[j] = sufMin[j + 1] + sets[j][0];
+            sufMax[j] = sufMax[j + 1] + sets[j][sets[j].length - 1];
+          }
+          var assign = new Array(n);
+          // The rest of the walk must total (10 − segSum) + 10k for some k ≥ 0 —
+          // and with no group open (segSum 0) the remaining cells must still make
+          // at least one whole group of 10.
+          function restPossible(i, segSum) {
+            var base = segSum === 0 ? 10 : 10 - segSum;
+            if (sufMax[i] < base) return false;
+            var k = Math.max(0, Math.ceil((sufMin[i] - base) / 10));
+            return base + 10 * k <= sufMax[i];
+          }
+          function dfs(i, segSum) {
+            if (bailed) return;
+            if (nodes++ > CAP) { bailed = true; return; }
+            if (i === n) {
+              if (segSum !== 0 && segSum !== 10) return;           // 10 = a group left open by trailing 0s
+              for (var q = 0; q < n; q++) support[idxOf[q]].add(assign[q]);
+              return;
+            }
+            if (!restPossible(i, segSum)) return;
+            var opts = sets[i];
+            for (var oi = 0; oi < opts.length; oi++) {
+              var d = opts[oi];
+              if (segSum + d > 10) continue;
+              var clash = false;
+              for (var p = 0; p < i; p++) if (assign[p] === d && diff[idxOf[p]][idxOf[i]]) { clash = true; break; }
+              if (clash) continue;
+              assign[i] = d;
+              if (segSum + d === 10) {
+                dfs(i + 1, 0);                                     // the group closes here
+                if (hasZero && !bailed) dfs(i + 1, 10);            // a 0 can still ride along in it
+              } else {
+                dfs(i + 1, segSum + d);
+              }
+              if (bailed) return;
+            }
+          }
+          dfs(0, 0);
+        })(r);
+      }
+      return bailed ? null : support;
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        var support = lineSupport(ld);
+        if (!support) return;                                      // node cap → no removals from this line
+        ld.keys.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+          Array.from(work[C]).forEach(function (d) {               // snapshot: set mutates in loop
+            if (!support[i].has(d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, tenLineCount: lineData.length, emptiedCells: emptied };
   }
 
   // Split a region-sum line's cell chain into maximal same-region runs.
@@ -11299,6 +11515,8 @@
         classify: classifyRenbanLines, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
       { name: 'nabner', unitNoun: 'nabner line', menuLabel: 'Nabner lines',
         classify: classifyNabnerLines, compute: computeNabnerRemovals, countKey: 'nabnerCount', noneKey: 'noNabner' },
+      { name: 'ten line', unitNoun: 'ten line', menuLabel: 'Ten lines',
+        classify: classifyTenLines, compute: computeTenLineRemovals, countKey: 'tenLineCount', noneKey: 'noTenLine' },
       { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines',
         classify: classifyRegionSumLines, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
       { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines',

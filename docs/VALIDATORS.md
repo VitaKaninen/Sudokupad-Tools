@@ -16,7 +16,7 @@ UNREADABLE at 0).*
 **Validate Constraints (v3.53; cages added v3.56; little killers v3.57; dropdown menu + run-all
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
-modular lines v3.93; double arrows v3.131; nabner v3.152):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -829,6 +829,71 @@ puzzles the catalog left untagged (`2q3ha7ca76` "Antirenban", `rlkbec6hy3`, `k4g
 `pnyv6sn7qm`, …). Test puzzles: `3xdi7kf6ab` (yellow nabner + pink renban), `ghtic0mwad` "Nabner
 Lines" (single-colour, described only), `lvumk1logw` "Li'l Nabner", `philip-newman/20250727-circle-gets-the-square`
 (antirenban).
+
+## Ten-line validator
+
+**Ten lines (v3.153 — cue-gated cosmetic line, same `classifyCueLines` /
+`resolveCueValidatorLines` machinery as renban/nabner):** `computeTenLineRemovals`. A ten line splits
+into one or more **contiguous, non-overlapping groups** of cells, each summing to exactly **10**,
+with every cell in a group. Digits may **repeat** — along the line and inside one group — except
+where ordinary Sudoku forbids it, so this is the **little-killer / arrow shape**, not renban's: a
+backtracking enumeration over the whole line under a per-clue `makeMustDiffer` conflict matrix,
+unioning the digits each cell can take. A candidate survives only if some complete legal fill (a
+valid partition *plus* a digit for every cell) places it there. Iterated to a fixpoint; a 300k node
+cap bails with no removals from that line; contradiction → emptied cells → the red toast, as usual.
+
+Pruning is the exact-sum suffix bound the little killer uses, adapted to the partition: the running
+group sum may never exceed 10, and the remaining cells must be able to total `(10 − segSum) + 10k`
+for some `k ≥ 0` (with no group open, at least one whole 10). A group **closes** the moment its sum
+hits 10 — with a `0` in the digit set the search also branches on keeping it open, and the terminal
+state accepts a group left open at exactly 10 (trailing zeros).
+
+**Structural feasibility is a length question, and it is pure** — `tenLineSegSizes(digitList,
+maxLen)` (which group LENGTHS can sum to 10, multiset DP) + `tenLinePartitionable(L, digitList)`
+(can L cells be tiled by those lengths). Over 1-9 the group sizes are 2..10, so every length tiles
+**except 1** — a 1-cell ten line is impossible and is **DROPPED**, never wiped. Both are top-level
+and harness-tested.
+
+**A CLOSED LOOP'S PARTITION IS CYCLIC.** The duplicated endpoint is dropped (the v3.144 renban
+lesson) and then the groups **wrap**: walking the ring linearly would force a boundary at whatever
+cell the setter happened to start drawing, which is *stricter* than the rule and over-removes. So a
+loop is enumerated once per **rotation** and the per-cell support unioned — every cyclic partition
+has some boundary, and rotating the start to each cell reaches all of them. `JHPNrLgRQH` "Baby
+Dragon" is exactly this (a grey ring divided into groups of 10).
+
+**The cue** covers three phrasing families: **named** ("ten line" / "10-line" / "tenline", also on a
+ring or snake), **described** ("consists of one or more contiguous groups of cells, each of which
+sums to 10", "broken into … strings … which sum to 10", "divided into segments … that sum to exactly
+10"), and **whole-line** ("digits along a thin blue line always add up to 10" — `kccvhsp1ff`,
+`yjy08cqz6p`, `p6660shn47`). The whole-line case is the ONE-group case, and the partition rule is
+*weaker* than it (it also permits two groups = a total of 20), so validating those lines here can
+only under-remove. Four narrownesses, each catalog-measured:
+
+- the described branches bind to a **drawn-object noun** (the parity lesson) — `el9sus7p0o`'s "her
+  cells can be divided into … groups … each of which sum to 10" is a cell-SET rule with no line;
+- the windows stop at `;` `:` **and at a " - " bullet**, because rules are routinely one blob of
+  dash-separated one-liners and an unbounded window walks from one clue's "grey line" into another's
+  "cells separated by an X add to 10" (`19litary1w`, `buum97646q`);
+- the 10 must not head a **list or a range** — `(?!\s*(?:or|,)\s*\d)` drops "segments which sum to
+  either 1, 5, 10, 15 or 20" (`23fMD676d3`) and "adjacent digits along a snake sum to 10 or 11"
+  (`r2zxe5nquo`);
+- **`TEN_LINE_ANTI_RE`** drops the rules that say "10" and mean something else: **"sum to 10 or
+  more"** (`6BDF4d9G7r`, *titled* "10-Line" — the name alone would have claimed it), **"a multiple of
+  10"** (a line TOTAL, not a partition: `9,2,9` sums to 20 with no contiguous split into 10s, so this
+  compute would over-remove), and **"the digit 1 has a value of 10"** (`LPMhrPLMDQ` "Ace is High" — a
+  genuine ten line whose digit VALUES are redefined, which the compute cannot model).
+
+`TEN_LINE_CLAUSE_RE` (named-colour layer) is the name or a "sums to 10" of its own — bare "sum" is
+out (the region-sum lesson) and so is any grouping word alone, since both collide with every other
+summing clue in a legend. Registered in `LINE_LABEL_TYPES` under `tenline`, so it inherits the
+line-type-label layer and finally reads Dovetail's **TEN** sticker (`y697kc2umn`, the puzzle that
+motivated that layer, listed "ten lines (TEN)" with no validator to claim it).
+**Catalog-measured:** 28 of the 29 `ten_line`-tagged puzzles fire (96.6% — the miss is "Ace is High",
+dropped on purpose), clause-blindness UNREADABLE 0 of 13 multi-colour, and every remaining hit
+outside the tag is a genuine untagged ten line, a whole-line "sum to 10", or `2yiw0yc01y`, whose
+ten-loop is the player's own drawing (nothing drawn to claim). Test puzzles: `ja8iov3ag3` "Tenacious
+Whispers" (grey ten lines + green whispers), `zy1s9y2qi8`, `6iqsdeorzo` "Tension" (teal), `y697kc2umn`
+"Dovetail" (the TEN label), `JHPNrLgRQH` "Baby Dragon" (the ring).
 
 ## Parity + zipper-line validators
 

@@ -67,6 +67,7 @@ const NAMES = [
   'DUTCH_CUE_RE', 'DUTCH_CLAUSE_RE', 'DUTCH_LOCKOUT_RE',
   'RENBAN_CUE_RE', 'RENBAN_CLAUSE_RE',
   'NABNER_CUE_RE', 'NABNER_CLAUSE_RE', 'NABNER_ANTI_RE',
+  'TEN_LINE_CUE_RE', 'TEN_LINE_CLAUSE_RE', 'TEN_LINE_ANTI_RE',
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
@@ -87,6 +88,8 @@ const NAMES = [
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
   'expandLineChain', 'fpuzCellKey', 'regionSumSegments', 'thermoBulbShaftCompatible',
+  // ten-line structural feasibility
+  'tenLineSegSizes', 'tenLinePartitionable',
   // region colouring
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
@@ -206,6 +209,34 @@ checkFalse('nabner cue: an ADJACENCY rule along a loop is not nabner (l00604nlbr
   F.NABNER_CUE_RE.test('any two cells that are adjacent along the loop must contain non-consecutive digits'));
 checkFalse('nabner cue: a non-consecutive CAGE/REGION rule has no line (h63cv2l7tp)',
   F.NABNER_CUE_RE.test('no two digits within the same cage or the same region may be consecutive'));
+// Ten lines (v3.153). The named cue is easy; the described one has to stay inside
+// its own clause (the rules are often one dash-separated blob) and off the rules
+// that say "10" but mean a different constraint.
+checkTrue('ten-line cue: the name', F.TEN_LINE_CUE_RE.test('grey ten lines: digits are split into groups that sum to 10'));
+checkTrue('ten-line cue: "10-line" spelling (k39j633cdo)',
+  F.TEN_LINE_CUE_RE.test('each gray 10-line consists of one or more contiguous groups of cells'));
+checkTrue('ten-line cue: described, no name (gejf3uvo1y)',
+  F.TEN_LINE_CUE_RE.test('each gray line consists of one or more contiguous groups of cells, each of which sums to 10'));
+checkTrue('ten-line cue: described, "broken into … strings" (hTbTbQ2g7F)',
+  F.TEN_LINE_CUE_RE.test('each line must be broken into one or more strings of contiguous digits which sum to 10'));
+checkTrue('ten-line cue: whole-line sum, the one-group case (kccvhsp1ff)',
+  F.TEN_LINE_CUE_RE.test('digits on a gray line must sum to 10'));
+checkTrue('ten-line cue: a RING carries it too (JHPNrLgRQH)',
+  F.TEN_LINE_CUE_RE.test('the grey ring must be divided into non-overlapping groups of cells along the ring that sum to 10'));
+checkFalse('ten-line cue: a cell-SET rule has no line (el9sus7p0o)',
+  F.TEN_LINE_CUE_RE.test('her cells can be divided into smaller distinct groups of orthogonally connected cells, each of which sum to 10'));
+checkFalse('ten-line cue: the window must not cross a " - " bullet (19litary1w)',
+  F.TEN_LINE_CUE_RE.test('the endpoints of a grey line sum to 5 - cells with a circle are odd - cells separated by an x add to 10'));
+checkFalse('ten-line cue: 10 as the head of a LIST is not the target (23fMD676d3)',
+  F.TEN_LINE_CUE_RE.test('box borders divide the snake into segments which sum to either 1, 5, 10, 15 or 20'));
+checkFalse('ten-line cue: "sum to 10 or 11" is another rule (r2zxe5nquo)',
+  F.TEN_LINE_CUE_RE.test('adjacent digits along a snake sum to 10 or 11'));
+checkTrue('ten-line anti: "sum to 10 or more" despite the title "10-Line" (6BDF4d9G7r)',
+  F.TEN_LINE_ANTI_RE.test('10-line normal sudoku rules apply. adjacent digits along a line must sum to 10 or more'));
+checkTrue('ten-line anti: a line TOTAL that is a multiple of 10 is not a partition',
+  F.TEN_LINE_ANTI_RE.test('digits along each line sum to a multiple of 10'));
+checkTrue('ten-line anti: redefined digit values (LPMhrPLMDQ "Ace is High")',
+  F.TEN_LINE_ANTI_RE.test('for the purposes of this puzzle, the digit 1 has a value of 10'));
 checkTrue('nabner anti: anti-kropki lines forbid consecutives but ALLOW repeats (1j53hl97cx)',
   F.NABNER_ANTI_RE.test('anti-kropki lines (red): no two digits anywhere on the same red line are consecutive, or in a 1:2 ratio'));
 // Region sum (v3.88 vocabulary: every/total/3x3 spanning)
@@ -273,7 +304,7 @@ check('label defs: Dovetail legend → one phrase per token', dove, {
 // lineLabelTypes() requires before a token may claim a line.
 const claimOf = (phrase) => [
   ['whisper', F.WHISPERISH_RE], ['dutch', F.DUTCH_CLAUSE_RE], ['renban', F.RENBAN_CLAUSE_RE],
-  ['nabner', F.NABNER_CLAUSE_RE],
+  ['nabner', F.NABNER_CLAUSE_RE], ['tenline', F.TEN_LINE_CLAUSE_RE],
   ['regionsum', F.REGIONSUM_CLAUSE_RE], ['parity', F.PARITY_CLAUSE_RE], ['zipper', F.ZIPPER_CLAUSE_RE],
   ['entropic', F.ENTROPIC_CLAUSE_RE], ['modular', F.MODULAR_CLAUSE_RE], ['between', F.BETWEEN_CLAUSE_RE],
   ['doublearrow', F.DOUBLEARROW_CLAUSE_RE],
@@ -281,7 +312,7 @@ const claimOf = (phrase) => [
 check('label types: Dovetail tokens each resolve to one validator',
   Object.fromEntries(Object.entries(dove).map(([tok, ph]) => [tok, claimOf(ph)])), {
     mod: ['modular'], par: ['parity'], gw: ['whisper'], da: ['doublearrow'],
-    ten: [], rsl: ['regionsum'], ent: ['entropic'],
+    ten: ['tenline'], rsl: ['regionsum'], ent: ['entropic'],
   });
 // A parenthesised aside that is not a legend must not become a token.
 check('label defs: "(if given)" is not a token',
@@ -457,6 +488,17 @@ check('cage combos 2/3', F.cageCombinations(D19, 2, 3), [[1, 2]]);
 check('cage combos 3/7', F.cageCombinations(D19, 3, 7), [[1, 2, 4]]);
 check('cage combos impossible total', F.cageCombinations(D19, 2, 1), []);
 check('cage combos 2/10 count', F.cageCombinations(D19, 2, 10).length, 4); // 19 28 37 46
+// ── ten-line structural feasibility (v3.153) ────────────────────────────────
+// Over 1-9 a group of 10 needs 2..10 cells (a lone cell can never be 10), so every
+// length except 1 tiles; over 1-6 the shortest group is still 2 (4+6).
+check('ten line: group sizes over 1-9', F.tenLineSegSizes(D19, 9), [2, 3, 4, 5, 6, 7, 8, 9]);
+check('ten line: group sizes over 1-6', F.tenLineSegSizes([1, 2, 3, 4, 5, 6], 6), [2, 3, 4, 5, 6]);
+checkFalse('ten line: a 1-cell line is structurally impossible', F.tenLinePartitionable(1, D19));
+checkTrue('ten line: 2 cells tile (1+9)', F.tenLinePartitionable(2, D19));
+checkTrue('ten line: 3 cells tile as ONE group (a 2+1 split cannot)', F.tenLinePartitionable(3, D19));
+checkTrue('ten line: 5 cells tile (2+3)', F.tenLinePartitionable(5, D19));
+checkTrue('ten line: 12 cells tile (4 groups of 3)', F.tenLinePartitionable(12, D19));
+checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable(1, [1, 2, 3, 4, 5, 6]));
 checkTrue('matching: 2x2 all allowed', F.hasPerfectMatching(2, 2, () => true));
 checkFalse('matching: both digits forced into cell 0', F.hasPerfectMatching(2, 2, (d, c) => c === 0));
 checkTrue('matching: 3x3 permutation', F.hasPerfectMatching(3, 3, (d, c) => d === c));
