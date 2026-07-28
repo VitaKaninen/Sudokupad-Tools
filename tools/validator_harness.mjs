@@ -66,6 +66,7 @@ const NAMES = [
   'WHISPER_CUE_RE', 'WHISPERISH_RE', 'SELF_DEDUCTION_RE',
   'DUTCH_CUE_RE', 'DUTCH_CLAUSE_RE', 'DUTCH_LOCKOUT_RE',
   'RENBAN_CUE_RE', 'RENBAN_CLAUSE_RE',
+  'NABNER_CUE_RE', 'NABNER_CLAUSE_RE', 'NABNER_ANTI_RE',
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
@@ -160,6 +161,9 @@ const rnBlob = 'yellow nabner line: no two digits can be consecutive or identica
   + 'pink renban line: a set of consecutive digits with no repeats in any order.';
 check('renban clause skips the nabner clause and pins pink',
   F.linesForClauseColor(rnLines, rnBlob, F.RENBAN_CLAUSE_RE).map((l) => l.color), ['#ff69b4']);
+// …and the mirror image (v3.152): nabner must read ITS clause, not renban's.
+check('nabner clause skips the renban clause and pins yellow (3xdi7kf6ab)',
+  F.linesForClauseColor(rnLines, rnBlob, F.NABNER_CLAUSE_RE).map((l) => l.color), ['#ffd700']);
 
 // ── cue regexes: the documented traps ────────────────────────────────────────
 // German whisper (v3.89: words between "differ" and the 5; leading \b vs "r5.")
@@ -183,6 +187,27 @@ checkFalse('parity cue: parity DOTS have no line (7fvnto2d90)',
 // Renban cue: description without the name (t1e8qgm0h1, the v3.89 bug)
 checkTrue('renban cue: set of consecutive digits, name never written',
   F.RENBAN_CUE_RE.test('each line is a set of consecutive digits with no repeats (in any order)'));
+// Nabner (v3.152). The named cue is easy; the described one has to stay on the
+// right side of renban's near-identical vocabulary and of adjacency rules.
+checkTrue('nabner cue: the name', F.NABNER_CUE_RE.test('nabner: no two digits on a yellow line may be consecutive or the same'));
+checkTrue('nabner cue: antirenban is the same rule (philip-newman)',
+  F.NABNER_CUE_RE.test('antirenban: digits along lines cannot repeat, and no two digits on a line can be consecutive'));
+checkTrue('nabner cue: described, no name (56pq2tl5q6)',
+  F.NABNER_CUE_RE.test('lines must not contain any repeated or consecutive digits'));
+checkTrue('nabner cue: described, "may not appear" (ghtic0mwad)',
+  F.NABNER_CUE_RE.test('along green lines, digits may not repeat and consecutive digits may not appear'));
+checkTrue('nabner cue: non-consecutive non-repeating (753umuwjuz)',
+  F.NABNER_CUE_RE.test('nab: non-consecutive non-repeating digits'));
+checkFalse('nabner cue: renban is the OTHER polarity (8Rbb27h2pb)',
+  F.NABNER_CUE_RE.test('digits along a purple line cannot repeat and form a consecutive set in any order'));
+checkFalse('nabner cue: renban, "must not repeat and must form" (2l8u234v2c)',
+  F.NABNER_CUE_RE.test('digits along a renban line must not repeat and must form a sequence of consecutive numbers in any order'));
+checkFalse('nabner cue: an ADJACENCY rule along a loop is not nabner (l00604nlbr)',
+  F.NABNER_CUE_RE.test('any two cells that are adjacent along the loop must contain non-consecutive digits'));
+checkFalse('nabner cue: a non-consecutive CAGE/REGION rule has no line (h63cv2l7tp)',
+  F.NABNER_CUE_RE.test('no two digits within the same cage or the same region may be consecutive'));
+checkTrue('nabner anti: anti-kropki lines forbid consecutives but ALLOW repeats (1j53hl97cx)',
+  F.NABNER_ANTI_RE.test('anti-kropki lines (red): no two digits anywhere on the same red line are consecutive, or in a 1:2 ratio'));
 // Region sum (v3.88 vocabulary: every/total/3x3 spanning)
 checkTrue('region-sum cue: "every region it passes through" (2ifg92eka9)',
   F.REGIONSUM_CUE_RE.test('the digits in every region it passes through have the same sum'));
@@ -248,6 +273,7 @@ check('label defs: Dovetail legend → one phrase per token', dove, {
 // lineLabelTypes() requires before a token may claim a line.
 const claimOf = (phrase) => [
   ['whisper', F.WHISPERISH_RE], ['dutch', F.DUTCH_CLAUSE_RE], ['renban', F.RENBAN_CLAUSE_RE],
+  ['nabner', F.NABNER_CLAUSE_RE],
   ['regionsum', F.REGIONSUM_CLAUSE_RE], ['parity', F.PARITY_CLAUSE_RE], ['zipper', F.ZIPPER_CLAUSE_RE],
   ['entropic', F.ENTROPIC_CLAUSE_RE], ['modular', F.MODULAR_CLAUSE_RE], ['between', F.BETWEEN_CLAUSE_RE],
   ['doublearrow', F.DOUBLEARROW_CLAUSE_RE],

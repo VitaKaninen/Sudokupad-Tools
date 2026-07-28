@@ -37,6 +37,7 @@ CORPUS = os.path.join(CAT, 'data', 'corpus.json')
 VALIDATORS = [
     ('german whisper', 'WHISPER_CUE_RE', None, 'german_whisper', None),
     ('renban', 'RENBAN_CUE_RE', None, 'renban', None),
+    ('nabner', 'NABNER_CUE_RE', 'NABNER_ANTI_RE', 'nabner', None),
     ('region sum', 'REGIONSUM_CUE_RE', None, 'region_sum', None),
     ('parity', 'PARITY_CUE_RE', None, 'parity_line', None),
     ('zipper', 'ZIPPER_CUE_RE', None, 'zipper', None),
@@ -54,6 +55,7 @@ VALIDATORS = [
 # WHISPERISH_RE; thermo's cue layer is only a fallback after the model/DOM readers.
 CLAUSES = {
     'renban': 'RENBAN_CLAUSE_RE',
+    'nabner': 'NABNER_CLAUSE_RE',
     'region_sum': 'REGIONSUM_CLAUSE_RE',
     'parity_line': 'PARITY_CLAUSE_RE',
     'zipper': 'ZIPPER_CLAUSE_RE',

@@ -16,7 +16,7 @@ UNREADABLE at 0).*
 **Validate Constraints (v3.53; cages added v3.56; little killers v3.57; dropdown menu + run-all
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
-modular lines v3.93; double arrows v3.131):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+modular lines v3.93; double arrows v3.131; nabner v3.152):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -783,6 +783,52 @@ plain endpoint drop in the same change — kept, it inflated the run length by o
 cell for two different digits (over-removal). **Zipper still does NOT dedupe a loop endpoint**: it
 would pair `keys[0]` with itself (forcing S = 2d), but the correct fold for a closed zipper is
 undefined, so it needs a decision rather than a copy of this fix.
+
+## Nabner-line validator
+
+**Nabner (antirenban) validator (v3.152 — cue-gated cosmetic line, same
+`classifyCueLines`/`resolveCueValidatorLines` machinery as renban):** `computeNabnerRemovals`. A
+nabner line's digits are all **DISTINCT** and **no two of them are consecutive**, over EVERY pair on
+the line, not just neighbours — every catalogued phrasing spells that out ("regardless of their
+position on the line"). Compute = **the renban validator with one substitution**: combos =
+`nabnerSetsFor(L)`, every size-L subset of the digit set with no two members differing by 1
+(generated in increasing order, so "non-consecutive" is exactly "each pick ≥ prev + 2" — the digit
+set need not be contiguous), instead of renban's consecutive runs; digits are distinct either way, so
+the same `hasPerfectMatching` complete-support test applies. Iterated to a fixpoint; a line too long
+to be filled (6 cells over 1-9, where the maximum is `{1,3,5,7,9}`) yields zero sets and is **dropped
+as structurally impossible**, never wiped. Closed loops drop the duplicated endpoint (the v3.144
+renban lesson) — the rule is over all pairs, so a nabner loop has no direction and no wrap edge.
+No f-puzzles key exists, so there is no layer 0.
+
+**The cue is the most collision-prone in the file**, because nabner and renban rules use the *same
+words in opposite polarity* — and a wrong claim is the dangerous direction (cue + a single line
+colour makes layer 2 CLAIM the line, validating a renban line under the opposite rule). Three
+narrownesses, each catalog-measured while building it:
+
+- the described branches bind to a **drawn-object noun** (the parity lesson) AND to nabner's
+  **negative** wording — "no two digits … consecutive", "non-consecutive non-repeating", "must not
+  contain any repeated **or** consecutive digits". Renban's "digits … do not repeat **and** form a
+  consecutive set" is the same vocabulary in the other polarity, so `or|nor` is **word-bounded**: an
+  unbounded `or` matches inside "f-**or**-m" and swept in 7 renban puzzles mid-build.
+- **"adjacent" is excluded** from the "no two digits … line … consecutive" window — an adjacency rule
+  along a loop/path ("any two cells that are adjacent along the loop must contain non-consecutive
+  digits", `l00604nlbr`) is a different constraint.
+- **`NABNER_ANTI_RE` (`anti-kropki`)** drops `1j53hl97cx`/`dc0dbdewab` ("no two digits anywhere on the
+  same red line are consecutive, or in a 1:2 ratio"): the non-consecutive half reads as nabner, but
+  that rule does **not** forbid a repeat (3 and 3 are neither consecutive nor in a 1:2 ratio), so
+  nabner's distinctness would over-remove.
+
+`NABNER_CLAUSE_RE` (named-colour layer) is nabner's own vocabulary only — every trigger carries the
+negation, bare "consecutive" is out — because the two clues sit side by side in one legend
+(`3xdi7kf6ab`: "yellow line: nabner line (no two digits can be consecutive or identical)" / "pink
+line: renban line (a set of consecutive digits in any order)") and `clauseColorWord` takes the FIRST
+matching clause. Registered in `LINE_LABEL_TYPES` under `nabner`, so it inherits the line-type-label
+layer. **Catalog-measured:** 39/39 `nabner`-tagged puzzles fire (100% recall), clause-blindness
+UNREADABLE 0 of 18 multi-colour puzzles, and all remaining hits outside the tag are genuine nabner
+puzzles the catalog left untagged (`2q3ha7ca76` "Antirenban", `rlkbec6hy3`, `k4g3ubb8qe`,
+`pnyv6sn7qm`, …). Test puzzles: `3xdi7kf6ab` (yellow nabner + pink renban), `ghtic0mwad` "Nabner
+Lines" (single-colour, described only), `lvumk1logw` "Li'l Nabner", `philip-newman/20250727-circle-gets-the-square`
+(antirenban).
 
 ## Parity + zipper-line validators
 

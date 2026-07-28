@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.151.0
+// @version      3.152.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.151.0';
+  var SCRIPT_VERSION = '3.152.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8406,6 +8406,52 @@
   var RENBAN_CLAUSE_RE = /renban|set of consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
   function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE, 'renban', 'renban'); }
 
+  // Nabner (a.k.a. antirenban): renban's opposite — the line's digits are all
+  // DISTINCT and no two of them are consecutive, ANYWHERE on the line (not just
+  // between neighbours; that global reading is what every catalogued phrasing
+  // says, usually spelled out as "regardless of their position on the line").
+  // No f-puzzles key exists for it, so it is cue-gated like renban.
+  //
+  // The cue is the collision-prone one in this file: nabner and renban rules BOTH
+  // talk about "consecutive" digits on a line, and a wrong claim here is the
+  // dangerous direction (cue + a single line colour makes layer 2 CLAIM that line,
+  // so a renban line would be validated under the opposite rule). Three
+  // narrownesses keep it honest, each measured against the catalog:
+  //   • the described branches all bind to a drawn-object noun (the parity lesson)
+  //     AND to nabner's NEGATIVE wording — "no two digits … consecutive",
+  //     "non-consecutive non-repeating", "must not contain any repeated OR
+  //     consecutive digits". Renban's "digits … do not repeat AND form a
+  //     consecutive set" is the same words in the other polarity, so `or|nor` is
+  //     word-bounded (an unbounded `or` matches inside "f-OR-m" and swept in 7
+  //     renban puzzles while this was being built).
+  //   • "adjacent" is excluded from the "no two digits … line … consecutive"
+  //     window: an ADJACENCY rule along a loop/path ("any two cells that are
+  //     adjacent along the loop must contain non-consecutive digits",
+  //     `l00604nlbr`) is a different constraint, not this one.
+  //   • NABNER_ANTI_RE drops anti-kropki lines (`1j53hl97cx`, `dc0dbdewab`:
+  //     "no two digits anywhere on the same red line are consecutive, or in a 1:2
+  //     ratio"). The non-consecutive half matches nabner, but that rule does NOT
+  //     forbid a REPEAT (3 and 3 are neither consecutive nor in a 1:2 ratio), so
+  //     applying nabner's distinctness there would over-remove.
+  // Catalog-measured over the 39 `nabner`-tagged puzzles + a false-positive sweep
+  // of all 6,260: 39/39 fire (100%), and all 7 remaining hits outside the tag are
+  // genuine nabner puzzles the catalog left untagged (`2q3ha7ca76` "Antirenban",
+  // `rlkbec6hy3`, `k4g3ubb8qe`, …).
+  // Kept as one literal (not composed from parts) so tools/cue_recall.py can parse
+  // it straight out of this file and score it, the same convention as the others.
+  var NABNER_CUE_RE = /nabner|anti[\s-]?renban|(?:no|any)\s+(?:two|pair\s+of)\s+(?:digits?|values?|numbers?|cells?)(?:(?!adjacent)[^.]){0,60}(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)(?:(?!adjacent)[^.]){0,60}consecutive|non[\s-]?consecutive[^.]{0,40}non[\s-]?repeat|non[\s-]?repeat\w*[^.]{0,40}non[\s-]?consecutive|set of non[\s-]?consecutive|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.]{0,60}(?:must|may|can|could)\s*n(?:o|')?t[^.]{0,30}repeat\w*[^.]{0,20}\b(?:or|nor)\b[^.]{0,20}consecutive|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.]{0,60}consecutive\s+(?:digits?|values?|numbers?)\s+(?:may|can|must)\s*n(?:o|')?t|not\s+(?:be\s+)?consecutive\s+with[^.]{0,60}any\s+other/;
+  var NABNER_ANTI_RE = /anti[\s-]?kropki/;
+  // Named-colour clause trigger: nabner's own vocabulary only. It must never read
+  // renban's clause (they sit side by side in the same legend — `3xdi7kf6ab`:
+  // "yellow line: nabner line (no two digits can be consecutive or identical)" /
+  // "pink line: renban line (a set of consecutive digits in any order)"), so bare
+  // "consecutive" is out and every trigger carries the negation.
+  var NABNER_CLAUSE_RE = /nabner|anti[\s-]?renban|non[\s-]?consecutive|no\s+(?:two|pair\s+of)[^.]{0,60}consecutive|repeat\w*[^.]{0,20}\b(?:or|nor)\b[^.]{0,20}consecutive|consecutive[^.]{0,30}(?:may|can|must)\s*n(?:o|')?t/;
+  function classifyNabnerLines() {
+    if (NABNER_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
+    return classifyCueLines(NABNER_CUE_RE, NABNER_CLAUSE_RE, null, 'nabner');
+  }
+
   // Region-sum lines: box/region borders split the line into segments of EQUAL sum.
   // Cue = "region sum", "box borders divide/split", or "same/equal sum in each
   // box/region". Clause trigger for the named-colour layer: region/box/segment or
@@ -9277,6 +9323,7 @@
     { key: 'whisper',     re: WHISPERISH_RE },
     { key: 'dutch',       re: DUTCH_CLAUSE_RE },
     { key: 'renban',      re: RENBAN_CLAUSE_RE },
+    { key: 'nabner',      re: NABNER_CLAUSE_RE },
     { key: 'regionsum',   re: REGIONSUM_CLAUSE_RE },
     { key: 'parity',      re: PARITY_CLAUSE_RE },
     { key: 'zipper',      re: ZIPPER_CLAUSE_RE },
@@ -9437,6 +9484,112 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, renbanCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Nabner validator ──────────────────────────────────────────────────────
+  // A nabner line (antirenban): its cells hold DISTINCT digits, no two of which
+  // are consecutive — the rule is over EVERY pair on the line, not just
+  // neighbours ("regardless of their position on the line"). So it is the renban
+  // validator with one substitution: "combinations" = every non-consecutive
+  // distinct set of the line's length (`nabnerSetsFor`) instead of every
+  // consecutive run. Distinct digits again → the same perfect-matching support
+  // test. CANDIDATE-ELIMINATION CONTRACT: a candidate survives only if some set
+  // containing it admits a full distinct-cell fill (each remaining cell from its
+  // current candidates). Iterated to a fixpoint; a line with zero possible sets —
+  // longer than the digit set allows, e.g. 6 cells over 1-9, where the maximum is
+  // {1,3,5,7,9} — is DROPPED as structurally impossible, never wiped.
+  function computeNabnerRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyNabnerLines();
+    if (cls.mode === 'none') return { noNabner: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noNabner: true, needSelection: true };
+    if (res.lines.length === 0) return { noNabner: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;           // fogged neighbour reads as unconstrained
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                          // empty cell → unconstrained, never modified
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Every size-L subset of the digit set with no two members differing by 1.
+    // Digits are walked in increasing order, so "no consecutive pair" is exactly
+    // "each pick is ≥ prev + 2" — the digit set need not be contiguous.
+    function nabnerSetsFor(L) {
+      var out = [];
+      (function pick(from, acc) {
+        if (acc.length === L) { out.push({ arr: acc.slice(), set: new Set(acc) }); return; }
+        for (var i = from; i < digitList.length; i++) {
+          var d = digitList[i];
+          if (acc.length && d - acc[acc.length - 1] < 2) continue;
+          acc.push(d); pick(i + 1, acc); acc.pop();
+        }
+      })(0, []);
+      return out;
+    }
+    // A closed loop's duplicated endpoint is dropped (the renban lesson, v3.144):
+    // kept, it inflates the required set size by one and asks the same cell for two
+    // different digits. A nabner loop is just its set of distinct cells — the rule
+    // is over all pairs, so it has no direction and no wrap edge to enforce.
+    var setCache = {};
+    var lineData = lines.map(function (keys) { return (keys.length > 2 && keys[0] === keys[keys.length - 1]) ? keys.slice(0, -1) : keys; })
+                        .map(function (keys) {
+                          if (!setCache[keys.length]) setCache[keys.length] = nabnerSetsFor(keys.length);
+                          return { keys: keys, sets: setCache[keys.length] };
+                        })
+                        .filter(function (ld) { return ld.sets.length > 0; });   // impossible line → dropped
+
+    // Does some set admit a full fill with digit d in cell C? Fix d→C, then require
+    // a perfect matching of the set's remaining digits onto the remaining cells.
+    function supports(ld, cIdx, d) {
+      var keys = ld.keys;
+      for (var si = 0; si < ld.sets.length; si++) {
+        var s = ld.sets[si];
+        if (!s.set.has(d)) continue;
+        var digits = [], used = false;
+        for (var i = 0; i < s.arr.length; i++) {
+          if (!used && s.arr[i] === d) { used = true; continue; }
+          digits.push(s.arr[i]);
+        }
+        var cells = [];
+        for (var j = 0; j < keys.length; j++) if (j !== cIdx) cells.push(cellSet(keys[j]));
+        if (hasPerfectMatching(digits.length, cells.length, function (a, b) { return cells[b].has(digits[a]); })) return true;
+      }
+      return false;
+    }
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        ld.keys.forEach(function (C, cIdx) {
+          if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+          Array.from(work[C]).forEach(function (d) {              // snapshot: set mutates in loop
+            if (!supports(ld, cIdx, d)) {
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            }
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, nabnerCount: lineData.length, emptiedCells: emptied };
   }
 
   // Split a region-sum line's cell chain into maximal same-region runs.
@@ -11144,6 +11297,8 @@
         classify: classifyBetweenLines, compute: computeBetweenLineRemovals, countKey: 'betweenCount', noneKey: 'noBetween' },
       { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines',
         classify: classifyRenbanLines, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
+      { name: 'nabner', unitNoun: 'nabner line', menuLabel: 'Nabner lines',
+        classify: classifyNabnerLines, compute: computeNabnerRemovals, countKey: 'nabnerCount', noneKey: 'noNabner' },
       { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines',
         classify: classifyRegionSumLines, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
       { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines',

@@ -466,7 +466,7 @@ way so it stays low-maintenance.
 - **Validate Constraints — the validator subsystem (v3.53+; full documentation in
   [VALIDATORS.md](VALIDATORS.md)):** floating button + popup menu of per-constraint validators
   (Kropki, cages, little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
-  between lines, renban, region-sum, parity, zipper, entropic, modular) that remove — never add — centre candidates with no
+  between lines, renban, nabner, region-sum, parity, zipper, entropic, modular) that remove — never add — centre candidates with no
   complete support. Entry points: `buildValidateButton` / `openValidateMenu` /
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
@@ -902,7 +902,7 @@ columns), return only the small answer.
 so it can never drift from the live cues) and scores them against the catalog's tags. Two tables:
 1. **Cue recall** — recall, misses by source, and **false positives** (cue fired, no tag). Baselines
    (v3.89): german whisper 99.0%, zipper 96.9%, parity 95.1%, region sum 94.5%, renban 94.4%, thermo
-   94.4%, entropic 88.9%.
+   94.4%, entropic 88.9%; nabner 100.0% (v3.152).
 2. **Clause-blindness** — of the puzzles where the cue fires *and* the rules name ≥2 colours (so
    layer 2 can't help), can `*_CLAUSE_RE` actually read the clue's colour? **`UNREADABLE` (no clause
    matches at all) is always a bug** — it means a guaranteed "cannot detect where the line is".
