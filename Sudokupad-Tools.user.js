@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.155.0
+// @version      3.156.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.155.0';
+  var SCRIPT_VERSION = '3.156.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9956,8 +9956,8 @@
   // share one region → all distinct; across segments (different regions) digits
   // may repeat. The target S is variable (like the arrow circle). Approach:
   // segments are independent GIVEN S, so per segment enumerate every distinct-cell
-  // assignment (backtracking, box-distinct), recording which sums it can hit and,
-  // per (cell,digit), the sums that place that digit there. A sum S is feasible
+  // assignment (`regionSumSegmentSupport` below), recording which sums it can hit
+  // and, per (cell,digit), the sums that place that digit there. A sum S is feasible
   // overall iff EVERY segment can reach it; a candidate d in cell C survives iff
   // some overall-feasible S has an assignment of C's segment with d in C summing to
   // S. Cross-segment same-row/col conflicts are deliberately NOT enforced (they'd
@@ -9968,6 +9968,60 @@
   // empty) rather than silently dropping the line — the empty cells are then
   // surfaced to the player as an error by the run toast (the "no valid combination"
   // path). Silent-drop gave a false all-clear on an invalid line (fixed v3.77).
+
+  // Enumerate ONE region-sum segment. `sets` = one candidate Set per cell (in
+  // segment order), `digitList` the puzzle's digits ascending. Returns the set of
+  // achievable segment sums + per-cell { digit → Set<sum> } support.
+  //
+  // A SEGMENT LIES IN ONE REGION, SO ITS CELLS HOLD DISTINCT DIGITS — which makes
+  // the achievable sums a question about digit SUBSETS, not orderings (v3.156).
+  // Until then this walked every ORDERING under a 200k node cap and died at 7 cells
+  // (a 9-cell segment is 986k orderings). Worse, a bail gives up on the WHOLE line,
+  // so one long segment silently killed every deduction the SHORT segments would
+  // have made: on a [4,7] line the 4-cell segment is pinned to sums 28-30 (its cells
+  // lose 1,2,3) and all of that was lost. There are only C(9,n) ≤ 126 subsets, so
+  // take each, test a perfect matching onto the cells (the machinery renban uses),
+  // and the sum is just the subset total. Exact, polynomial, and it cannot bail —
+  // verified identical to the old ordering walk on 3000 random segments.
+  // Pure + top-level so the harness can test it.
+  function regionSumSegmentSupport(sets, digitList) {
+    var n = sets.length;
+    var feasible = new Set(), cd = sets.map(function () { return new Map(); });
+    if (sets.some(function (s) { return s.size === 0; })) return { feasible: feasible, cd: cd, bailed: false, empty: true };
+    function matches(digits, cells) {
+      return hasPerfectMatching(digits.length, cells.length, function (a, b) { return cells[b].has(digits[a]); });
+    }
+    var pick = [];
+    (function choose(start, sum) {
+      if (pick.length === n) {
+        if (!matches(pick, sets)) return;
+        feasible.add(sum);
+        for (var i = 0; i < n; i++) {
+          for (var p = 0; p < n; p++) {
+            var d = pick[p];
+            if (!sets[i].has(d)) continue;
+            var have = cd[i].get(d);
+            if (have && have.has(sum)) continue;                 // another subset already proved it
+            var rest = pick.slice(0, p).concat(pick.slice(p + 1));
+            var cells = [], j;
+            for (j = 0; j < n; j++) if (j !== i) cells.push(sets[j]);
+            if (!matches(rest, cells)) continue;
+            if (!have) { have = new Set(); cd[i].set(d, have); }
+            have.add(sum);
+          }
+        }
+        return;
+      }
+      for (var q = start; q < digitList.length; q++) {
+        if (digitList.length - q < n - pick.length) break;        // not enough digits left
+        pick.push(digitList[q]);
+        choose(q + 1, sum + digitList[q]);
+        pick.pop();
+      }
+    })(0, 0);
+    return { feasible: feasible, cd: cd, bailed: false, empty: false };
+  }
+
   function computeRegionSumRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
@@ -9987,6 +10041,7 @@
       if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
       return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);   // regular box fallback
     }
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
     var work = {};
     Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
     function cellSet(key) {
@@ -10009,34 +10064,8 @@
     });
     if (lineData.length === 0) return { noRegionSum: true };
 
-    // Enumerate one segment (all cells distinct — same region). Returns the set of
-    // achievable sums + per-cell { digit → Set<sum> } support, or a bail/empty flag.
     function enumSegment(segKeys) {
-      var sets = segKeys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
-      var n = sets.length;
-      var feasible = new Set(), cd = sets.map(function () { return new Map(); });
-      if (sets.some(function (s) { return s.length === 0; })) return { feasible: feasible, cd: cd, bailed: false, empty: true };
-      var assign = new Array(n), used = new Set(), nodes = 0, CAP = 200000, bailed = false;
-      function dfs(idx, sum) {
-        if (bailed) return;
-        if (nodes++ > CAP) { bailed = true; return; }
-        if (idx === n) {
-          feasible.add(sum);
-          for (var k = 0; k < n; k++) { var m = cd[k], dd = assign[k]; if (!m.has(dd)) m.set(dd, new Set()); m.get(dd).add(sum); }
-          return;
-        }
-        var opts = sets[idx];
-        for (var oi = 0; oi < opts.length; oi++) {
-          var d = opts[oi];
-          if (used.has(d)) continue;                             // same region → distinct
-          used.add(d); assign[idx] = d;
-          dfs(idx + 1, sum + d);
-          used.delete(d);
-          if (bailed) return;
-        }
-      }
-      dfs(0, 0);
-      return { feasible: feasible, cd: cd, bailed: bailed, empty: false };
+      return regionSumSegmentSupport(segKeys.map(function (k) { return cellSet(k); }), digitList);
     }
 
     var removals = [], seen = {}, changed = true, guard = 0;

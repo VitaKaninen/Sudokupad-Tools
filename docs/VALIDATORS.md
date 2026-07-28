@@ -430,6 +430,30 @@ uniform contradiction signal; the post-run Undo button restores the marks. Itera
 fixpoint. Only centre marks are removed; nothing is ever added. Variable targets (arrow circle,
 region-sum S) are part of the enumeration, not fixed inputs.
 
+### A NODE CAP IS A SILENT NO-OP — audit it against the clue's real size (v3.155/v3.156)
+
+"Node-cap hit → bail, no removals" is *safe* but not *harmless*: the ↻ lights, nothing is removed,
+and nothing tells the player. A cap is only acceptable when the clue sizes that trip it are the ones
+with nothing to deduce. **Four validators enumerate exhaustively; all four were measured at full 1-9
+marks (worst case) and, for the two sum-based ones, over 4000 randomised trials with reduced
+pencilmarks and real conflict matrices against a 60M-node reference:**
+
+| validator | search | cap dies at | verdict |
+|---|---|---|---|
+| **Little killer** (`computeSupported`, ~7774) | fills hitting a fixed target sum | 7-cell diagonal | **safe** — exact-sum pruning is cheap exactly when the sum is *constraining*. Eliminations need target < n+8 or > 9n−8; the bail zone is mid-range targets, which eliminate nothing. Bail∩deduction = **∅** at full marks; **0 bails in 4000** reduced-mark trials. |
+| **Arrow / double arrow** (`computeSupported`, ~11248) | signed total = 0 | tc≥3, or tc=2 with ≥8 line cells | **safe** — same reason (signed suffix bound). Bail∩deduction = **∅**; **0 bails in 4000** trials. |
+| **Ten line** (`lineSupport`) | every complete fill, digits REPEAT | **11 open cells** | **was broken** → `tenLineTilingSupport` fallback (v3.155). |
+| **Region sum** (`enumSegment`) | every distinct-cell ordering | **7-cell segment** | **was broken** → `regionSumSegmentSupport`, subsets + matching (v3.156). |
+
+The pattern: a cap is fine when the **pruning strength tracks the constraint strength** (both
+sum-target searches), and fatal when it doesn't (ten lines repeat digits, so fills are exponential
+regardless of the target; region-sum segments enumerated orderings when only the *subset* mattered).
+`betweenInteriorsFeasible`'s 20k budget is a third, safe shape: it seeks **one** solution, not all
+of them, and answers FEASIBLE on overrun (under-remove). Every other validator (kropki, cage, thermo,
+whisper, Dutch, XV, between, renban, nabner, parity, zipper, entropic, modular) is pairwise, per-cell,
+bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial, no cap, nothing to
+audit.
+
 ## Layer 0 — native constraint payload (f-puzzles)
 
 **Native constraint payload (layer 0, v3.90) — `getRawPuzzleJson` / `getNativeLineClues` /
@@ -756,10 +780,21 @@ digits) instead of sum combos; reuses `hasPerfectMatching` for the complete-supp
 **Region-sum compute** = split each line into maximal same-region **segments** (region id via
 `getModelRegionMap`, else `regularBoxDims` box; note the model map is keyed `"row,col"`, the
 OPPOSITE of the validators' `"col,row"` — converted in `regionId`), keep lines with ≥2 segments; the
-target sum **S is variable**; segments are independent given S, so `enumSegment` backtracks each
-segment (box-distinct, 200k cap→bail) recording achievable sums + per-(cell,digit) sums;
-overall-feasible S = ∩ of every segment's sums; a candidate survives iff some overall-feasible S
-places it. **Cross-segment same-row/col conflicts are deliberately NOT enforced** (would couple
+target sum **S is variable**; segments are independent given S, so `enumSegment` enumerates each
+segment recording achievable sums + per-(cell,digit) sums; overall-feasible S = ∩ of every segment's
+sums; a candidate survives iff some overall-feasible S places it.
+
+**A SEGMENT IS ONE REGION, SO ITS CELLS ARE DISTINCT — enumerate SUBSETS, not orderings (v3.156).**
+Until then `enumSegment` walked every distinct-cell **ordering** under a 200k node cap. Measured at
+full 1-9 marks it finishes at 6 cells (79k nodes) and blows the cap at **7** (a 9-cell segment is
+986k orderings). And a bail is not local — `segRes.some(bailed) → return` gives up on the **whole
+line**, so one long segment silently killed every deduction the *short* segments would have made. On
+a `[4,7]` line the 4-cell segment is pinned to S ∈ {28,29,30} and its cells lose 1,2,3; all of that
+was lost. Now the pure top-level **`regionSumSegmentSupport(sets, digitList)`** (harness-tested):
+there are only C(9,n) ≤ 126 digit **subsets**, so take each, test a **perfect matching** onto the
+cells (`hasPerfectMatching`, the machinery renban uses), and the sum is just the subset total. Exact,
+polynomial, and it **cannot bail** — verified identical to the old ordering walk on 3000 random
+segments; the 9-cell segment resolves in under a millisecond. **Cross-segment same-row/col conflicts are deliberately NOT enforced** (would couple
 segments) — under-constrains only, never over-removes (same safe caveat as the LK jigsaw boxes).
 Both iterate to a fixpoint and honour fog per-cell. **Contradiction handling (v3.77):** renban drops
 a *structurally* impossible line (0 runs — line longer than the digit set); region-sum, when a

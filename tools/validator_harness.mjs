@@ -89,7 +89,7 @@ const NAMES = [
   // geometry / chains
   'expandLineChain', 'fpuzCellKey', 'regionSumSegments', 'thermoBulbShaftCompatible',
   // ten-line structural feasibility
-  'tenLineSegSizes', 'tenLinePartitionable', 'tenLineTilingSupport',
+  'tenLineSegSizes', 'tenLinePartitionable', 'tenLineTilingSupport', 'regionSumSegmentSupport',
   // region colouring
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
@@ -533,6 +533,36 @@ checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable
     const d = noDiff(2); d[0][1] = d[1][0] = true;
     check('ten fallback: mustDiffer inside a group blocks 5+5', sup([[5], [5]], false, d), ['', '']);
   }
+}
+// ── region-sum segment support (v3.156) ─────────────────────────────────────
+// A segment is one region, so its cells are DISTINCT: the achievable sums are a
+// question about digit SUBSETS, not orderings. The old ordering walk blew its
+// 200k node cap at 7 cells and a bail gave up on the WHOLE line, losing what the
+// short segments would have proved.
+{
+  const D9 = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const S = (...ds) => new Set(ds);
+  const sums = r => [...r.feasible].sort((a, b) => a - b);
+  const full = n => Array.from({ length: n }, () => new Set(D9));
+  check('region seg: 4 free cells reach 10..30', sums(F.regionSumSegmentSupport(full(4), D9)),
+        [10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30]);
+  check('region seg: 7 free cells reach 28..42', sums(F.regionSumSegmentSupport(full(7), D9)),
+        [28,29,30,31,32,33,34,35,36,37,38,39,40,41,42]);
+  // The 9-cell segment that used to blow the cap outright: one subset, one sum.
+  check('region seg: 9 free cells are the whole digit set', sums(F.regionSumSegmentSupport(full(9), D9)), [45]);
+  // Distinctness is enforced by the matching, not by ordering: two cells that can
+  // only be {5} cannot both take it, so no sum is reachable at all.
+  check('region seg: two cells locked to the same digit', sums(F.regionSumSegmentSupport([S(5), S(5)], D9)), []);
+  check('region seg: {5} and {5,7} → only 12', sums(F.regionSumSegmentSupport([S(5), S(5, 7)], D9)), [12]);
+  // Per-(cell,digit) support carries the sums that place it there.
+  {
+    const r = F.regionSumSegmentSupport([S(1, 2), S(3, 4)], D9);
+    check('region seg: sums of {1,2}+{3,4}', sums(r), [4, 5, 6]);
+    check('region seg: digit 1 in cell 0 gives 4 or 5', [...r.cd[0].get(1)].sort(), [4, 5]);
+    check('region seg: digit 4 in cell 1 gives 5 or 6', [...r.cd[1].get(4)].sort(), [5, 6]);
+  }
+  checkTrue('region seg: an empty cell flags empty, not a bail',
+            F.regionSumSegmentSupport([S(1), new Set()], D9).empty);
 }
 checkTrue('matching: 2x2 all allowed', F.hasPerfectMatching(2, 2, () => true));
 checkFalse('matching: both digits forced into cell 0', F.hasPerfectMatching(2, 2, (d, c) => c === 0));
