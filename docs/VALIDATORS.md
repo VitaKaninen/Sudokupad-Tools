@@ -420,8 +420,9 @@ in this cell. Never pairwise/local checks when the rule is global: enumerate eve
 assignment (repeats allowed except where a shared row/col/box/uniqueness-cage forbids — per-clue
 conflict matrix), union digits per cell, remove only marks outside the union. **Never over-remove,
 but DO report contradictions (v3.77):** a *structurally* impossible clue (a cage total no combo can
-make, a renban longer than the digit set) → DROP the clue (never wipe — the puzzle author's issue,
-not the solver's); node-cap hit → bail, no removals from that clue this pass; ambiguous detection →
+make, a renban longer than the digit set) → DROP the clue (never wipe — the marks are innocent) **and
+REPORT it (v3.157 — see below; it is our misread, not the puzzle's error)**; node-cap hit → bail, no
+removals from that clue this pass; ambiguous detection →
 skip the clue (under-detect, never mis-apply). BUT a clue that's impossible **because of the current
 pencilmarks** (no candidate has complete support — e.g. region-sum segments with no common S) is a
 real solver contradiction: the pass removes those unsupported candidates, emptying the cells, and
@@ -429,6 +430,48 @@ the run reports a **red "no valid combination" error** (never a green all-clear)
 uniform contradiction signal; the post-run Undo button restores the marks. Iterate all clues to a
 fixpoint. Only centre marks are removed; nothing is ever added. Variable targets (arrow circle,
 region-sum S) are part of the enumeration, not fixed inputs.
+
+### AN IMPOSSIBLE CLUE IS OUR MISREAD, NOT THE PUZZLE'S ERROR (v3.157)
+
+**Working assumption: every clue in every puzzle is VALID.** The catalog's puzzles are peer-reviewed
+and have been hand-solved by many people; they do not ship broken constraints. So a clue that **no
+arrangement of digits could ever satisfy** — a 10-cell renban or a 10-cell *strict* thermometer over
+1-9, a cage total no combination makes, a little killer whose cells can't reach its total — does not
+mean the puzzle is wrong. **It means WE claimed the wrong clue type for that drawing**: a cue matched
+too broadly, a colour pinned the wrong line, a label was misread. That is a **detection bug**, and
+the one thing it must never do is hide behind a green "all clear".
+
+So the policy is **fail loudly, never work around it**: don't wipe the cells (the marks are
+innocent), don't soften the rule to make the clue fit, don't silently skip it. **Drop it, count it,
+and report it as a red error naming the clue type.** The count rides back on the compute result as
+`invalid` (alongside `removals`), `applyOneValidator` carries it on *every* outcome — including the
+"none found" path, so a run where **every** clue was impossible still reports it — and both toast
+paths put `invalidClueMsg` ahead of any all-clear. Only the mark-contradiction error outranks it,
+because that one correctly blames the marks.
+
+**Structural means MARK-INDEPENDENT.** A clue the *current pencilmarks* can't satisfy is a different
+thing entirely — a real solver contradiction — and still goes down the `noValidComboMsg` wipe path.
+
+| validator | structural test | note |
+|---|---|---|
+| **Renban** | no consecutive run of length L exists (L > digit set) | already detected; now reported |
+| **Nabner** | no non-consecutive set of length L (6+ over 1-9) | already detected; now reported |
+| **Ten line** | `tenLinePartitionable` false (a 1-cell ten line) | already detected; now reported |
+| **Cage** | zero `cageCombinations` for (size, total) | already detected; now reported |
+| **Thermo** | `thermoLongestChain(tree) > ` digit-set size | **new**; SLOW thermos exempt — non-decreasing fills any length |
+| **Little killer** | total outside `n×min … n×max` | **new**; cells may repeat, so this is the loose bound |
+| **Arrow / double arrow** | target range `tc×min…tc×max` disjoint from line range | **new**; a 10-cell shaft can't sum under 10, one circle can't exceed 9 |
+| **Region sum** | no S in every segment's `n-smallest … n-largest` range | **new**; segments are one region → distinct digits |
+
+**Every one of these tests is provably conservative — a satisfiable clue can never be flagged.** If a
+legal fill exists, its sum/length necessarily lies inside the loose bound the test checks (e.g. for
+an arrow, target sum `S` satisfies `S ≤ tc×max` and `S ≥ ln×min`, so the ranges must overlap). Row,
+column, box and cage conflicts only *narrow* the true ranges, so a merely tight clue is never
+flagged. That is why the bounds are deliberately loose rather than exact.
+
+**Deliberately NOT length-checked: between-line interiors.** A between line's interior digits are
+only required to lie strictly between the bulbs — they **may repeat** — so there is no length at
+which the interior becomes impossible. A "10-cell interior must be invalid" check would be wrong.
 
 ### A NODE CAP IS A SILENT NO-OP — audit it against the clue's real size (v3.155/v3.156)
 

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.156.0
+// @version      3.157.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.156.0';
+  var SCRIPT_VERSION = '3.157.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7507,16 +7507,20 @@
 
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
 
-    // Per-cage combination list. A cage with ZERO valid combinations (an impossible
-    // total, or a digit set that doesn't match the puzzle's) is dropped rather than
-    // allowed to wipe out every candidate — the validator must never over-remove.
-    var active = [];
+    // Per-cage combination list. A cage with ZERO valid combinations (a total no
+    // combination of distinct digits can make, or a digit set that doesn't match the
+    // puzzle's) is IMPOSSIBLE as read: dropped rather than allowed to wipe out every
+    // candidate, and reported rather than silently skipped (see invalidClueMsg) —
+    // a peer-reviewed puzzle doesn't ship an unmakeable cage, so it means the total
+    // or the cage's cell list was misread.
+    var active = [], invalid = 0;
     cages.forEach(function (cage) {
       var combos = cageCombinations(digitList, cage.keys.length, cage.sum)
         .map(function (c) { return { arr: c, set: new Set(c) }; });
       if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
+      else invalid++;
     });
-    if (active.length === 0) return { noCages: true };
+    if (active.length === 0) return { noCages: true, invalid: invalid };
 
     // Working copies of the player's centre marks (the only cells we may modify).
     var work = {};
@@ -7574,7 +7578,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, cageCount: active.length, emptiedCells: emptied };
+    return { removals: removals, cageCount: active.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Little-killer validator ───────────────────────────────────────────────
@@ -7755,6 +7759,22 @@
       var conf = keys.map(function (_, i) { return keys.map(function (__, j) { return i !== j && conflict(keys[i], keys[j]); }); });
       return { keys: keys, sum: lk.sum, conf: conf };
     });
+    // A total the cells cannot reach even with every digit free (little killer cells
+    // MAY repeat, so the bound is n×min .. n×max) is IMPOSSIBLE as read — the total
+    // or the diagonal was misread, not the puzzle. Dropped and reported rather than
+    // left to the search, which would find no support and wipe the cells. The bound
+    // is deliberately the loose one: box/cage conflicts can only raise the true
+    // minimum, so this never flags a diagonal that is merely tight.
+    var lkDigits = Object.keys(st.uni).map(Number);
+    var lkMin = Math.min.apply(null, lkDigits), lkMax = Math.max.apply(null, lkDigits);
+    var invalid = 0;
+    diags = diags.filter(function (d) {
+      var n = d.keys.length;
+      if (d.sum >= n * lkMin && d.sum <= n * lkMax) return true;
+      invalid++;
+      return false;
+    });
+    if (diags.length === 0) return { noLittleKillers: true, invalid: invalid };
 
     // Working copies of the player's centre marks (the only cells we may modify).
     var work = {};
@@ -7825,7 +7845,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, lkCount: diags.length, emptiedCells: emptied };
+    return { removals: removals, lkCount: diags.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── German Whisper validator ──────────────────────────────────────────────
@@ -9503,6 +9523,9 @@
     var lineData = lines.map(function (keys) { return (keys.length > 2 && keys[0] === keys[keys.length - 1]) ? keys.slice(0, -1) : keys; })
                         .map(function (keys) { return { keys: keys, runs: runsFor(keys.length) }; })
                         .filter(function (ld) { return ld.runs.length > 0; });   // impossible line → dropped
+    // A renban with more cells than the digit set has NO run — impossible as read,
+    // so it is reported rather than silently skipped (see invalidClueMsg).
+    var invalid = lines.length - lineData.length;
 
     // Does some run admit a full fill with digit d in cell C? Fix d→C, then require
     // a perfect matching of the run's remaining digits onto the remaining cells.
@@ -9543,7 +9566,7 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, renbanCount: lineData.length, emptiedCells: emptied };
+    return { removals: removals, renbanCount: lineData.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Nabner validator ──────────────────────────────────────────────────────
@@ -9609,6 +9632,9 @@
                           return { keys: keys, sets: setCache[keys.length] };
                         })
                         .filter(function (ld) { return ld.sets.length > 0; });   // impossible line → dropped
+    // Too long to fill with no two digits consecutive (6+ cells over 1-9) → no set
+    // exists → impossible as read, reported rather than silently skipped.
+    var invalid = lines.length - lineData.length;
 
     // Does some set admit a full fill with digit d in cell C? Fix d→C, then require
     // a perfect matching of the set's remaining digits onto the remaining cells.
@@ -9649,7 +9675,7 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, nabnerCount: lineData.length, emptiedCells: emptied };
+    return { removals: removals, nabnerCount: lineData.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // Which SEGMENT LENGTHS can sum to exactly 10 over `digitList` (digits may
@@ -9823,6 +9849,9 @@
       var loop = keys.length > 2 && keys[0] === keys[keys.length - 1];
       return { keys: loop ? keys.slice(0, -1) : keys, loop: loop };
     }).filter(function (ld) { return tenLinePartitionable(ld.keys.length, digitList); });
+    // A length no set of 10-sums can tile (a 1-cell ten line over 1-9) is impossible
+    // as read, so it is reported rather than silently skipped.
+    var invalid = lines.length - lineData.length;
 
     // Union of the digits each cell can hold over every complete legal fill.
     // `null` = the search bailed on the node cap (leave the line alone this pass).
@@ -9920,7 +9949,7 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, tenLineCount: lineData.length, emptiedCells: emptied };
+    return { removals: removals, tenLineCount: lineData.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // Split a region-sum line's cell chain into maximal same-region runs.
@@ -10057,12 +10086,36 @@
     }
     // Maximal same-region runs (loop-aware — see regionSumSegments); keep only
     // lines with ≥2 segments, since one segment carries no constraint.
-    var lineData = [];
+    var lineData = [], invalid = 0;
+    // A segment's cells share a region, so they are DISTINCT: whatever the marks, an
+    // n-cell segment can only total between the n smallest and the n largest digits.
+    // If no single S lies in EVERY segment's range the line is IMPOSSIBLE as read
+    // (a 1-cell segment tops out at 9 against a 9-cell segment's 45) — dropped and
+    // reported, not wiped. This is the MARK-INDEPENDENT test; a line whose segments
+    // share no S only because of the current pencilmarks is a real solver
+    // contradiction and still goes down the wipe/"no valid combination" path.
+    function segRange(n) {
+      var lo = 0, hi = 0, i;
+      for (i = 0; i < n && i < digitList.length; i++) {
+        lo += digitList[i];
+        hi += digitList[digitList.length - 1 - i];
+      }
+      return { lo: lo, hi: hi, fits: n <= digitList.length };
+    }
     lines.forEach(function (keys) {
       var segs = regionSumSegments(keys, regionId);
-      if (segs.length >= 2) lineData.push({ keys: keys, segs: segs });
+      if (segs.length < 2) return;
+      var lo = -Infinity, hi = Infinity, impossible = false;
+      segs.forEach(function (sg) {
+        var r = segRange(sg.length);
+        if (!r.fits) impossible = true;                          // more cells than digits
+        lo = Math.max(lo, r.lo);
+        hi = Math.min(hi, r.hi);
+      });
+      if (impossible || lo > hi) { invalid++; return; }
+      lineData.push({ keys: keys, segs: segs });
     });
-    if (lineData.length === 0) return { noRegionSum: true };
+    if (lineData.length === 0) return { noRegionSum: true, invalid: invalid };
 
     function enumSegment(segKeys) {
       return regionSumSegmentSupport(segKeys.map(function (k) { return cellSet(k); }), digitList);
@@ -10108,7 +10161,7 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, regionSumCount: lineData.length, emptiedCells: emptied };
+    return { removals: removals, regionSumCount: lineData.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Parity-line validator ─────────────────────────────────────────────────
@@ -10490,6 +10543,28 @@
   // and each branch point fans out correctly. Shared by both the model and
   // DOM readers below. Returns [{ keys:[<col,row>… every cell], edges:
   // [[parentKey,childKey]…], root:<col,row>, leaves:[<col,row>…] }].
+  // Longest root-to-leaf cell count of a thermo tree (a branching thermo's arms are
+  // independent, so the LONGEST arm is what has to fit the digit set). Iterative —
+  // a malformed tree must not blow the stack. Pure + top-level so the harness can
+  // test it.
+  function thermoLongestChain(tree) {
+    if (!tree || !tree.root) return 0;
+    var kids = {}, i, e;
+    for (i = 0; i < (tree.edges || []).length; i++) {
+      e = tree.edges[i];
+      (kids[e[0]] = kids[e[0]] || []).push(e[1]);
+    }
+    var best = 0, stack = [[tree.root, 1]], seen = {};
+    while (stack.length) {
+      var top = stack.pop(), key = top[0], depth = top[1];
+      if (seen[key] && seen[key] >= depth) continue;      // already reached at least this deep
+      seen[key] = depth;
+      if (depth > best) best = depth;
+      var cs = kids[key] || [];
+      for (i = 0; i < cs.length; i++) stack.push([cs[i], depth + 1]);
+    }
+    return best;
+  }
   function buildThermoTrees(chains) {
     var byBulb = {};
     chains.forEach(function (c) { (byBulb[c[0]] = byBulb[c[0]] || []).push(c); });
@@ -10945,9 +11020,23 @@
          ' no bulb marker — the bulb position is unknown, so ' + (det.bulbless === 1 ? 'it was' : 'they were') + ' not checked.')
       : null;
     if (unitFilter) thermos = thermos.filter(function (t) { return unitFilter(t.keys); });
-    if (thermos.length === 0) return { noThermos: true, note: note };
 
     var slow = effectiveThermoSlow();
+    // A STRICT thermometer's digits increase by at least 1 every cell, so an arm
+    // longer than the digit set can NEVER be filled — impossible as read, dropped
+    // and reported instead of propagating (which would empty cells and blame the
+    // player's marks for our misread). SLOW thermometers are exempt: they only
+    // require non-DEcreasing, so any length is fillable.
+    var invalid = 0;
+    if (!slow) {
+      var maxLen = Object.keys(st.uni).length;
+      var okThermos = [];
+      thermos.forEach(function (t) {
+        if (thermoLongestChain(t) > maxLen) invalid++; else okThermos.push(t);
+      });
+      thermos = okThermos;
+    }
+    if (thermos.length === 0) return { noThermos: true, note: note, invalid: invalid };
     var regionCageSets = slow ? getThermoRegionCageSets() : [];
 
     var values = st.values, fullSet = st.fullSet;
@@ -11003,7 +11092,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied, note: note };
+    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied, note: note, invalid: invalid };
   }
 
   // ── Sum-arrow + double-arrow validator ────────────────────────────────────
@@ -11252,6 +11341,22 @@
       var conf = keys.map(function (_, i) { return keys.map(function (__, j) { return i !== j && keys[i] !== keys[j] && conflict(keys[i], keys[j]); }); });
       return { keys: keys, tc: u.tc, conf: conf };
     });
+    // The two sides must be able to MEET: with every digit free the target side spans
+    // tc×min .. tc×max and the line side (n−tc)×min .. (n−tc)×max (arrow digits may
+    // repeat). Disjoint ranges mean the clue is IMPOSSIBLE as read — a 10-cell shaft
+    // under one circle can't sum below 10 while the circle can't exceed 9 — so it is
+    // dropped and reported instead of wiping the shaft. Loose on purpose: row/col/box
+    // conflicts only narrow the true ranges, so a merely tight arrow is never flagged.
+    var arDigits = Object.keys(st.uni).map(Number);
+    var arMin = Math.min.apply(null, arDigits), arMax = Math.max.apply(null, arDigits);
+    var invalid = 0;
+    units = units.filter(function (u) {
+      var ln = u.keys.length - u.tc;
+      if (u.tc * arMax >= ln * arMin && u.tc * arMin <= ln * arMax) return true;
+      invalid++;
+      return false;
+    });
+    if (units.length === 0) return { noArrows: true, invalid: invalid };
 
     // Working copies of the player's centre marks (the only cells we may modify).
     var work = {};
@@ -11334,7 +11439,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, arrowCount: units.length, emptiedCells: emptied };
+    return { removals: removals, arrowCount: units.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Between-line validator ─────────────────────────────────────────────────
@@ -11574,7 +11679,17 @@
   // cross-cutting feature the others already carry, or it silently ships half-built
   // (e.g. no hover eyeball). When you ADD a validator, do ALL of these:
   //   1. A `compute(unitFilter)` fn returning { removals, emptiedCells, <unitCount>,
-  //      unsupported?, <none>? }. unitFilter (nullable) is fn(cellKeys[])→bool; the
+  //      unsupported?, <none>?, invalid? }. `invalid` = how many clues were
+  //      STRUCTURALLY IMPOSSIBLE (see invalidClueMsg): work out the loosest
+  //      mark-independent bound your rule implies — a length the digit set can't
+  //      supply, a total the cells can't reach — DROP those clues, count them, and
+  //      return the count on EVERY exit path including the <none> one. Puzzles are
+  //      peer-reviewed, so an impossible clue means WE mis-detected it; never let it
+  //      pass as a green all-clear, and never wipe the cells over it. Keep the bound
+  //      LOOSE (repeats allowed unless the rule forbids them) so a satisfiable clue
+  //      can never be flagged — and check whether your rule even HAS such a bound
+  //      (between-line interiors may repeat, so they have none).
+  //      unitFilter (nullable) is fn(cellKeys[])→bool; the
   //      compute must DROP any clue whose full cell list fails it BEFORE validating
   //      ("Validate selection only": a partially-selected clue is skipped, never
   //      half-checked). Line validators: reuse resolveCueValidatorLines + one of the
@@ -12123,6 +12238,44 @@
            'pencilmarks — there\'s a mistake (or the marks are incomplete). Use the Undo ' +
            'button (or Ctrl+Z) to restore them.';
   }
+  // ── A STRUCTURALLY IMPOSSIBLE CLUE IS OUR MISREAD, NOT THE PUZZLE'S ERROR ───
+  // (v3.157) Every puzzle in the catalog is peer-reviewed and has been hand-solved
+  // by many people, so the working assumption is that ALL ITS CLUES ARE VALID. A
+  // clue that NO arrangement of digits could ever satisfy — a 10-cell renban or a
+  // 10-cell strict thermometer over 1-9, a cage total no combination makes, a little
+  // killer whose cells can't reach its total — therefore does NOT mean "broken
+  // puzzle". It means WE claimed the wrong clue type for that drawing: a cue matched
+  // too broadly, a colour pinned the wrong line, a label was misread. That is a
+  // DETECTION bug, and the one thing it must never do is hide behind a green
+  // "all clear".
+  //
+  // So the policy is FAIL LOUDLY — never work around it, never soften the rule to
+  // make the clue fit:
+  //   • never WIPE the cells (the marks are innocent; the clue is the problem),
+  //   • never validate it under a weakened reading,
+  //   • DROP it, COUNT it, and report it as an error naming the clue type.
+  // The count rides back on the compute result as `invalid`, and the toast paths
+  // below put it AHEAD of any all-clear.
+  //
+  // STRUCTURAL MEANS MARK-INDEPENDENT. A clue the current pencilmarks can't satisfy
+  // is a different thing entirely — a real solver contradiction — and still goes
+  // down the `noValidComboMsg` path, which correctly blames the marks.
+  function invalidClueMsg(n, unitNoun) {
+    var these = n === 1 ? 'it' : 'them', isAre = n === 1 ? 'is' : 'are';
+    return '⛔ ' + n + ' ' + pluralUnit(unitNoun, n) + ' ' + (n === 1 ? 'is' : 'are') +
+           ' IMPOSSIBLE as read — no arrangement of digits can satisfy ' + these +
+           ', whatever the pencilmarks say (for example more cells than the digit set ' +
+           'allows). Puzzles are peer-reviewed and hand-solved, so this almost ' +
+           'certainly means the clue was mis-identified — the wrong line type was ' +
+           'matched to that drawing — rather than that the puzzle ' + isAre + ' wrong. ' +
+           (n === 1 ? 'It was' : 'They were') + ' NOT checked and nothing was changed for ' +
+           these + '.';
+  }
+  // Compose the invalid-clue error with whatever the run would otherwise have said.
+  function withInvalid(res, def, msg) {
+    if (!res.invalid) return null;
+    return invalidClueMsg(res.invalid, def.unitNoun) + (msg ? ' — ' + msg : '');
+  }
   function validateAbortToast(reverted) {
     if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
     else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
@@ -12536,17 +12689,20 @@
     // thermo validator's "N bulbless lines were not checked") — carried on
     // every outcome so a skipped clue is never silent.
     var note = comp.note || null;
-    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, note: note };
+    // Structurally impossible clues (see invalidClueMsg): dropped, never validated,
+    // and carried on EVERY outcome so they can't vanish behind an all-clear.
+    var invalid = comp.invalid || 0;
+    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, note: note, invalid: invalid };
     var count = comp[def.countKey] || 0;
     var removals = comp.removals || [];
-    if (removals.length === 0) return { present: true, removed: 0, count: count, note: note };
+    if (removals.length === 0) return { present: true, removed: 0, count: count, note: note, invalid: invalid };
     var preSnap = snapshotPencilmarks();
     var r = await _removeCandidatesInternal(removals);
     if (r.aborted) {
       var reverted = await revertToSnapshot(preSnap, 12);
-      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, note: note };
+      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, note: note, invalid: invalid };
     }
-    return { present: true, removed: r.removed, count: count, note: note };
+    return { present: true, removed: r.removed, count: count, note: note, invalid: invalid };
   }
 
   // Run a single validator (a menu pick): lock, compute+apply once, toast.
@@ -12565,6 +12721,9 @@
       if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (!res.present) {
         if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + (validatorLabel(def)) + '" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
+        // Every clue was impossible as read → that IS the result, not "none found".
+        var noneInv = withInvalid(res, def, null);
+        if (noneInv) { showRemoveInvalidToast(withNote(noneInv), 'error'); return; }
         // A note explains WHY nothing was checkable (e.g. bulbless thermos) —
         // that deserves the player's attention, so it warns instead of green.
         showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), res.note ? 'warning' : 'success'); return;
@@ -12573,12 +12732,17 @@
       // A removal made changes → offer a post-run Undo (one native-undo group).
       if (res.removed > 0) validatorArmUndo(1, preSnap);
       var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
-      if (res.removed === 0) { showRemoveInvalidToast(withWarn(withNote('Checked ' + checked + ' — no invalid candidates to remove.')), okType()); return; }
       var emptied = countEmptiedSince(before);
-      if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, res.removed, emptied), 'error'); return; }
-      var msg = 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
-                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
-      showRemoveInvalidToast(withWarn(withNote(msg)), okType());
+      var body = res.removed === 0
+        ? 'Checked ' + checked + ' — no invalid candidates to remove.'
+        : 'Removed ' + res.removed + ' invalid candidate' + (res.removed === 1 ? '' : 's') +
+          ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
+      // An impossible clue outranks every other outcome except a mark contradiction,
+      // which is reported on its own terms (it blames the marks, not the clue).
+      if (emptied > 0) { showRemoveInvalidToast(withNote(noValidComboMsg(checked, res.removed, emptied)), 'error'); return; }
+      var inv = withInvalid(res, def, body);
+      if (inv) { showRemoveInvalidToast(withNote(inv), 'error'); return; }
+      showRemoveInvalidToast(withWarn(withNote(body)), okType());
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -12604,12 +12768,15 @@
     (async function () {
       var totalRemoved = 0, undoSteps = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
       var notes = {};   // informational notes (e.g. bulbless thermos), deduped across passes
+      var invalid = {}; // validator name → impossible-clue count (see invalidClueMsg)
       var changed = true, guard = 0;
       while (changed && guard++ < 50) {
         changed = false;
         for (var i = 0; i < defs.length; i++) {
           var res = await applyOneValidator(defs[i], unitFilter);
           if (res.note) notes[res.note] = 1;
+          // Same clues every pass, so take the count rather than accumulating it.
+          if (res.invalid) invalid[defs[i].name] = { n: res.invalid, unitNoun: defs[i].unitNoun };
           if (res.unsupported) { unsupported = true; break; }
           if (res.aborted) { aborted = true; reverted = res.reverted; break; }
           if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
@@ -12618,26 +12785,34 @@
         passes++;
         if (unsupported || aborted) break;
       }
-      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, notes: Object.keys(notes) };
+      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, notes: Object.keys(notes), invalid: invalid };
     })().then(function (s) {
       function withNotes(msg) { return s.notes.length ? msg + ' ' + s.notes.join(' ') : msg; }
+      // One combined sentence per clue type that came back structurally impossible.
+      var invNames = Object.keys(s.invalid);
+      var invMsg = invNames.length
+        ? invNames.map(function (nm) { return invalidClueMsg(s.invalid[nm].n, s.invalid[nm].unitNoun); }).join(' ')
+        : null;
       if (s.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
       if (s.aborted) { validateAbortToast(s.reverted); return; }
       if (s.totalRemoved > 0) validatorArmUndo(s.undoSteps, preSnap);
       var names = Object.keys(s.present);
       if (names.length === 0) {
+        if (invMsg) { showRemoveInvalidToast(withNotes(invMsg), 'error'); return; }
         var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
         showRemoveInvalidToast(withNotes(noneFoundMsg(nouns, !!unitFilter)), s.notes.length ? 'warning' : 'success');
         return;
       }
       var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
-      if (s.totalRemoved === 0) { showRemoveInvalidToast(withWarn(withNotes('Checked ' + checked + ' — no invalid candidates to remove.')), okType()); return; }
       var emptied = countEmptiedSince(before);
-      if (emptied > 0) { showRemoveInvalidToast(noValidComboMsg(checked, s.totalRemoved, emptied), 'error'); return; }
-      var msg = 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
-                ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
-                ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
-      showRemoveInvalidToast(withWarn(withNotes(msg)), okType());
+      var body = s.totalRemoved === 0
+        ? 'Checked ' + checked + ' — no invalid candidates to remove.'
+        : 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
+          ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
+          ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
+      if (emptied > 0) { showRemoveInvalidToast(withNotes(noValidComboMsg(checked, s.totalRemoved, emptied)), 'error'); return; }
+      if (invMsg) { showRemoveInvalidToast(withNotes(invMsg + ' — ' + body), 'error'); return; }
+      showRemoveInvalidToast(withWarn(withNotes(body)), okType());
     }).finally(function () { actionInProgress = false; });
   }
 

@@ -88,6 +88,7 @@ const NAMES = [
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
   'expandLineChain', 'fpuzCellKey', 'regionSumSegments', 'thermoBulbShaftCompatible',
+  'thermoLongestChain',
   // ten-line structural feasibility
   'tenLineSegSizes', 'tenLinePartitionable', 'tenLineTilingSupport', 'regionSumSegmentSupport',
   // region colouring
@@ -563,6 +564,24 @@ checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable
   }
   checkTrue('region seg: an empty cell flags empty, not a bail',
             F.regionSumSegmentSupport([S(1), new Set()], D9).empty);
+}
+// ── thermo arm length (v3.157) ──────────────────────────────────────────────
+// A STRICT thermometer rises by >=1 every cell, so an arm longer than the digit
+// set can never be filled — that clue is impossible as read and gets dropped +
+// reported, not propagated (which would empty cells and blame the player's marks).
+// A branching thermo's arms are independent, so the LONGEST arm is the test.
+{
+  const chain = (...ks) => ({ root: ks[0], edges: ks.slice(1).map((k, i) => [ks[i], k]) });
+  check('thermo chain: 3-cell line', F.thermoLongestChain(chain('0,0', '0,1', '0,2')), 3);
+  check('thermo chain: bulb only', F.thermoLongestChain(chain('0,0')), 1);
+  check('thermo chain: empty tree', F.thermoLongestChain(null), 0);
+  // Y-shaped thermo: a short arm and a long one off a shared stem — take the long one.
+  check('thermo chain: branching takes the longest arm', F.thermoLongestChain({
+    root: 'a', edges: [['a','b'], ['b','c'], ['c','d'], ['b','e']],
+  }), 4);
+  // The 10-cell strict thermo that must be flagged over a 1-9 digit set.
+  check('thermo chain: 10 cells exceeds 1-9', F.thermoLongestChain(
+    chain(...Array.from({ length: 10 }, (_, i) => '0,' + i))), 10);
 }
 checkTrue('matching: 2x2 all allowed', F.hasPerfectMatching(2, 2, () => true));
 checkFalse('matching: both digits forced into cell 0', F.hasPerfectMatching(2, 2, (d, c) => c === 0));
