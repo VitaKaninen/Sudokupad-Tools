@@ -839,8 +839,35 @@ with every cell in a group. Digits may **repeat** — along the line and inside 
 where ordinary Sudoku forbids it, so this is the **little-killer / arrow shape**, not renban's: a
 backtracking enumeration over the whole line under a per-clue `makeMustDiffer` conflict matrix,
 unioning the digits each cell can take. A candidate survives only if some complete legal fill (a
-valid partition *plus* a digit for every cell) places it there. Iterated to a fixpoint; a 300k node
-cap bails with no removals from that line; contradiction → emptied cells → the red toast, as usual.
+valid partition *plus* a digit for every cell) places it there. Iterated to a fixpoint;
+contradiction → emptied cells → the red toast, as usual.
+
+**THAT EXACT ENUMERATION ONLY REACHES ~11 OPEN CELLS, AND EVERY REAL TEN LINE IS LONGER (v3.155).**
+Because ten-line digits *repeat*, the number of complete fills is exponential, not combinatorial like
+renban's: measured against the 300k node cap on real geometry with full 1-9 marks, the search
+finishes at 11 cells (132k nodes) and blows the cap at 12. `JHPNrLgRQH` "Baby Dragon" — the very loop
+this validator was built for — is a **43-cell ring**, so it never finished even the *first* rotation,
+bailed, and the validator was a **silent no-op**: ↻ lit, zero removals, no warning. Raising the cap
+cannot fix an exponential space.
+
+The fix is `tenLineTilingSupport(n, sets, diff, loop, hasZero)`, a **polynomial fallback** used when
+the exact search bails (and remembered on the line via `ld.exactHopeless`, so the cap is burnt at
+most once per run). It exploits the shape of the constraint: a group is a **contiguous run summing
+to 10**, so over 1-9 it is at most **10 cells long** and its legal fills can be enumerated outright.
+So enumerate every feasible **arc** once — *exactly*, including the full `mustDiffer` matrix **inside**
+the arc — then ask "can this arc appear in a complete tiling?" with a forward/backward reachability
+DP over group boundaries; a loop runs the DP once per boundary frame and unions, exactly as the
+rotation loop does. Only conflicts **between different groups** are dropped, which makes it a
+**relaxation** of the true support: it can under-remove, never over-remove, so the
+candidate-elimination contract holds. Verified against a brute-force complete-fill enumerator on 396
+random paths and loops — **0 unsound, 78% identical to exact, 22% a strict superset**. The 43-cell
+Baby Dragon ring resolves in **4 ms**.
+
+**A common player misreading, worth knowing when a result looks too weak:** on a ten line a cell
+between a **3** and an **8** is *not* forced to 2. That answer assumes every group is a pair. With
+room either side the cell is `{1,2,3,4,5,6}` — `{…,3,7}{8,…}` and `{…,3}{1,8,1}` are legal too. Only
+if the line is *exactly* those three cells does something dramatic happen, and then it is wiped, not
+narrowed: `{3,x,8}` exceeds 10 and neither `{3}` nor `{8}` can stand alone.
 
 Pruning is the exact-sum suffix bound the little killer uses, adapted to the partition: the running
 group sum may never exceed 10, and the remaining cells must be able to total `(10 − segSum) + 10k`

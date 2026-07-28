@@ -89,7 +89,7 @@ const NAMES = [
   // geometry / chains
   'expandLineChain', 'fpuzCellKey', 'regionSumSegments', 'thermoBulbShaftCompatible',
   // ten-line structural feasibility
-  'tenLineSegSizes', 'tenLinePartitionable',
+  'tenLineSegSizes', 'tenLinePartitionable', 'tenLineTilingSupport',
   // region colouring
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
@@ -499,6 +499,41 @@ checkTrue('ten line: 3 cells tile as ONE group (a 2+1 split cannot)', F.tenLineP
 checkTrue('ten line: 5 cells tile (2+3)', F.tenLinePartitionable(5, D19));
 checkTrue('ten line: 12 cells tile (4 groups of 3)', F.tenLinePartitionable(12, D19));
 checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable(1, [1, 2, 3, 4, 5, 6]));
+// ── ten-line group-tiling fallback (v3.155) ─────────────────────────────────
+// The exact fill enumeration dies past ~11 open cells (digits repeat, so the fill
+// count is exponential) and a 43-cell ring like `JHPNrLgRQH` "Baby Dragon" bailed
+// without removing anything. The fallback enumerates GROUPS (contiguous, sum 10, so
+// ≤10 cells over 1-9) and DPs over boundaries; it drops only conflicts BETWEEN
+// groups, so it is a relaxation — it may under-remove, never over-remove.
+{
+  const D9 = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const noDiff = (n) => Array.from({ length: n }, () => new Array(n).fill(false));
+  const sup = (sets, loop, diff) =>
+    F.tenLineTilingSupport(sets.length, sets, diff || noDiff(sets.length), loop, false)
+      .map(s => [...s].sort((a, b) => a - b).join(''));
+  // A 2-cell line must be one group: complementary pairs only.
+  check('ten fallback: 2 cells pair to 10', sup([D9, D9], false), ['123456789', '123456789']);
+  check('ten fallback: 2 cells, first is 3 → second is 7', sup([[3], D9], false), ['3', '7']);
+  // 3 _ 8 with room either side: NOT forced to the 2 that "every group is a pair"
+  // intuition predicts — {..,3,7}{8,..} and {..,3}{1,8,1} are both legal too.
+  check('ten fallback: 3 _ 8 leaves far more than the 2',
+        sup([D9, [3], D9, [8], D9, D9], false)[2], '123456');
+  // Exactly 3 cells as 3 _ 8 has no tiling at all: {3,x,8} > 10 and neither {3} nor
+  // {8} can stand alone, so the line is wiped rather than narrowed.
+  check('ten fallback: 3 _ 8 alone cannot tile', sup([[3], D9, [8]], false), ['', '', '']);
+  // A cell that cannot start or finish any group is dropped entirely.
+  check('ten fallback: 9 then 9 cannot tile 2 cells', sup([[9], [9]], false), ['', '']);
+  // Loops are cyclic: a 4-ring of 5s tiles as two {5,5} groups at either phase.
+  check('ten fallback: 4-cell loop of 5s', sup([[5], [5], [5], [5]], true), ['5', '5', '5', '5']);
+  // Same 4 cells walked linearly is the same answer here, but the phase matters when
+  // the ring is odd-length: a 3-ring of 5s has no cyclic tiling at all.
+  check('ten fallback: 3-cell loop of 5s has no tiling', sup([[5], [5], [5]], true), ['', '', '']);
+  // Conflicts INSIDE a group are enforced exactly.
+  {
+    const d = noDiff(2); d[0][1] = d[1][0] = true;
+    check('ten fallback: mustDiffer inside a group blocks 5+5', sup([[5], [5]], false, d), ['', '']);
+  }
+}
 checkTrue('matching: 2x2 all allowed', F.hasPerfectMatching(2, 2, () => true));
 checkFalse('matching: both digits forced into cell 0', F.hasPerfectMatching(2, 2, (d, c) => c === 0));
 checkTrue('matching: 3x3 permutation', F.hasPerfectMatching(3, 3, (d, c) => d === c));

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.154.0
+// @version      3.155.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.154.0';
+  var SCRIPT_VERSION = '3.155.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9681,6 +9681,98 @@
     return ok[L];
   }
 
+  // POLYNOMIAL FALLBACK for lines the exact enumeration can't finish. The exact
+  // search in `lineSupport` walks every complete fill, and because ten-line digits
+  // REPEAT that count is exponential: measured against the 300k node cap it dies at
+  // about 11 open cells, so any real ten line longer than that used to bail and
+  // remove NOTHING at all (`JHPNrLgRQH` "Baby Dragon" is a 43-cell ring — it never
+  // finished even one rotation, and the validator was silently a no-op on it).
+  //
+  // The structure that makes this tractable: a group is a CONTIGUOUS run summing to
+  // exactly 10, so over 1-9 it is at most 10 cells long and its legal fills can be
+  // enumerated outright. So enumerate every feasible ARC once — exactly, including
+  // the full mustDiffer matrix INSIDE the arc — then answer "can this arc appear in
+  // a complete tiling?" with a forward/backward reachability DP over group
+  // boundaries. Only conflicts BETWEEN different groups are dropped, which makes
+  // this a RELAXATION of the true support: it can under-remove, never over-remove,
+  // so the candidate-elimination contract still holds. A loop is run once per
+  // boundary frame and unioned, same as the exact path.
+  // `sets[i]` is the sorted candidate array for line index i, `diff[i][j]` the
+  // mustDiffer matrix. Returns per-index Sets, or null if even this bails.
+  function tenLineTilingSupport(n, sets, diff, loop, hasZero) {
+    var CAP = 400000, nodes = 0, bailed = false, arcs = [], buf = new Array(n), s, i;
+    for (s = 0; s < n && !bailed; s++) {
+      var list = [], byLen = {};
+      (function (s0) {
+        function walk(off, sum) {
+          if (bailed || off >= n) return;
+          if (nodes++ > CAP) { bailed = true; return; }
+          var idx = loop ? (s0 + off) % n : s0 + off;
+          if (idx >= n) return;
+          var opts = sets[idx], oi, d, p, jp, clash, rec, q;
+          for (oi = 0; oi < opts.length; oi++) {
+            d = opts[oi];
+            if (sum + d > 10) continue;
+            clash = false;
+            for (p = 0; p < off; p++) {
+              jp = loop ? (s0 + p) % n : s0 + p;
+              if (buf[p] === d && diff[jp][idx]) { clash = true; break; }
+            }
+            if (clash) continue;
+            buf[off] = d;
+            if (sum + d === 10) {
+              rec = byLen[off + 1];
+              if (!rec) { rec = byLen[off + 1] = { len: off + 1, sup: [] }; list.push(rec); }
+              for (q = 0; q <= off; q++) {
+                if (!rec.sup[q]) rec.sup[q] = new Set();
+                rec.sup[q].add(buf[q]);
+              }
+              if (hasZero) walk(off + 1, 10);        // trailing 0s can still ride in the group
+            } else {
+              walk(off + 1, sum + d);
+            }
+            if (bailed) return;
+          }
+        }
+        walk(0, 0);
+      })(s);
+      arcs.push(list);
+    }
+    if (bailed) return null;
+    var support = [];
+    for (i = 0; i < n; i++) support.push(new Set());
+    var frames = loop ? n : 1, b, p, k, lst;
+    for (b = 0; b < frames; b++) {
+      var reach = [], co = [];
+      for (p = 0; p <= n; p++) { reach[p] = false; co[p] = false; }
+      reach[0] = true;
+      for (p = 0; p < n; p++) {
+        if (!reach[p]) continue;
+        lst = arcs[loop ? (b + p) % n : p];
+        for (k = 0; k < lst.length; k++) if (p + lst[k].len <= n) reach[p + lst[k].len] = true;
+      }
+      if (!reach[n]) continue;                       // no tiling with a boundary here
+      co[n] = true;
+      for (p = n - 1; p >= 0; p--) {
+        lst = arcs[loop ? (b + p) % n : p];
+        for (k = 0; k < lst.length; k++) if (p + lst[k].len <= n && co[p + lst[k].len]) { co[p] = true; break; }
+      }
+      for (p = 0; p < n; p++) {
+        if (!reach[p]) continue;
+        lst = arcs[loop ? (b + p) % n : p];
+        for (k = 0; k < lst.length; k++) {
+          var a = lst[k];
+          if (p + a.len > n || !co[p + a.len]) continue;
+          for (var q = 0; q < a.len; q++) {
+            var into = support[loop ? (b + p + q) % n : p + q];
+            a.sup[q].forEach(function (d) { into.add(d); });
+          }
+        }
+      }
+    }
+    return support;
+  }
+
   // ── Ten-line validator ────────────────────────────────────────────────────
   // A ten line: its cells split into one or more CONTIGUOUS, non-overlapping
   // groups, each summing to exactly 10, and every cell is in a group. Digits may
@@ -9738,13 +9830,18 @@
       var keys = ld.keys, n = keys.length;
       var diff = keys.map(function (a) { return keys.map(function (b) { return mustDiffer(a, b); }); });
       var support = keys.map(function () { return new Set(); });
+      var setsByIdx = keys.map(function (k) { return Array.from(cellSet(k)).sort(function (a, b) { return a - b; }); });
+      if (ld.exactHopeless) {                                      // proven past the cap last round
+        if (setsByIdx.some(function (s) { return s.length === 0; })) return null;
+        return tenLineTilingSupport(n, setsByIdx, diff, ld.loop, hasZero);
+      }
       var nodes = 0, CAP = 300000, bailed = false;
       var rots = ld.loop ? n : 1;
       for (var r = 0; r < rots && !bailed; r++) {
         (function (rot) {
           var idxOf = [];                                          // walk position → line index
           for (var i = 0; i < n; i++) idxOf.push((rot + i) % n);
-          var sets = idxOf.map(function (i) { return Array.from(cellSet(keys[i])).sort(function (a, b) { return a - b; }); });
+          var sets = idxOf.map(function (i) { return setsByIdx[i]; });
           if (sets.some(function (s) { return s.length === 0; })) return;
           var sufMin = new Array(n + 1), sufMax = new Array(n + 1);
           sufMin[n] = 0; sufMax[n] = 0;
@@ -9791,7 +9888,14 @@
           dfs(0, 0);
         })(r);
       }
-      return bailed ? null : support;
+      // Exact search blew the cap (anything past ~11 open cells does) — fall back to
+      // the group-tiling relaxation rather than giving up on the line entirely.
+      if (bailed) {
+        ld.exactHopeless = true;                                   // don't re-burn the cap next round
+        if (setsByIdx.some(function (s) { return s.length === 0; })) return null;
+        return tenLineTilingSupport(n, setsByIdx, diff, ld.loop, hasZero);
+      }
+      return support;
     }
 
     var removals = [], seen = {}, changed = true, guard = 0;
