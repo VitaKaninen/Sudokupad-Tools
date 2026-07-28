@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.153.0
+// @version      3.154.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.153.0';
+  var SCRIPT_VERSION = '3.154.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1235,16 +1235,27 @@
   // coloured sliders): hue is preserved, lightness is remapped to the slider's
   // absolute HSL value (saturation forced to pure hue), then opacity is applied.
 
+  // Saturation at or below which a colour counts as gray (black/white/grey).
+  // ONE threshold for both the gray/colour ROUTING (isGrayColor) and the
+  // achromatic branch of the transform below — they must never disagree. They
+  // used to: shadingTransform tested `s === 0` while isGrayColor tested < 0.08,
+  // so an off-by-one grey like sujoyku's #c0bfbf ten line (ja8iov3ag3: r=192,
+  // g=b=191, s=0.0079, hue 0°) took the gray SLIDER but the coloured BRANCH,
+  // which forces saturation to 1 — and pure hue 0 at L=0.6 is rgb(255,51,51).
+  // A grey line rendered fire-engine red (a bluish grey would have gone blue).
+  var GRAY_SAT_MAX = 0.08;
+
   // Shared lightness transform. Returns [r,g,b] from an original colour, mapped
   // by the Brightness slider L (0..1): pure hue (saturation forced to 1) at
   // absolute HSL lightness L. 0=black, 0.5=pure hue, 1=white. Discards the source
   // colour's saturation & lightness, so a fixed slider looks different per hue
-  // (green vs blue perceived brightness).
+  // (green vs blue perceived brightness). Near-gray input has no meaningful hue
+  // to preserve, so it maps to neutral grey at L instead.
   function shadingTransform(c, L) {
     if (L < 0) L = 0; else if (L > 1) L = 1;
     var hsl = rgbToHsl(c.r, c.g, c.b);
     var h = hsl[0], s = hsl[1];
-    if (s === 0) {
+    if (s <= GRAY_SAT_MAX) {
       var v = Math.round(L * 255);
       return [v, v, v];
     }
@@ -1253,7 +1264,7 @@
 
   // A colour is "gray" when it has (near) zero saturation — black/white/grey.
   function isGrayColor(c) {
-    return rgbToHsl(c.r, c.g, c.b)[1] < 0.08;
+    return rgbToHsl(c.r, c.g, c.b)[1] <= GRAY_SAT_MAX;
   }
   // Central object-shading transform for FILLS and LINES. Routes gray colours
   // through the Gray brightness/opacity sliders and coloured ones through the
