@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.160.0
+// @version      3.161.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.160.0';
+  var SCRIPT_VERSION = '3.161.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -6930,9 +6930,9 @@
     var t = result.abortTarget;
     var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
     if (result.fullyReverted) {
-      showRemoveInvalidToast('Stopped — an unexpected change occurred at ' + where + '. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
+      showRemoveInvalidToast('Stopped at ' + where + ' — unexpected change. Everything was reverted.', 'warning');
     } else {
-      showRemoveInvalidToast('CRITICAL — an unexpected change occurred at ' + where + ' and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+      showRemoveInvalidToast('CRITICAL — unexpected change at ' + where + ', revert failed. Press Ctrl+Z until the puzzle looks right.', 'error');
     }
   }
 
@@ -7198,8 +7198,8 @@
         var reverted = await revertToSnapshot(preSnap, 12);
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
         if (originalMode) await ensureMode(originalMode);
-        if (reverted) showRemoveInvalidToast('Stopped while filling candidates — an unexpected change occurred. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
-        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while filling candidates and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+        if (reverted) showRemoveInvalidToast('Stopped filling — unexpected change. Everything was reverted.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — unexpected change while filling, revert failed. Press Ctrl+Z until the puzzle looks right.', 'error');
         return;
       }
       // Now strip invalid pencilmarks in those same cells.
@@ -7213,8 +7213,8 @@
         var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
         if (originalMode) await ensureMode(originalMode);
-        if (reverted) showRemoveInvalidToast('Filled the candidates, then hit an unexpected change during the cleanup sweep at ' + where + '. All changes were reverted, including the fill: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
-        else showRemoveInvalidToast('CRITICAL — an unexpected change occurred during the cleanup sweep at ' + where + ' and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+        if (reverted) showRemoveInvalidToast('Filled, then stopped during cleanup at ' + where + ' — unexpected change. Everything was reverted, including the fill.', 'warning');
+        else showRemoveInvalidToast('CRITICAL — unexpected change during cleanup at ' + where + ', revert failed. Press Ctrl+Z until the puzzle looks right.', 'error');
       } else {
         var n = fillResult.addedCount;
         var inlineR = fillResult.removedCount || 0;
@@ -12442,10 +12442,9 @@
     var joined = parts.length === 1 ? parts[0]
       : parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1];
     var many = hit !== 1;
-    return '⚠ ' + joined + ' ' + (many ? 'were' : 'was') + ' not fully validated — ' +
-      (many ? 'they contain cells' : 'it contains a cell') + ' with no candidates, and an empty cell ' +
-      'has to be read as "any digit could go here". Pencil ' + (many ? 'those cells' : 'that cell') +
-      ' in (the Auto-fill button will do it) and run again for a stricter check.';
+    return '⚠ ' + joined + ' ' + (many ? 'were' : 'was') + ' not fully checked — ' +
+      (many ? 'they contain empty cells' : 'it contains an empty cell') +
+      ', which count as "any digit". Auto-fill and run again.';
   }
   // The 👁 span for a validator menu row: two gestures on one icon (v3.148).
   //   HOVER — ISOLATE: draw only this validator's objects (any pinned ones step aside
@@ -12547,10 +12546,10 @@
       if (cls && cls.mode === 'ambiguous') {
         // Lines of this type exist but the puzzle leaves which-is-which to the
         // solver, so a plain click validates none of them.
-        var msg = 'This puzzle’s ' + noun + 's can’t be identified automatically (the rules leave their type to you), so none are validated on a plain click. ';
+        var msg = 'This puzzle’s ' + noun + 's can’t be identified — the rules leave their type to you. ';
         msg += settings.validateSelectionOnly === true
-          ? 'Select a line’s cells, then click to check it by hand.'
-          : 'Tick “Validate selection only”, then select a line to check it by hand.';
+          ? 'Select a line’s cells, then click to check it.'
+          : 'Tick “Validate selection only”, then select a line to check it.';
         spdrTip.show(e.clientX, e.clientY, msg);
       } else if (!objs.length) {
         spdrTip.show(e.clientX, e.clientY, 'Nothing detected here to highlight in this puzzle.');
@@ -12664,7 +12663,7 @@
     if (settings.validateSelectionOnly !== true) return { ok: true, filter: null };
     var sel = getSelectedCells();
     if (sel.size === 0) {
-      showRemoveInvalidToast('"Validate selection only" is on, but no cells are selected. Select the cells that fully cover the clues to check, then try again.', 'warning');
+      showRemoveInvalidToast('"Validate selection only" is on, but nothing is selected.', 'warning');
       return { ok: false };
     }
     return { ok: true, filter: function (keys) {
@@ -12677,7 +12676,7 @@
     if (settings.validateSelectionOnly === true) conds.push('selected');
     if (getFogTester()) conds.push('revealed (not under fog)');
     var need = conds.length ? conds.join(' and ') : 'eligible';
-    return 'No ' + nouns + ' to validate — a clue is only checked when all of its cells are ' + need + '.';
+    return 'No eligible ' + nouns + ' — every cell of a clue must be ' + need + '.';
   }
 
   // FOG GATE (applies to every validator). Returns a predicate
@@ -12746,12 +12745,9 @@
   // ones: a validator removes only unsupported candidates, so an emptied cell always
   // means "no combination supports this cell" = a contradiction the player must see.
   function noValidComboMsg(checked, removed, emptied) {
-    return '⛔ No valid combination found — checked ' + checked + ' and removed ' +
-           removed + ' candidate' + (removed === 1 ? '' : 's') + ', but ' + emptied +
-           ' cell' + (emptied === 1 ? '' : 's') + ' now ha' + (emptied === 1 ? 's' : 've') +
-           ' NO candidates left. The constraint can\'t be satisfied by the current ' +
-           'pencilmarks — there\'s a mistake (or the marks are incomplete). Use the Undo ' +
-           'button (or Ctrl+Z) to restore them.';
+    return '⛔ No valid combination — checked ' + checked + ', removed ' + removed +
+           ' candidate' + (removed === 1 ? '' : 's') + ', and ' + emptied + ' cell' +
+           (emptied === 1 ? ' has' : 's have') + ' none left. Undo (or Ctrl+Z) to restore.';
   }
   // ── A STRUCTURALLY IMPOSSIBLE CLUE IS OUR MISREAD, NOT THE PUZZLE'S ERROR ───
   // (v3.157) Every puzzle in the catalog is peer-reviewed and has been hand-solved
@@ -12776,15 +12772,10 @@
   // is a different thing entirely — a real solver contradiction — and still goes
   // down the `noValidComboMsg` path, which correctly blames the marks.
   function invalidClueMsg(n, unitNoun) {
-    var these = n === 1 ? 'it' : 'them', isAre = n === 1 ? 'is' : 'are';
     return '⛔ ' + n + ' ' + pluralUnit(unitNoun, n) + ' ' + (n === 1 ? 'is' : 'are') +
-           ' IMPOSSIBLE as read — no arrangement of digits can satisfy ' + these +
-           ', whatever the pencilmarks say (for example more cells than the digit set ' +
-           'allows). Puzzles are peer-reviewed and hand-solved, so this almost ' +
-           'certainly means the clue was mis-identified — the wrong line type was ' +
-           'matched to that drawing — rather than that the puzzle ' + isAre + ' wrong. ' +
-           (n === 1 ? 'It was' : 'They were') + ' NOT checked and nothing was changed for ' +
-           these + '.';
+           ' IMPOSSIBLE as read — no arrangement of digits can satisfy ' +
+           (n === 1 ? 'it' : 'them') + ' (likely mis-identified as the wrong clue type). ' +
+           'Not checked, nothing changed.';
   }
   // Compose the invalid-clue error with whatever the run would otherwise have said.
   function withInvalid(res, def, msg) {
@@ -12792,8 +12783,8 @@
     return invalidClueMsg(res.invalid, def.unitNoun) + (msg ? ' — ' + msg : '');
   }
   function validateAbortToast(reverted) {
-    if (reverted) showRemoveInvalidToast('Stopped — an unexpected change occurred while validating. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning');
-    else showRemoveInvalidToast('CRITICAL — an unexpected change occurred while validating and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error');
+    if (reverted) showRemoveInvalidToast('Stopped validating — unexpected change. Everything was reverted.', 'warning');
+    else showRemoveInvalidToast('CRITICAL — unexpected change while validating, revert failed. Press Ctrl+Z until the puzzle looks right.', 'error');
   }
 
   // ── Validator post-run Undo button ─────────────────────────────────────────
@@ -13114,12 +13105,9 @@
 
   // Same wording as noValidComboMsg, for the mode that flags instead of deleting.
   function noValidComboHighlightMsg(checked, flagged, emptied) {
-    return '⛔ No valid combination found — checked ' + checked + ' and highlighted ' +
-           flagged + ' candidate' + (flagged === 1 ? '' : 's') + ', but ' + emptied +
-           ' cell' + (emptied === 1 ? '' : 's') + ' now ha' + (emptied === 1 ? 's' : 've') +
-           ' NO valid candidates left. The constraint can\'t be satisfied by the current ' +
-           'pencilmarks — there\'s a mistake (or the marks are incomplete). Nothing was ' +
-           'removed; press "Clear all highlights" to clear them.';
+    return '⛔ No valid combination — checked ' + checked + ', highlighted ' + flagged +
+           ' candidate' + (flagged === 1 ? '' : 's') + ', and ' + emptied + ' cell' +
+           (emptied === 1 ? ' has' : 's have') + ' none left valid. Nothing was removed.';
   }
 
   // Run ONE validator in highlight mode: pure compute + flag, synchronous, no board
@@ -13147,9 +13135,9 @@
     }
     var note = comp.note || null;
     function withNote(msg) { return note ? msg + ' ' + note : msg; }
-    if (comp.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+    if (comp.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
     if (comp[def.noneKey]) {
-      if (comp.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + label + '" again — only your selected cells will be highlighted (the rest of the line is still read for context).', 'warning'); return; }
+      if (comp.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + label + '" again.', 'warning'); return; }
       showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), note ? 'warning' : 'success');
       return;
     }
@@ -13166,8 +13154,8 @@
     var emptied = countEmptiedSince(before);
     if (emptied > 0) { showRemoveInvalidToast(noValidComboHighlightMsg(checked, removals.length, emptied), 'error'); return; }
     var tail = validatorAutoOn(def.name)
-      ? ' Auto-update (↻) is on, so they refresh as you solve.'
-      : ' They stay until you press "Clear all highlights" — press ↻ on the row to keep them updated as you solve.';
+      ? ' Auto-update (↻) is on.'
+      : ' Press "Clear all highlights" to remove them, or ↻ to keep them updated.';
     showRemoveInvalidToast(withWarn(withNote('Highlighted ' + removals.length + ' invalid candidate' +
       (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail)), okType());
   }
@@ -13187,8 +13175,8 @@
     validatorHiliteClearAll();
     rebuildValidateMenu();
     showRemoveInvalidToast(hadAuto
-      ? 'Cleared every highlighted candidate and switched auto-update (↻) off — the board is back to normal.'
-      : 'Cleared every highlighted candidate — the board is back to normal.', 'success');
+      ? 'Cleared all highlights and switched auto-update (↻) off.'
+      : 'Cleared all highlights.', 'success');
   }
 
   // Apply ONE validator against the CURRENT board (compute → apply its removals
@@ -13233,9 +13221,9 @@
     function okType() { return mcWarn ? 'warning' : 'success'; }
     applyOneValidator(def, unitFilter).then(function (res) {
       function withNote(msg) { return res.note ? msg + ' ' + res.note : msg; }
-      if (res.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+      if (res.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
       if (!res.present) {
-        if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified automatically. Select the cells of the line(s) you want to check, then click "' + (validatorLabel(def)) + '" again — only your selected cells will be changed (the rest of the line is still read for context).', 'warning'); return; }
+        if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + (validatorLabel(def)) + '" again.', 'warning'); return; }
         // Every clue was impossible as read → that IS the result, not "none found".
         var noneInv = withInvalid(res, def, null);
         if (noneInv) { showRemoveInvalidToast(withNote(noneInv), 'error'); return; }
@@ -13269,7 +13257,7 @@
   function runAllValidators(unitFilter) {
     if (actionInProgress) return;
     var defs = detectedValidators();
-    if (defs.length === 0) { showRemoveInvalidToast('No supported constraints were detected in this puzzle.', 'warning'); return; }
+    if (defs.length === 0) { showRemoveInvalidToast('No supported constraints detected.', 'warning'); return; }
     actionInProgress = true;
     var before = markedCellKeys();
     var preSnap = snapshotPencilmarks();
@@ -13308,7 +13296,7 @@
       var invMsg = invNames.length
         ? invNames.map(function (nm) { return invalidClueMsg(s.invalid[nm].n, s.invalid[nm].unitNoun); }).join(' ')
         : null;
-      if (s.unsupported) { showRemoveInvalidToast('Constraint validation needs a numeric digit set (0–9). Set it in Settings → Action buttons and try again.', 'warning'); return; }
+      if (s.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
       if (s.aborted) { validateAbortToast(s.reverted); return; }
       if (s.totalRemoved > 0) validatorArmUndo(s.undoSteps, preSnap);
       var names = Object.keys(s.present);
@@ -13396,7 +13384,7 @@
     if (validatorAutoOn(def.name)) {
       validatorAutoSet(def.name, false);
       rebuildValidateMenu();
-      showRemoveInvalidToast('Auto-update off for "' + validatorLabel(def) + '" — its highlight stays as it is now.', 'success');
+      showRemoveInvalidToast('Auto-update (↻) off for "' + validatorLabel(def) + '".', 'success');
       return;
     }
     var sf = selectionUnitFilter();
@@ -13679,9 +13667,8 @@
         var noun = def.unitNoun || def.name;
         var tip = '';
         if (amb && !selOnly)
-          tip = 'Disabled — couldn\'t work out which lines are the ' + noun + 's in this puzzle '
-              + '(their type isn\'t stated unambiguously). Tick "Validate selection only" below, '
-              + 'then select the line\'s cells to run it by hand.';
+          tip = 'Disabled — which lines are the ' + noun + 's isn\'t stated unambiguously. '
+              + 'Tick "Validate selection only", then select the line\'s cells.';
         else if (amb)
           tip = 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
         else if (hiMode)
@@ -15699,17 +15686,17 @@
   // Hover explainer (shown when idle, no pending result). Green when the function
   // would run, yellow with the blocking reason when it would not.
   function fsRenderExplainer(a) {
-    var base = 'Auto-fills every empty cell that has exactly one valid (non-conflict) centre candidate, one at a time.';
+    var base = 'Fills every cell that has exactly one valid centre candidate, one at a time.';
     if (a.empties.length === 0) { fsRenderToast('success', base + '\n\nThe puzzle is already complete.'); return; }
-    if (a.zero.length > 0) { fsRenderToast('warning', base + '\n\nNot ready: every cell in the grid needs at least one valid centre candidate before it can be used.'); return; }
-    if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one valid candidate yet.'); return; }
+    if (a.zero.length > 0) { fsRenderToast('warning', base + '\n\nNot ready: a cell has no valid centre candidate.'); return; }
+    if (a.singles.length === 0) { fsRenderToast('warning', base + '\n\nNot ready: no cell has exactly one candidate yet.'); return; }
     fsRenderToast('success', base + '\n\nReady — click to run.');
   }
   // Persistent "running" popup — shown for the WHOLE auto-fill run, independent of
   // the mouse (the runner renders it at start; the mouseleave handler + fsShowOnHover
   // both leave it alone while fsState.running). Replaced by the result toast at the end.
   function fsRenderRunning() {
-    fsRenderToast('success', 'Auto-fill is running…\n\nClick here (or the Stop button) to abort.');
+    fsRenderToast('success', 'Auto-fill is running…\n\nClick here (or Stop) to abort.');
     var t = document.getElementById('sp-fs-toast');
     if (t) {
       t.style.cursor = 'pointer';
@@ -15724,8 +15711,8 @@
   function fsResultMessage(kind, n, cellKey) {
     var pl = n === 1 ? '' : 's';
     if (kind === 'complete') return 'Done — auto-filled ' + n + ' cell' + pl + '. Puzzle complete.';
-    if (kind === 'stuck')    return 'Stopped — no cell has a single valid candidate. Filled ' + n + ' cell' + pl + '; more information needed.';
-    if (kind === 'broken')   return 'Stopped — cell ' + fsCellLabel(cellKey) + ' has no valid candidates left, likely a mistake or incomplete pencilmarks. Filled ' + n + ' cell' + pl + ' before stopping.';
+    if (kind === 'stuck')    return 'Stopped — no cell has a single valid candidate. Filled ' + n + ' cell' + pl + '.';
+    if (kind === 'broken')   return 'Stopped — cell ' + fsCellLabel(cellKey) + ' has no valid candidates left (a mistake, or incomplete marks). Filled ' + n + ' cell' + pl + '.';
     return 'You stopped the auto-fill after ' + n + ' cell' + pl + '.';   // stopped
   }
 
@@ -15768,10 +15755,10 @@
 
     // ── Action-button popups: Fill button ─────────────────────────────────────
     function () { showRemoveInvalidToast('Filled 12 candidates in 4 cells, removed 3 invalid marks (1.45s).', 'success'); },                                                                                                                              // fill complete (green)
-    function () { showRemoveInvalidToast('Stopped while filling candidates — an unexpected change occurred. All changes were reverted: the puzzle is back to exactly how it was before you pressed the button.', 'warning'); },                            // fill aborted, reverted (yellow)
-    function () { showRemoveInvalidToast('CRITICAL — an unexpected change occurred while filling candidates and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error'); },                                                  // fill aborted, revert FAILED (red)
-    function () { showRemoveInvalidToast('Filled the candidates, then hit an unexpected change during the cleanup sweep at centre 4 in cell (R4,C3). All changes were reverted, including the fill: the puzzle is back to exactly how it was before you pressed the button.', 'warning'); },  // fill ok, sweep aborted, reverted (yellow)
-    function () { showRemoveInvalidToast('CRITICAL — an unexpected change occurred during the cleanup sweep at centre 4 in cell (R4,C3) and it could NOT be fully reverted. Press Ctrl+Z until the puzzle looks right.', 'error'); },                      // fill ok, sweep aborted, revert FAILED (red)
+    function () { showRemoveInvalidToast('Stopped filling — unexpected change. Everything was reverted.', 'warning'); },                            // fill aborted, reverted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL — unexpected change while filling, revert failed. Press Ctrl+Z until the puzzle looks right.', 'error'); },                                                  // fill aborted, revert FAILED (red)
+    function () { showRemoveInvalidToast('Filled, then stopped during cleanup at centre 4 in cell (R4,C3) — unexpected change. Everything was reverted, including the fill.', 'warning'); },  // fill ok, sweep aborted, reverted (yellow)
+    function () { showRemoveInvalidToast('CRITICAL — unexpected change during cleanup at centre 4 in cell (R4,C3), revert failed. Press Ctrl+Z until the puzzle looks right.', 'error'); },                      // fill ok, sweep aborted, revert FAILED (red)
   ];
   var fsDebugIdx = 0;
   function fsDebugShowNext() {
@@ -15807,8 +15794,8 @@
   function fsRenderUndoExplainer() {
     if (fsState.result) { fsState.resultPinned = true; fsRenderResult(); return; }
     var n = fsState.filledCount;
-    fsRenderToast('success', 'Click to undo the auto-fill — it removes the ' + n + ' digit' + (n === 1 ? '' : 's') +
-      ' it placed.\n\nStays available while the puzzle still matches the auto-filled state.');
+    fsRenderToast('success', 'Click to undo the auto-fill — removes the ' + n + ' digit' + (n === 1 ? '' : 's') +
+      ' it placed.\n\nAvailable while the puzzle still matches the auto-filled state.');
   }
 
   // ── Cell observer + post-run lifecycle ─────────────────────────────────────

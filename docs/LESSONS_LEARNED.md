@@ -784,3 +784,20 @@ Side effect: Chrome gets the twemoji arrows back (they were invisibly zero-sized
   inside an SVG whose bounds the host measures with getBBox unions.
 - Headless Firefox (`--headless --screenshot` + a page that renders its measurements as DOM
   text) is a perfectly good Gecko lab from a Chrome-only session — no driver needed.
+
+## Popup copy: the player gets the outcome, not the rationale (v3.161)
+
+A user message explaining *why* a policy is right ("all puzzles are peer-reviewed and hand-solved,
+so an impossible clue is our misread") got lifted verbatim into the `invalidClueMsg` toast in
+v3.157. It belonged in the code comment above the function — which already had it — not in the
+player-facing text.
+
+**Rule for every toast/tooltip in this script:** say what happened and why, then stop. Cut the
+justification for the design, the reassurance ("the puzzle is back to exactly how it was"), and
+instructions the player already knows. Keep a recovery instruction only when the player must act
+(Ctrl+Z after a *failed* revert; the digit-set setting). v3.161 trimmed every popup on this basis —
+~40% shorter across the board, same information.
+
+The debug popup cycler (`fsDebugList`, Settings → "Debug: show popup") hardcodes a few fill/sweep
+toast strings rather than calling their producer, so trimming those messages means editing them in
+**two** places. Grep the old text before assuming one edit covered it.
