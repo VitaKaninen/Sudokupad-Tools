@@ -72,6 +72,8 @@ const NAMES = [
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
   'SAMEDIFF_CUE_RE', 'SAMEDIFF_ANTI_RE', 'SAMEDIFF_CLAUSE_RE',
+  'SAMEDIFF_ADJDIFF_RE', 'SAMEDIFF_BOUNDED_RE', 'SAMEDIFF_PERLINE_RE',
+  'SAMEDIFF_THATNUM_RE', 'hasPerLineConstDiffCue',
   'BETWEEN_CUE_RE', 'BETWEEN_CLAUSE_RE', 'BETWEEN_LOCKOUT_RE',
   'DOUBLEARROW_NAME_RE', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE',
   'DOUBLEARROW_CLAUSE_RE', 'doubleArrowCueFires',
@@ -282,6 +284,16 @@ checkTrue('same-diff anti: "sum of adjacent segments … same difference" is not
   F.SAMEDIFF_ANTI_RE.test('box borders divide lines into segments. each sum of adjacent segments on one of these lines has the same difference'));
 checkFalse('same-diff clause: must not read a whisper clause and steal its colour',
   F.SAMEDIFF_CLAUSE_RE.test('adjacent digits on a green line have a difference of at least 5'));
+// v3.163 — the rule DEFINES a per-line constant instead of naming one. The phrase
+// alone is not enough: the same words with a comparator are the whisper family's.
+checkTrue('same-diff const cue: per-line unknown difference (jeu4qiw80c "Disco floor")',
+  F.hasPerLineConstDiffCue('normal sudoku rules apply. each line has a unique non-negative number associated with it. this number indicates the difference between adjacent digits along that line.'));
+checkFalse('same-diff const cue: bounded difference is a whisper, not ours (23xbq0xofa)',
+  F.hasPerLineConstDiffCue('along every positive diagonal the difference between neighbouring digits is at least 2. every green line contains only odd digits.'));
+checkFalse('same-diff const cue: no per-line number → not a per-line constant',
+  F.hasPerLineConstDiffCue('the difference between adjacent digits along the marked path is three.'));
+checkFalse('same-diff const cue: an unrelated "at least" elsewhere must not veto',
+  !F.hasPerLineConstDiffCue('cages contain at least two odd digits. each line has its own number; this number is the difference between adjacent digits on the line.'));
 // Between lines (v3.119: real catalog phrasings from the 53 non-native between_line puzzles)
 checkTrue('between cue: numerically between the digits in the circles (xm3e3npmmk)',
   F.BETWEEN_CUE_RE.test('digits along a line must be numerically between the digits in circles at each end'));

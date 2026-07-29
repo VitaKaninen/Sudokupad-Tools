@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.162.0
+// @version      3.163.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.162.0';
+  var SCRIPT_VERSION = '3.163.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8574,6 +8574,32 @@
     return named && !whispered;
   }
 
+  // PER-LINE negative evidence for the green-trust layer (v3.163): the same-difference
+  // validator has CONFIDENTLY claimed this exact line, so it is not a whisper. Two
+  // validators may not both own one line, and samediff only reaches 'confident' via a
+  // rules cue plus a pinned colour — strictly more evidence than "it is green".
+  //
+  // Per LINE, never per puzzle, and that distinction is the whole point:
+  // `dfqhpy0fvc` "Sprinkles Ice Cream" states both rules — *"Adjacent digits on a
+  // green line must be at least 5 apart. Adjacent digits on a grey line must have a
+  // constant difference."* Its samediff cue fires, yet its green lines really are
+  // whispers, and WHISPER_CUE_RE misses "at least 5 apart" (no differ/difference), so
+  // trusted-green is the ONLY thing detecting them. Samediff's clause-colour layer
+  // claims the GREY lines there, leaving green untouched — a puzzle-wide veto would
+  // have deleted a real whisper. Direction of travel matches greenNamedForRival: this
+  // can only ever narrow the green set, never widen it.
+  function dropSameDiffClaimed(green) {
+    var sd;
+    try { sd = classifySameDiffLines(); } catch (e) { return green; }
+    if (!sd || sd.mode !== 'confident' || !sd.lines.length) return green;
+    var sigs = {};
+    sd.lines.forEach(function (keys) {
+      sigs[keys.join(' ')] = 1;
+      sigs[keys.slice().reverse().join(' ')] = 1;
+    });
+    return green.filter(function (l) { return !sigs[l.keys.join(' ')]; });
+  }
+
   // Classify the puzzle's cosmetic lines into whisper lines + a confidence mode.
   // Returns { mode:'confident'|'ambiguous'|'none', lines:[[keys]…], allLines:[{color,keys}] }.
   function classifyWhisperLines() {
@@ -8592,6 +8618,7 @@
     if (wlab) return { mode: 'confident', lines: wlab, allLines: all };
     var green = all.filter(function (l) { return isGermanWhisperColor(l.color); });
     if (green.length > 0 && greenNamedForRival()) green = [];
+    if (green.length > 0) green = dropSameDiffClaimed(green);
     if (green.length > 0) {
       var tsets = thermoClaimedSets();
       green = green.filter(function (l) { return !lineOnThermo(l.keys, tsets); });
@@ -8876,16 +8903,10 @@
   // over-fires. Clause blindness: 17 multi-colour puzzles, 0 UNREADABLE, 16 pin a
   // colour, 1 NO-COLOUR (`lc3vr050ng`, whose line types are the solver's own
   // deduction → correctly ambiguous).
-  //   • The 5 misses are all correctly-not-ours: the "same difference" is between
-  //     two DIAGONALS of a 2x2 dot (`F28G66PTLg`), the two halves of a +/- sign
-  //     (`v5fyfcm6yj`), an orange dot pair (`H3MfbFJ83R`) or a "difference bomb"
-  //     (`uojuxaw1qw`) — no line to claim. Only `jeu4qiw80c` ("this number
-  //     indicates the difference between adjacent digits along that line") is a
-  //     real gap, and it is left open ON PURPOSE: the phrasing that catches it,
-  //     `difference between (adjacent|neighbouring) digits`, also catches
-  //     `23xbq0xofa`'s "the difference between neighbouring digits is at least 2",
-  //     a whisper-like rule on the DIAGONALS. Claiming that as a same-difference
-  //     line would OVER-remove — the one failure mode the contract forbids.
+  //   • The 4 remaining misses are all correctly-not-ours: the "same difference" is
+  //     between two DIAGONALS of a 2x2 dot (`F28G66PTLg`), the two halves of a +/-
+  //     sign (`v5fyfcm6yj`), an orange dot pair (`H3MfbFJ83R`) or a "difference
+  //     bomb" (`uojuxaw1qw`) — no line to claim.
   //   • SAMEDIFF_ANTI_RE drops `r3xtlrd6qv` "Regional Differences": "each sum of
   //     adjacent segments on one of these lines has the same difference" is a rule
   //     about SEGMENT SUMS, not adjacent digits — same words, different clue.
@@ -8898,9 +8919,43 @@
   // does NOT include a bare "difference" — that is the whisper family's word
   // ("differ by at least 5") and would hand a whisper's colour to this validator.
   var SAMEDIFF_CLAUSE_RE = /same[\s-]?difference|(?:same|equal|identical|constant)\s+difference|arithmetic\s+(?:sequence|progression)|evenly[\s-]spaced|by\s+the\s+(?:same|equal|constant)\s+(?:amount|value|number|difference)/;
+  // Second cue (v3.163) — the rule NAMES no "same difference", it DEFINES one: a
+  // per-line unknown constant. `jeu4qiw80c` "Disco floor": *"Each line has a unique
+  // non-negative number associated with it. This number indicates the difference
+  // between adjacent digits along that line."* That is a same-difference line with
+  // none of this rule's vocabulary in it, so SAMEDIFF_CUE_RE cannot see it — and
+  // with the lines drawn green, the whisper validator's trusted-green layer claimed
+  // them and removed on ≥5. A wrong claim, not just a miss.
+  //
+  // Three conditions, ALL required — the phrase alone is exactly what v3.159 refused
+  // to key off, because `23xbq0xofa`'s "the difference between neighbouring digits
+  // is at least 2" wears the same words:
+  //   1. the difference is between ADJACENT/neighbouring/consecutive DIGITS;
+  //   2. that CLAUSE carries no comparator (at least / more than / minimum …) — a
+  //      bounded difference is the whisper family's rule, never ours. Clause-scoped,
+  //      so an unrelated "at least" elsewhere in the rules doesn't veto;
+  //   3. the rules tie a NUMBER/VALUE to each line (the unknown the solver deduces),
+  //      which is what separates a per-line constant from a global one.
+  // Catalog-measured (6,260 puzzles, 2026-07-29): only 2 carry the phrase at all —
+  // this fires on `jeu4qiw80c` (tagged same_difference) and condition 2 blocks
+  // `23xbq0xofa`. Recall 86.1% → 88.9% (32/36), still 0 real over-fires.
+  var SAMEDIFF_ADJDIFF_RE = /difference\s+between\s+(?:the\s+)?(?:adjacent|neighbo\w+|consecutive)\s+digits/;
+  var SAMEDIFF_BOUNDED_RE = /at\s+least|at\s+most|minimum|maximum|more\s+than|greater\s+than|less\s+than|fewer\s+than|or\s+more|or\s+less/;
+  var SAMEDIFF_PERLINE_RE = /(?:each|every|a|per)\s+(?:\w+\s+){0,2}lines?[^.;:\n]{0,80}\b(?:number|value|amount|difference)\b/;
+  var SAMEDIFF_THATNUM_RE = /\b(?:this|that|the)\s+(?:number|value|amount)\b[^.;:\n]{0,60}difference/;
+  function hasPerLineConstDiffCue(blob) {
+    var clauses = String(blob || '').split(/[.\n;]/).filter(function (c) { return SAMEDIFF_ADJDIFF_RE.test(c); });
+    if (clauses.length === 0) return false;
+    if (clauses.some(function (c) { return SAMEDIFF_BOUNDED_RE.test(c); })) return false;
+    return SAMEDIFF_PERLINE_RE.test(blob) || SAMEDIFF_THATNUM_RE.test(blob);
+  }
+  function hasSameDiffCue(blob) { return SAMEDIFF_CUE_RE.test(blob) || hasPerLineConstDiffCue(blob); }
   function classifySameDiffLines() {
     if (SAMEDIFF_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
-    return classifyCueLines(SAMEDIFF_CUE_RE, SAMEDIFF_CLAUSE_RE, null, 'samediff');
+    // Duck-typed matcher (same trick as classifyEntropicLines): classifyCueLines only
+    // ever calls cueRe.test(blob), so the named cue and the defined-constant cue share
+    // one code path.
+    return classifyCueLines({ test: hasSameDiffCue }, SAMEDIFF_CLAUSE_RE, null, 'samediff');
   }
 
   // Between lines: every non-endpoint cell holds a digit STRICTLY between the two

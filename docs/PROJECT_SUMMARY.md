@@ -512,7 +512,10 @@ way so it stays low-maintenance.
   `computeSameDiffRemovals` / `sameDiffLineSupport` / `sameDiffExactFills`** — adjacent digits differ
   by one per-line UNKNOWN d, so every d is enumerated; for a fixed d the line is a chain CSP that arc
   consistency solves exactly, and the capped search runs only where conflicts or a loop break the
-  chain (a bail degrades to the arc-consistent domains, never to nothing). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
+  chain (a bail degrades to the arc-consistent domains, never to nothing). A second cue
+  (`hasPerLineConstDiffCue`, v3.163) catches rules that DEFINE the per-line constant without naming
+  it, and `dropSameDiffClaimed` subtracts confidently-claimed lines from the whisper validator's
+  trusted-green set — per line, never per puzzle (one puzzle can hold both clue types). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
   rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
   circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than

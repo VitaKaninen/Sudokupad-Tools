@@ -1157,7 +1157,8 @@ line mark-free → the clue as we read it is impossible → dropped, counted, re
 loop of mutually-conflicting cells is the clean example: three distinct digits cannot be pairwise
 equidistant). A bail answers "possible", never "impossible".
 
-**Cue, catalog-measured 2026-07-29** (tag `same_difference`, 36 tagged): recall **86.1%** (31/36),
+**Cue, catalog-measured 2026-07-29** (tag `same_difference`, 36 tagged): recall **88.9%** (32/36 with
+v3.163's second cue; 86.1% before it),
 **3 FPs, all genuine same-difference puzzles the catalog left untagged** (`k4g3ubb8qe`,
 philip-newman's two "sequence lines" dailies) — i.e. 0 real over-fires. Clause blindness: 17
 multi-colour puzzles, **0 UNREADABLE**, 16 pin a colour, 1 NO-COLOUR (`lc3vr050ng`, whose line types
@@ -1167,16 +1168,45 @@ the described form either way round, "arithmetic sequence/progression", "evenly 
 (`uwygvvt8nd`). Both spellings of "neighbouring" occur — `hva096ojxs` writes "neigbouring" — which
 is why the described forms key off "same difference" itself rather than the adjacency word.
 
-Four of the five misses are **correctly** not ours: the "same difference" is between two diagonals
+All four remaining misses are **correctly** not ours: the "same difference" is between two diagonals
 of a 2×2 dot (`F28G66PTLg`), the halves of a ± sign (`v5fyfcm6yj`), an orange dot pair
-(`H3MfbFJ83R`) or a "difference bomb" (`uojuxaw1qw`) — there is no line to claim. **The fifth is
-left open on purpose:** `jeu4qiw80c` ("this number indicates the difference between adjacent digits
-along that line") would need `difference between (adjacent|neighbouring) digits`, and that phrasing
-also catches `23xbq0xofa`'s "the difference between neighbouring digits is at least 2" — a
-whisper-like rule on the **diagonals**. Claiming that as a same-difference line would over-remove,
-the one failure mode the contract forbids. `SAMEDIFF_ANTI_RE` drops `r3xtlrd6qv` "Regional
-Differences", where "each sum of adjacent segments … has the same difference" is a rule about
-**segment sums**, not adjacent digits.
+(`H3MfbFJ83R`) or a "difference bomb" (`uojuxaw1qw`) — there is no line to claim.
+`SAMEDIFF_ANTI_RE` drops `r3xtlrd6qv` "Regional Differences", where "each sum of adjacent segments …
+has the same difference" is a rule about **segment sums**, not adjacent digits.
+
+#### The rule that DEFINES a per-line constant instead of naming one (v3.163)
+
+`jeu4qiw80c` "Disco floor": *"Each line has a unique non-negative number associated with it. This
+number indicates the difference between adjacent digits along that line."* A textbook
+same-difference line carrying **none of this rule's vocabulary**, so `SAMEDIFF_CUE_RE` cannot see it
+— and its lines are drawn green, so the **whisper** validator's trusted-green layer claimed them and
+removed on ≥5. Not a miss: a wrong claim.
+
+v3.159 refused to key off `difference between (adjacent|neighbouring) digits` because `23xbq0xofa`'s
+*"the difference between neighbouring digits is at least 2"* wears the same words. `hasPerLineConstDiffCue`
+demands three things instead, and the comparator is the discriminator:
+
+1. the difference is between **adjacent / neighbouring / consecutive digits** (`SAMEDIFF_ADJDIFF_RE`);
+2. **that clause** carries no comparator — at least / at most / minimum / more than / … — because a
+   *bounded* difference is the whisper family's rule, never ours (`SAMEDIFF_BOUNDED_RE`). Scoped to
+   the clause, so an unrelated "at least" elsewhere in the rules can't veto;
+3. the rules tie a **number/value to each line** (`SAMEDIFF_PERLINE_RE`) or say **"this number … difference"**
+   (`SAMEDIFF_THATNUM_RE`) — the per-line unknown, which is what separates a per-line constant from a
+   global one.
+
+Catalog-measured over all 6,260 puzzles: only **2** carry the phrase at all — this fires on
+`jeu4qiw80c` and condition 2 blocks `23xbq0xofa`. Wired in as a duck-typed `{ test: hasSameDiffCue }`
+matcher (the `classifyEntropicLines` trick), so both cues share one code path.
+
+**The whisper side is fixed per LINE, not per puzzle** (`dropSameDiffClaimed`, called on the green set
+in `classifyWhisperLines`): a line the same-difference classifier claims **confidently** is not a
+whisper, because confident there means cue + pinned colour — strictly more evidence than "it is
+green". A puzzle-wide veto would have been the overcorrection: `dfqhpy0fvc` "Sprinkles Ice Cream"
+states *both* rules — *"Adjacent digits on a green line must be at least 5 apart. Adjacent digits on
+a grey line must have a constant difference."* Its same-difference cue fires, its green lines really
+are whispers, and `WHISPER_CUE_RE` misses "at least 5 apart" (no differ/difference) — trusted-green
+is the **only** thing detecting them. Samediff's clause-colour layer claims the grey lines there, so
+green survives. Like `greenNamedForRival`, this can only narrow the green set, never widen it.
 
 ### Two clues can share BOTH endpoints — and the overlay drew them as one (v3.160)
 
