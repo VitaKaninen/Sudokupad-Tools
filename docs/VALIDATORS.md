@@ -1564,11 +1564,31 @@ constraint (mapped `betweenline → 'between'` in `FPUZ_LINE_CONSTRAINTS`), **di
 between key vetoes to `none` (keys are exhaustive). For scl/ctc/js-object puzzles (no payload —
 53 of the 99 catalogued `between_line` puzzles), it falls to a rules **cue** (`BETWEEN_CUE_RE` —
 "between … circles/bulbs/endpoints/attached", catalog-measured phrasings) gated exactly like renban,
-with a **lockout guard** (`BETWEEN_LOCKOUT_RE` — "lie outside", "must not be between", "lockout")
-that forces `ambiguous` when lockout phrasing co-occurs, so the opposite rule is never mis-applied.
+with a **lockout guard** (`BETWEEN_LOCKOUT_RE` — "lie outside", "must not be between", "lockout"),
+so the opposite rule is never mis-applied.
 A second guard (v3.131) does the same job for **double arrows**, which draw the identical picture and
 trip the between cue — see "Double arrows" in the sum-arrow section for how the claimed lines are
-subtracted. **Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages), `hg0yh5uke9` (between + cosmetic
+subtracted.
+
+**The lockout guard SUBTRACTS since v3.168; blanking the row was wrong in both directions.**
+Until v3.167 there was no lockout classifier, so the guard could only force `ambiguous`. Once one
+existed, the two branches of the double-arrow collision apply verbatim (shared helper
+`subtractClaimedLines`): subtract the lines `classifyLockoutLines` **confidently** claims, `none` if
+nothing is left, and refuse only when lockout itself can't be pinned. Both failure modes were real
+and reported together:
+- **`FLqFBMpTJB` — over-firing.** No between line exists. Its lockout rule (*"the diamond endpoints
+  of a purple line must have a difference of at least 4 and the remaining digits … cannot be
+  **between** or equal to the digits on the **endpoints**"*) trips `BETWEEN_CUE_RE` with lockout's own
+  words, so a between row was offered for a clue type the puzzle does not contain. Lockout claims the
+  purple lines → between subtracts to `none`.
+- **`k18i652bjj` "Within and without" — under-firing.** Has **both**, in two colours, each named in
+  its own clause (*"thin **grey** line"* between, *"thick **blue** line"* locked-out). The clause layer
+  pins them correctly; the blanket guard threw that answer away and greyed out nine real between
+  lines. (Its grey stroke is one **closed loop** through nine circles — `markerSegments` splits it
+  into the nine clues, exactly as it does for the blue lockout loop through nine diamonds.)
+
+Only **1** catalogued puzzle trips both cues at once (`k18i652bjj`), so the change's blast radius is
+that puzzle plus the untagged `FLqFBMpTJB`. **Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages), `hg0yh5uke9` (between + cosmetic
 renban); non-native scl `2ad4183iyn` (**the segmentation case** — 11 chains → 57 segments),
 `xm3e3npmmk`, `swtm07rplk`.
 
@@ -1730,9 +1750,19 @@ least 4, and all digits on the line … must lie strictly outside the range"* �
 line and applied the ≥4 neighbour rule, a different constraint entirely. Two guards in
 `classifyDutchWhisperLines`, cheapest first:
 
-1. `DUTCH_LOCKOUT_RE` (`lockout` / `lie (strictly) outside` / `outside the range|values|interval`) in
-   the rules → **`none` outright**, not `ambiguous`: the ≥4 belongs to the diamonds, so there is no
-   Dutch whisper here to hand-select.
+1. `DUTCH_LOCKOUT_RE` (`lockout` / `lie (strictly) outside` / `outside the range|values|interval`)
+   **or `LOCKOUT_CUE_RE`** in the rules → **`none` outright**, not `ambiguous`: the ≥4 belongs to the
+   diamonds, so there is no Dutch whisper here to hand-select.
+   **The `LOCKOUT_CUE_RE` half was added in v3.168** — `DUTCH_LOCKOUT_RE` predates the lockout
+   validator and only knew the phrasings of the two puzzles that prompted it, so a lockout puzzle
+   that *names* the clue slipped past: `k18i652bjj` writes "Locked-**out** Lines:" (hyphen, past
+   tense — no bare "lockout") and `FLqFBMpTJB` says only *"the diamond endpoints … must have a
+   difference of at least 4"*. On the latter the clause layer then pinned that sentence's own colour
+   word and **confidently** applied the ≥4 neighbour rule to lockout lines. `LOCKOUT_CUE_RE` is the
+   catalog-measured answer to "does this puzzle have lockout lines" (100% recall, and it demands the
+   words "lockout **line(s)**", so a titular pun can't trip it) — defer to it rather than grow a
+   second, worse copy. Re-measured over the corpus 2026-07-29: it vetoes exactly those two puzzles
+   beyond the old regex, and neither is tagged as any kind of whisper.
 2. `dropNativeLockoutLines` — the f-puzzles payload *declares* the chains (`lockout` **and**
    `lockoutline`, both now mapped to type `'lockout'` in `FPUZ_LINE_CONSTRAINTS`); drop exactly those,
    either drawn direction, and collapse to `none` if nothing survives. Covers a lockout puzzle whose

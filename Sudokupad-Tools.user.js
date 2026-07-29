@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.167.0
+// @version      3.168.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.167.0';
+  var SCRIPT_VERSION = '3.168.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -9061,11 +9061,23 @@
   var BETWEEN_CUE_RE = /\bbetween[- ]lines?\b|\bbetween\b[^.]{0,50}\b(?:circles?|bulbs?|endpoints?|attached)\b|\b(?:circles?|bulbs?|endpoints?)\b[^.]{0,50}\bbetween\b/;
   // Named-colour clause trigger for the multi-colour legend layer.
   var BETWEEN_CLAUSE_RE = /between|attached\s+circles?|bulbs?|endpoints?/;
+  // Chains in `lines` that no chain in `claimed` covers. Either drawn direction is
+  // the same clue (the markerSegments convention). Used wherever one cue-gated
+  // validator has to hand a rival its lines back — see the two collision blocks in
+  // classifyBetweenLines.
+  function subtractClaimedLines(lines, claimed) {
+    var sigs = {};
+    (claimed || []).forEach(function (k) {
+      sigs[k.join(' ')] = 1;
+      sigs[k.slice().reverse().join(' ')] = 1;
+    });
+    return (lines || []).filter(function (k) { return !sigs[k.join(' ')]; });
+  }
   // Lockout collision guard — lockout lines forbid the interior from lying between
   // the diamonds ("must lie OUTSIDE", "cannot be between", "not … between", the
-  // word "lockout"). When such phrasing co-occurs with the between cue and there
-  // is NO authoritative native key, refuse to auto-claim (→ ambiguous, player
-  // selects) rather than risk applying the opposite rule. Under-detect, never
+  // word "lockout"). A lockout rule states its constraint in BETWEEN'S OWN WORDS,
+  // negated, so BETWEEN_CUE_RE fires on lockout prose head-on and the picture
+  // (line + a marker at each end) is no help either. Under-detect, never
   // mis-apply — the standing validator contract.
   var BETWEEN_LOCKOUT_RE = /lockout|lie\s+outside|outside\s+the\s+(?:range|values?|interval)|(?:must\s+not|cannot|can't|may\s+not|never)\b[^.]{0,30}\bbetween\b|\bnot\b[^.]{0,20}\bbetween\b/;
   function classifyBetweenLines() {
@@ -9078,8 +9090,29 @@
     if (hasNativePayload()) return { mode: 'none', lines: [], allLines: cos };
     // No payload (scl/ctc/js-object): fall to the cue stack.
     var res = classifyCueLines(BETWEEN_CUE_RE, BETWEEN_CLAUSE_RE, null, 'between');
-    if (res.mode === 'confident' && BETWEEN_LOCKOUT_RE.test(getPuzzleRulesBlob()))
-      return { mode: 'ambiguous', lines: [], allLines: res.allLines };
+    // LOCKOUT COLLISION (guard since v3.119; SUBTRACTION since v3.168). Until the
+    // lockout validator existed there was nothing to subtract, so the guard could
+    // only blank the row — and that was wrong in BOTH directions once v3.167 gave
+    // lockout a classifier of its own:
+    //   • `FLqFBMpTJB` has NO between line at all. Its one rule — "the diamond
+    //     endpoints of a purple line must have a difference of at least 4 and the
+    //     remaining digits cannot be BETWEEN or equal to the digits on the
+    //     ENDPOINTS" — trips BETWEEN_CUE_RE purely with lockout's own words, so a
+    //     between row appeared for a clue type the puzzle does not contain.
+    //   • `k18i652bjj` "Within and without" has BOTH, in two colours, each named
+    //     in its own clause ("thin GREY line" between, "thick BLUE line" lockout).
+    //     The clause layer pins them correctly and the blanket guard threw that
+    //     answer away, greying out nine real between lines.
+    // So do what the double-arrow collision below already does: subtract the lines
+    // LOCKOUT confidently claims. Nothing left → the puzzle was lockout-only (none);
+    // lockout unpinnable → still refuse, since either rule could own the line.
+    if (res.mode === 'confident' && BETWEEN_LOCKOUT_RE.test(getPuzzleRulesBlob())) {
+      var lk = classifyLockoutLines();
+      if (lk.mode !== 'confident') return { mode: 'ambiguous', lines: [], allLines: res.allLines };
+      var lkLeft = subtractClaimedLines(res.lines, lk.lines);
+      if (!lkLeft.length) return { mode: 'none', lines: [], allLines: res.allLines };
+      res = { mode: 'confident', lines: lkLeft, allLines: res.allLines };
+    }
     // DOUBLE-ARROW COLLISION (v3.131). A double arrow draws the SAME picture as a
     // between line (line + a circle at each end) and its rules text trips the
     // between cue head-on — "the sum of the digits on a line BETWEEN two CIRCLES…"
@@ -9093,9 +9126,7 @@
     if (res.mode === 'confident' && doubleArrowCueFires(getPuzzleRulesBlob())) {
       var da = classifyDoubleArrowLines();
       if (da.mode !== 'confident') return { mode: 'ambiguous', lines: [], allLines: res.allLines };
-      var claimed = {};
-      da.lines.forEach(function (k) { claimed[k.join(' ')] = 1; });
-      var left = res.lines.filter(function (k) { return !claimed[k.join(' ')]; });
+      var left = subtractClaimedLines(res.lines, da.lines);
       return left.length
         ? { mode: 'confident', lines: left, allLines: res.allLines }
         : { mode: 'none', lines: [], allLines: res.allLines };
@@ -10004,12 +10035,26 @@
   // Catalog-measured (2026-07-22): of 118 puzzles matching DUTCH_CUE_RE only 2 also
   // match the lockout phrasing, and BOTH are pure lockout puzzles (`f9a2chdekr`,
   // `u0cs9m2qmx`) — no real Dutch whisper is lost. Under-detect, never mis-apply.
+  //
+  // THE PHRASING VETO WAS TOO NARROW UNTIL v3.168 — it predates the lockout
+  // validator and only knew the two phrasings the reported puzzles happened to use.
+  // A lockout puzzle that names the clue instead of describing it slipped straight
+  // past: `k18i652bjj` writes "Locked-out Lines:" (hyphen, past tense — no bare
+  // "lockout") and `FLqFBMpTJB` says only "the diamond endpoints … must have a
+  // difference of at least 4", and on the latter the clause layer then pinned that
+  // sentence's own colour word and CONFIDENTLY applied the ≥4 neighbour rule to
+  // lockout lines. LOCKOUT_CUE_RE is the catalog-measured answer to "does this
+  // puzzle have lockout lines" (100% recall, and it requires the words "lockout
+  // LINE(S)" so a titular pun can't trip it), so defer to it rather than grow a
+  // second, worse copy here. Re-measured over the corpus: it vetoes exactly the two
+  // puzzles above beyond the old regex, neither tagged as any kind of whisper.
   var DUTCH_LOCKOUT_RE = /lockout|lie\s+(?:strictly\s+)?outside|outside\s+the\s+(?:range|values?|interval)/;
   function classifyDutchWhisperLines() {
     // No native f-puzzles key for Dutch whispers (always cosmetic) → cue/colour only.
     var res = classifyCueLines(DUTCH_CUE_RE, DUTCH_CLAUSE_RE, null, 'dutch');
     if (res.mode === 'none') return res;
-    if (DUTCH_LOCKOUT_RE.test(getPuzzleRulesBlob()))
+    var blob = getPuzzleRulesBlob();
+    if (DUTCH_LOCKOUT_RE.test(blob) || LOCKOUT_CUE_RE.test(blob))
       return { mode: 'none', lines: [], allLines: res.allLines };
     return dropNativeLockoutLines(res);
   }
