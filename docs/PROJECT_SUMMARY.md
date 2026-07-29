@@ -520,7 +520,15 @@ way so it stays low-maintenance.
   line at its centre; each fold pair is a plain equality, so the whole rule is one set intersection
   per pair (no enumeration, no node cap, digit-set independent). f-puzzles declares them natively
   (`palindrome`), so layer 0 usually pins them. A closed loop has no fold axis → dropped, not
-  guessed; a fold pair that ordinary sudoku forces to differ = the structural impossibility.
+  guessed (catalog-checked: no palindrome loop exists in 607 declared strokes); a fold pair that
+  ordinary sudoku forces to differ = the structural impossibility. **Strokes meeting at an endpoint
+  are dropped (v3.165)** — folding half a chain asserts wrong equalities, and no test tells a
+  four-stroke spiral (`DBFdgmG6mq`) from a three-palindrome star (`MM3mMQGJn2`).
+  **Conditional line types: `LINE_MORPH_RE` / `lineTypeSelfDetermined` (v3.165)** — rules that give
+  each line a type by colour and then override it on a solver deduction ("a completely wet line
+  loses the property of its presenting colour and becomes a zipper", `7kov2n4lrz`). Sits beside
+  `SELF_DEDUCTION_RE`; every classifier entry point reads both through the one helper, so the whole
+  puzzle goes AMBIGUOUS rather than any validator claiming a line on a hypothesis.
   **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
   rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint

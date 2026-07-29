@@ -603,6 +603,37 @@ of even the trusted green). Every cue validator passes its own `labelKey`.
 Harmless where it doesn't apply: a legend token that no sticker carries ("German whispers (green)")
 finds no one-cell cage and the layer simply doesn't fire.
 
+## A line's TYPE can be conditional, not just unstated (v3.165)
+
+`SELF_DEDUCTION_RE` covers the case where the type is unknown from the start ("each line is exactly
+one of A, B, C"). **`LINE_MORPH_RE` covers the other shape:** the rules *do* give each line a type by
+colour, then add a clause that **overrides or supplements** it depending on something the solver has
+to work out. Both are read through **`lineTypeSelfDetermined(blob)`**, which every classifier entry
+point now calls — `classifyCueLines`, `classifyWhisperLines` and `doubleArrowStructureAllowed`.
+
+The reported case is `7kov2n4lrz` **"Zippery When Wet"** (Marty Sears): a full eight-type colour
+legend (renban/nabner/whisper/region-sum/parity/entropic/**palindrome**/same-difference), then —
+*"Any line that is completely wet (only enters water cells) **loses the property of its presenting
+colour**, and instead **becomes a zipper line** … If a line is partly dry and partly wet … it is
+**also** a zipper line."* Which lines are wet is a yin-yang deduction, so "grey = palindrome" is a
+**hypothesis** there, not a fact.
+
+**How it surfaced, and why the diagnosis matters.** One of its two grey lines is r9c8-r9c9-r8c9,
+whose fold pair (r9c8, r8c9) sits inside box 9 — impossible *as a palindrome*. The v3.157 structural
+test is mark-independent, so it fired a red "impossible clue" error on a completely untouched grid.
+The reasoning was right — an impossible clue means we claimed the wrong type — but the conclusion was
+handed to the player as though the puzzle were broken. It isn't: **that line being unfillable as a
+palindrome is exactly the deduction proving it is wet.** The fix belongs at detection, which is where
+v3.157 always said it belonged.
+
+Applies to **every** cue validator, not just palindrome — a wet pink line is not a renban either — so
+the whole puzzle goes AMBIGUOUS and each line is validated only when the player selects it.
+
+**Catalog-measured (2026-07-29): fires on exactly 3 of the 4,825 puzzles with rules text**, and all
+three genuinely need the manual override — `7kov2n4lrz` above; `7wf14f41d2` ("any line that passes
+through both red and blue cells is **also a renban**"); `FMGPBBt24p` ("**one line is also a
+thermometer**", which line unstated). Zero collateral on the other 4,822, and no cue's recall moved.
+
 ## The Sudoku-X cross is not a clue line (v3.132)
 
 SudokuPad draws the X diagonals as ordinary stroked `#arrows` paths with **no id, class or other
@@ -1261,7 +1292,31 @@ pair every line validator uses.
 **dropped, not guessed at** — choosing an axis would be inventing the clue. It is deliberately NOT
 counted as `invalid`: an unreadable drawing is our gap, not an impossible constraint. (This is the
 v3.144 loop lesson answered in the third way: whisper and same-difference enforce a wrap edge, parity
-does not, and palindrome cannot be defined on a loop at all.)
+does not, and palindrome cannot be defined on a loop at all.) **Catalog-checked (2026-07-29): no
+palindrome loop exists** — across the 109 palindrome-tagged puzzles that declare their chains (607
+strokes, read from the model's `palindrome` key and from live fpuz/scl payloads), zero strokes close
+on themselves and zero sets of strokes join into a closed ring. The drop is a guard against a shape
+setters do not draw, which is what you would expect: the rule has no meaning without endpoints.
+
+### Strokes that meet at an endpoint are dropped (v3.165)
+
+The same scan found the real hazard. **Nine of those 109 puzzles draw palindrome strokes that meet at
+an endpoint**, and the two readings cannot be told apart:
+
+- `DBFdgmG6mq` spirals **one** line through four straight strokes (r1c1→r1c4→r4c4→r4c1→r2c1). Read
+  separately each straight stroke folds onto a pair in its own row or column, so all four come back
+  "structurally impossible" — joining is the only reading that works.
+- `MM3mMQGJn2` "Relax, You're Two Tents" radiates **three separate** palindromes out of r5c1 in a
+  star. Each is individually valid, and joining any two would invent a clue.
+
+No geometric test separates those (the v3.160 lesson: two clues may share both endpoints), so
+`computePalindromeRemovals` declines both readings and drops any stroke whose endpoint is shared
+(`endHits`). **Why palindrome and not the others:** every other line validator can safely treat a
+stroke as a clue, because its rule is *local* — adjacent pairs, a running sum, a set — so splitting a
+chain only weakens the check. A palindrome's constraint is the **fold**, which depends on the whole
+chain's length, so folding two halves separately doesn't under-constrain, it asserts a **different
+and wrong** set of equalities. That is over-removal, so the safe direction is to decline. Not counted
+as `invalid` for the same reason the loop isn't.
 
 **Detection.** f-puzzles **declares palindromes natively** — key `palindrome`, the usual
 `{lines:[["R5C4", …]]}` shape (payloads fetched and decoded 2026-07-29: `2a8ncwsjcb`, `5zzqrmjaep`)

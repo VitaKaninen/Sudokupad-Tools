@@ -64,6 +64,7 @@ const NAMES = [
   'isGermanWhisperColor',
   // cue / clause regexes + composite cues
   'WHISPER_CUE_RE', 'WHISPERISH_RE', 'SELF_DEDUCTION_RE',
+  'LINE_MORPH_RE', 'lineTypeSelfDetermined',
   'DUTCH_CUE_RE', 'DUTCH_CLAUSE_RE', 'DUTCH_LOCKOUT_RE',
   'RENBAN_CUE_RE', 'RENBAN_CLAUSE_RE',
   'NABNER_CUE_RE', 'NABNER_CLAUSE_RE', 'NABNER_ANTI_RE',
@@ -273,6 +274,26 @@ checkFalse('palindrome anti: a plain palindrome clue must survive it',
   F.PALINDROME_ANTI_RE.test('the digits along each gray line form a palindrome (read the same forwards and backwards)'));
 checkFalse('palindrome cue: a zipper is not a palindrome (its fold pairs SUM, they do not match)',
   F.PALINDROME_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
+// ── Conditional line TYPES (v3.165) — the rules give each line a type by colour,
+// then override or supplement it based on something the solver must deduce. All
+// three catalog hits are here; the near-misses are the ordinary legends that must
+// keep working.
+const WET = 'zippery when wet: • any line that is completely wet (only enters water cells) loses the property of its presenting colour, and instead becomes a zipper line. • any line that is completely dry behaves normally. • if a line is partly dry and partly wet, it retains its presenting property, but it is also a zipper line as well.';
+checkTrue('line morph: "loses the property … becomes a zipper line" (7kov2n4lrz)',
+  F.LINE_MORPH_RE.test(WET));
+checkTrue('line morph: a conditional EXTRA type (7wf14f41d2)',
+  F.LINE_MORPH_RE.test('any line that passes through both red and blue cells is also a renban (i.e. it contains a set of consecutive, non-repeating digits)'));
+checkTrue('line morph: "one line is also a thermometer", which one unstated (FMGPBBt24p)',
+  F.LINE_MORPH_RE.test('all lines have a length of 3 or more. one line is also a thermometer and digits will increase from its bulb.'));
+checkTrue('line morph: the guard routes through lineTypeSelfDetermined',
+  F.lineTypeSelfDetermined(WET) && F.lineTypeSelfDetermined('each line is exactly two of modular, entropic, or parity'));
+// A plain multi-type legend states types outright — it must NOT be read as morphing.
+checkFalse('line morph: the Dovetail legend is a plain declaration (y697kc2umn)',
+  F.LINE_MORPH_RE.test('normal rules for modular lines (mod), parity lines (par), german whispers (gw), double arrows (da), ten lines (ten), region sum lines (rsl), and entropic lines (ent) apply'));
+checkFalse('line morph: 7kov2n4lrz’s own colour legend, on its own, is not a morph',
+  F.LINE_MORPH_RE.test('• palindrome (grey) - a grey line must read the same in either direction. • renban (pink) - digits on a pink line don’t repeat, and form a consecutive sequence.'));
+checkFalse('line morph: an ordinary palindrome clue does not morph',
+  F.LINE_MORPH_RE.test('the digits along each gray line form a palindrome (read the same forwards and backwards)'));
 // Same difference (v3.159). Catalog-measured: 31/36 tagged puzzles fire, 0 real
 // over-fires. The named form is easy; the described ones have to stay off the
 // whisper family ("differ by at least 5") and off rules that say "same difference"

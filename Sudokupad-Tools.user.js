@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.164.0
+// @version      3.165.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.164.0';
+  var SCRIPT_VERSION = '3.165.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8628,7 +8628,7 @@
     var cue = hasWhisperRuleCue();
     if (!cue) return { mode: 'none', lines: [], allLines: all };
     // Solver-determined type (see SELF_DEDUCTION_RE) → don't auto-claim; hand-select.
-    if (SELF_DEDUCTION_RE.test(getPuzzleRulesBlob())) return { mode: 'ambiguous', lines: [], allLines: all };
+    if (lineTypeSelfDetermined(getPuzzleRulesBlob())) return { mode: 'ambiguous', lines: [], allLines: all };
 
     // Layer 2 — cue + single line colour → that colour is the whisper.
     var colors = {};
@@ -8671,6 +8671,36 @@
   // the third trigger. Catalog-checked: matches 1cwnilmrp0 + 3DrNDGMDnG, spares the
   // other two line-tagged puzzles that carry the loose phrase.
   var SELF_DEDUCTION_RE = /\bambiguous\s+lines?\b|\blines?\b[^.]{0,40}\b(?:is|are|be)\s+(?:exactly\s+)?(?:one|two)\s+of\b|(?:exactly|either)\s+(?:one|two)\s+of\b[^.]{0,80}(?:modular|entropic|parity|whisper|renban|region[- ]?sum|zipper|palindrome|nabner)/;
+  // ── A line's type can be CONDITIONAL, not just unstated (v3.165) ───────────
+  // SELF_DEDUCTION_RE covers "each line is exactly one of A, B, C" — the type is
+  // unknown from the start. This is the other shape: the rules DO tell you each
+  // line's type by colour, then add a clause that OVERRIDES or SUPPLEMENTS it
+  // depending on something the solver has to work out. `7kov2n4lrz` "Zippery
+  // When Wet" (Marty Sears) is the reported case — a full colour legend
+  // (renban/nabner/whisper/region-sum/parity/entropic/PALINDROME/same-difference)
+  // followed by: *"Any line that is completely wet (only enters water cells)
+  // LOSES THE PROPERTY of its presenting colour, and instead BECOMES A ZIPPER
+  // LINE … If a line is partly dry and partly wet … it is ALSO a zipper line."*
+  // Which lines are wet is a yin-yang deduction, so "grey = palindrome" is a
+  // HYPOTHESIS there, not a fact — and one of its two grey lines (r9c8-r9c9-r8c9)
+  // folds onto a pair inside box 9, so as a palindrome it is impossible. Our
+  // structural test dutifully reported that as a red "impossible clue" error on
+  // an untouched grid: the reasoning was right (v3.157 — an impossible clue means
+  // WE claimed the wrong type) but the conclusion was handed to the player as if
+  // the puzzle were broken. It is not: that line being unfillable as a palindrome
+  // is exactly the deduction proving it is wet.
+  //
+  // Applies to EVERY cue validator, not just palindrome — a wet pink line is not
+  // a renban either — so it lives beside SELF_DEDUCTION_RE and both classifier
+  // entry points read them through lineTypeSelfDetermined().
+  //
+  // CATALOG-MEASURED (2026-07-29): fires on exactly 3 of the 4,825 puzzles with
+  // rules text, and all three genuinely need the manual override —
+  // `7kov2n4lrz` above; `7wf14f41d2` ("any line that passes through both red and
+  // blue cells is ALSO a renban"); `FMGPBBt24p` ("one line is also a
+  // thermometer", which line unstated). Zero collateral on the other 4,822.
+  var LINE_MORPH_RE = /\blines?\b[^.]{0,140}?\bloses?\b[^.]{0,40}?(?:propert|behaviou?r|rule|constraint|type|status)|\b(?:instead\s+)?(?:becomes?|turn(?:s|ed)?\s+into|transforms?\s+into)\s+an?\s+(?:zipper|renban|nabner|whisper|palindrome|parity|entropic|modular|region[- ]?sum|thermo\w*|between|arrow|ten|lockout|dutch)|\blines?\b[^.]{0,80}?\b(?:is|are|it)\s+(?:also|additionally)\s+an?\s+(?:zipper|renban|nabner|whisper|palindrome|parity|entropic|modular|region[- ]?sum|thermo\w*|between|arrow|ten|lockout|dutch)/;
+  function lineTypeSelfDetermined(blob) { return SELF_DEDUCTION_RE.test(blob) || LINE_MORPH_RE.test(blob); }
   function classifyCueLines(cueRe, clauseRe, nativeType, labelKey) {
     var all = getCosmeticLines();
     // Layer 0 (v3.90) — an f-puzzles payload states the type outright; skip the
@@ -8689,7 +8719,7 @@
     // named-colour layers below would wrongly grab every line. Force AMBIGUOUS so
     // the validator only runs on a hand-selection. (Same guard the entropic
     // ANTI-regex used to hard-code; now shared across all cue validators.)
-    if (SELF_DEDUCTION_RE.test(blob)) return { mode: 'ambiguous', lines: [], allLines: all };
+    if (lineTypeSelfDetermined(blob)) return { mode: 'ambiguous', lines: [], allLines: all };
     // Layer 1.5 (v3.132) — the puzzle LABELS its lines ("…double arrows (DA)…"
     // + a DA sticker on the line). An explicit declaration outranks every colour
     // heuristic below it; see the LINE-TYPE LABELS block for the two guards.
@@ -9111,7 +9141,7 @@
   // getDoubleArrows.
   function doubleArrowStructureAllowed() {
     var blob = getPuzzleRulesBlob();
-    return !BETWEEN_CUE_RE.test(blob) && !BETWEEN_LOCKOUT_RE.test(blob) && !SELF_DEDUCTION_RE.test(blob);
+    return !BETWEEN_CUE_RE.test(blob) && !BETWEEN_LOCKOUT_RE.test(blob) && !lineTypeSelfDetermined(blob);
   }
   function classifyDoubleArrowLines() {
     if (!doubleArrowCueFires(getPuzzleRulesBlob()))
@@ -11048,9 +11078,39 @@
       return true;
     }
 
+    // TWO STROKES THAT MEET AT AN ENDPOINT ARE UNDECIDABLE (v3.165) — and for
+    // THIS rule that is fatal in the over-removal direction, so they are dropped.
+    // Every other line validator can treat a stroke as a clue, because its rule
+    // is local (adjacent pairs, a running sum, a set): splitting a chain only
+    // weakens the check. A palindrome's constraint is the FOLD, which depends on
+    // the whole chain's length — so folding two halves separately does not
+    // under-constrain, it asserts a DIFFERENT and wrong set of equalities.
+    // Catalog-measured (2026-07-29, the 109 palindrome puzzles with declared
+    // chains, 607 strokes): 9 puzzles draw palindrome strokes that meet at an
+    // endpoint, and the two readings genuinely cannot be told apart —
+    //   • `DBFdgmG6mq` spirals ONE line through four straight strokes
+    //     (r1c1→r1c4→r4c4→r4c1→r2c1); read separately, each straight stroke folds
+    //     onto a pair in its own row or column, so all four are "impossible" —
+    //     joining is the only reading that works.
+    //   • `MM3mMQGJn2` "Relax, You're Two Tents" radiates THREE separate
+    //     palindromes out of r5c1 in a star; each is individually valid and
+    //     joining any two of them would invent a clue.
+    // No geometric test separates those (the v3.160 lesson: two clues may share
+    // both endpoints), so we decline both readings rather than guess one. Not
+    // counted as `invalid` — an undecidable drawing is our gap, not an
+    // impossible constraint.
+    var endHits = {};
+    lines.forEach(function (keys) {
+      if (keys.length < 2) return;
+      var a = keys[0], b = keys[keys.length - 1];
+      endHits[a] = (endHits[a] || 0) + 1;
+      if (b !== a) endHits[b] = (endHits[b] || 0) + 1;
+    });
+
     var lineData = [], invalid = 0;
     lines.forEach(function (keys) {
       if (keys.length > 2 && keys[0] === keys[keys.length - 1]) return;   // closed loop: no fold axis
+      if (keys.length >= 2 && (endHits[keys[0]] > 1 || endHits[keys[keys.length - 1]] > 1)) return;
       var L = keys.length, pairs = [], impossible = false;
       for (var i = 0; i < Math.floor(L / 2); i++) {
         var a = keys[i], b = keys[L - 1 - i];
@@ -12453,6 +12513,11 @@
   //      regex against the ones already in that list: a legend phrase matching two
   //      types claims NOTHING, so a collision silently disables the layer for both
   //      (v3.159: "same difference" also reads as whisper language → `not` guard).
+  //      Both "the puzzle won't say which line is which" guards are inherited for
+  //      free via classifyCueLines → lineTypeSelfDetermined (SELF_DEDUCTION_RE =
+  //      the type is unstated; LINE_MORPH_RE, v3.165 = the type is stated then
+  //      OVERRIDDEN on a solver deduction, `7kov2n4lrz`). If you ever classify
+  //      OUTSIDE classifyCueLines, call that helper yourself.
   //   2b. MEASURE A NEW CUE AGAINST THE CATALOG BEFORE SHIPPING IT — a cue regex is
   //      the one part of a validator that can OVER-remove, and eyeballing phrasings
   //      does not find the collisions. Add the validator to tools/cue_recall.py
