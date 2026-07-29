@@ -17,7 +17,7 @@ UNREADABLE at 0).*
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
 modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153; same-difference lines
-v3.159):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+v3.159; palindromes v3.164):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -514,6 +514,7 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Arrow / double arrow** | target range `tc×min…tc×max` disjoint from line range | **new**; a 10-cell shaft can't sum under 10, one circle can't exceed 9 |
 | **Region sum** | no S in every segment's `n-smallest … n-largest` range | **new**; segments are one region → distinct digits |
 | **Same difference** | no difference `d` fills the line over the FULL digit set (`sameDiffLineSupport` with `st.fullSet` in every cell) | v3.159; the test is the validator's own engine run mark-free — e.g. a 3-cell closed loop of mutually-conflicting cells has no `d` at all |
+| **Palindrome** | a fold pair (cell `i`, cell `L−1−i`) that `makeMustDiffer` forces to DIFFER | **new** v3.164; the pair must be EQUAL, so a shared row/column/region/uniqueness-cage makes the whole line unfillable. Mark-independent, and conservative because `makeMustDiffer` only asserts units the puzzle guarantees |
 
 **Every one of these tests is provably conservative — a satisfiable clue can never be flagged.** If a
 legal fill exists, its sum/length necessarily lies inside the loose bound the test checks (e.g. for
@@ -552,9 +553,10 @@ extra eliminations the conflict matrix would have added. When designing a new se
 shape; better still, look for the one that needs no cap at all (a chain CSP is solved exactly by arc
 consistency, which is why same-difference searches only when conflicts or a loop break the chain).
 Every other validator (kropki, cage, thermo,
-whisper, Dutch, XV, between, renban, nabner, parity, zipper, entropic, modular) is pairwise, per-cell,
-bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial, no cap, nothing to
-audit.
+whisper, Dutch, XV, between, renban, nabner, parity, zipper, entropic, modular, **palindrome**) is
+pairwise, per-cell, bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial,
+no cap, nothing to audit. Palindrome is the cheapest of them all: **no search at all**, one set
+intersection per fold pair.
 
 ## Layer 0 — native constraint payload (f-puzzles)
 
@@ -1242,6 +1244,61 @@ kill the sticker for **both**. `LINE_LABEL_TYPES` entries may now carry a `not` 
 whisper entry excludes `SAMEDIFF_CLAUSE_RE`. Scoped to the label legend deliberately: widening
 `WHISPERISH_RE` is what keeps the trusted-green layer safe elsewhere. Check this collision whenever
 a new cue validator is added.
+
+## Palindrome-line validator (v3.164)
+
+**`classifyPalindromeLines` / `computePalindromeRemovals`.** The digits read the same in both
+directions, i.e. the two cells **equidistant from the line's centre hold the same digit**. Fold the
+line at its centre and every fold pair `(i, L−1−i)` is a plain **equality**; an odd line's lone
+middle cell pairs with itself and is unconstrained. That makes this the cheapest validator in the
+file — the pairs are independent of each other *and* of the digit set, so a candidate `d` survives
+iff its mirror cell can still hold `d` (one **set intersection** per pair; no enumeration, no search,
+no node cap). Still iterated to a fixpoint, because two palindromes may cross and one's removal can
+feed the other. It reads the board and honours selection/fog through the same `cellSet`/`mayRemove`
+pair every line validator uses.
+
+**A closed loop has no centre to fold at**, so a drawn loop (first cell repeated as the last) is
+**dropped, not guessed at** — choosing an axis would be inventing the clue. It is deliberately NOT
+counted as `invalid`: an unreadable drawing is our gap, not an impossible constraint. (This is the
+v3.144 loop lesson answered in the third way: whisper and same-difference enforce a wrap edge, parity
+does not, and palindrome cannot be defined on a loop at all.)
+
+**Detection.** f-puzzles **declares palindromes natively** — key `palindrome`, the usual
+`{lines:[["R5C4", …]]}` shape (payloads fetched and decoded 2026-07-29: `2a8ncwsjcb`, `5zzqrmjaep`)
+— so it is registered in `FPUZ_LINE_CONSTRAINTS` and layer 0 pins them outright. scl/sxsm fall
+through to the ordinary cue + label + colour ladder.
+
+**Cue, catalog-measured** (2026-07-29, tag `palindrome`; 132 of the 285 tagged puzzles carry rules
+text and are scoreable): `PALINDROME_CUE_RE` = `/palindrom|reads?\s+the\s+same\b/` recalls
+**132/132 = 100%**, UNREADABLE **0**. Bare `/palindrom/` alone would be 124/132 (93.9%) — eight
+setters describe the rule without ever naming it ("digits along grey lines must read the same
+backwards and forwards": `6rs44b4pv2`, `f0d6t0yix3`, `o4gckt3h44`, `oup3w41nfb`, `km2pzzh71j`,
+`qcij3qgadg`, `QP8dphbD78`, `LFMR2HQNJP`), so the "reads the same" branch is load-bearing, not
+decoration. `PALINDROME_CLAUSE_RE` is identical to the cue (the general rule: a clause must cover
+every phrasing its cue covers), and it collides with no existing `LINE_LABEL_TYPES` entry in either
+direction, so the label layer works with `labelKey` `'palindrome'`.
+
+**`PALINDROME_ANTI_RE` drops two rules that borrow the words for a different constraint** — both
+would be **over-removals**, the one direction the elimination contract forbids:
+
+- *"read the same when you **roll out** the line along its row/column"* (`3G8rJj4JGR`, `bu0cacffbu`,
+  `ja5jn5uwkz`) — the line is not symmetric about its own centre at all; the comparison is with a
+  different line entirely.
+- *"digits **equidistant** from the centre of a line must be **consecutive**"*
+  (`bill-murphy/20250705-consecutive-palindromes`) — the fold pairs differ by one, so applying
+  equality would delete exactly the digits the puzzle wants.
+
+The anti runs **before layer 0**: a puzzle that states this outright must not be claimed even if it
+also carries a native `palindrome` key. Under-detect, never mis-apply.
+
+Of the 5 remaining hits outside the tag, 4 are genuine palindromes the catalog left untagged
+(`4pd5gy143h`, `6nqzhupznu`, `ayk7228tr8`, `j22idv1qhe`) and **one is an accepted known FP**:
+`2lins9ixrk` calls a *box* a "quasi-thermo-palindrome". No cue that reads the word can dodge that,
+and the colour layers still have to pin an actual line before anything is checked.
+
+**Deliberately not matched: the zipper family's "equidistant from the centre" phrasing.** Every
+palindrome puzzle that words it that way also says "palindrome", and `ZIPPER_CUE_RE` already owns
+those words for a rival rule (its fold pairs *sum*, they do not match).
 
 ## Entropic-line validator
 

@@ -71,6 +71,7 @@ const NAMES = [
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
+  'PALINDROME_CUE_RE', 'PALINDROME_ANTI_RE', 'PALINDROME_CLAUSE_RE',
   'SAMEDIFF_CUE_RE', 'SAMEDIFF_ANTI_RE', 'SAMEDIFF_CLAUSE_RE',
   'SAMEDIFF_ADJDIFF_RE', 'SAMEDIFF_BOUNDED_RE', 'SAMEDIFF_PERLINE_RE',
   'SAMEDIFF_THATNUM_RE', 'hasPerLineConstDiffCue',
@@ -253,6 +254,25 @@ checkTrue('region-sum cue: "each 3x3 box" spans the size (bl168ah6g9)',
 // Zipper
 checkTrue('zipper cue: equal distance from the center',
   F.ZIPPER_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
+// Palindrome (v3.164). Catalog-measured: 132/132 scoreable tagged puzzles fire.
+// The named form is trivial; the load-bearing branch is the 8 setters who only
+// DESCRIBE it, and the anti guards the two rules that borrow the same words.
+checkTrue('palindrome cue: named outright (18arjzoqpi)',
+  F.PALINDROME_CUE_RE.test('palindrome: the values along the gray line read the same forwards and backwards'));
+checkTrue('palindrome cue: described, never named (f0d6t0yix3, oup3w41nfb)',
+  F.PALINDROME_CUE_RE.test('normal sudoku rules apply. digits along grey lines must read the same in either direction'));
+checkTrue('palindrome cue: "read the same back and forth" (km2pzzh71j)',
+  F.PALINDROME_CUE_RE.test('digits along grey lines must read the same back and forth'));
+checkTrue('palindrome cue: "reads the same from both directions" (LFMR2HQNJP)',
+  F.PALINDROME_CUE_RE.test('the sequence of digits on a gray line reads the same from both directions'));
+checkTrue('palindrome anti: "read the same when you ROLL OUT the line" is a different rule (3G8rJj4JGR, bu0cacffbu, ja5jn5uwkz)',
+  F.PALINDROME_ANTI_RE.test('digits along grey lines will read the same when you roll out the grey line along the row or column'));
+checkTrue('palindrome anti: fold pairs CONSECUTIVE, not equal (bill-murphy/20250705-consecutive-palindromes)',
+  F.PALINDROME_ANTI_RE.test('digits equidistant from the centre of a line must be consecutive with each other'));
+checkFalse('palindrome anti: a plain palindrome clue must survive it',
+  F.PALINDROME_ANTI_RE.test('the digits along each gray line form a palindrome (read the same forwards and backwards)'));
+checkFalse('palindrome cue: a zipper is not a palindrome (its fold pairs SUM, they do not match)',
+  F.PALINDROME_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
 // Same difference (v3.159). Catalog-measured: 31/36 tagged puzzles fire, 0 real
 // over-fires. The named form is easy; the described ones have to stay off the
 // whisper family ("differ by at least 5") and off rules that say "same difference"
@@ -356,6 +376,7 @@ const claimOf = (phrase) => [
   ['renban', F.RENBAN_CLAUSE_RE],
   ['nabner', F.NABNER_CLAUSE_RE], ['tenline', F.TEN_LINE_CLAUSE_RE],
   ['regionsum', F.REGIONSUM_CLAUSE_RE], ['parity', F.PARITY_CLAUSE_RE], ['zipper', F.ZIPPER_CLAUSE_RE],
+  ['palindrome', F.PALINDROME_CLAUSE_RE],
   ['entropic', F.ENTROPIC_CLAUSE_RE], ['modular', F.MODULAR_CLAUSE_RE], ['between', F.BETWEEN_CLAUSE_RE],
   ['doublearrow', F.DOUBLEARROW_CLAUSE_RE], ['samediff', F.SAMEDIFF_CLAUSE_RE],
 ].filter(([, re, not]) => re.test(phrase) && !(not && not.test(phrase))).map(([k]) => k);
@@ -364,6 +385,17 @@ check('label types: Dovetail tokens each resolve to one validator',
     mod: ['modular'], par: ['parity'], gw: ['whisper'], da: ['doublearrow'],
     ten: ['tenline'], rsl: ['regionsum'], ent: ['entropic'],
   });
+// v3.164 — a legend phrase matching TWO types claims nothing, so a new clause
+// regex has to be checked against every existing one in both directions.
+check('label types: "palindromes" claims palindrome and nothing else',
+  claimOf('palindromes'), ['palindrome']);
+check('label types: a palindrome legend still resolves uniquely when described',
+  claimOf('grey lines read the same in either direction'), ['palindrome']);
+check('label types: no rival legend phrase reads as a palindrome',
+  ['german whispers', 'renban lines', 'zipper lines', 'region sum lines',
+   'ten lines', 'parity lines', 'entropic lines', 'modular lines',
+   'between lines', 'double arrows', 'same difference lines', 'nabner lines']
+    .filter((p) => F.PALINDROME_CLAUSE_RE.test(p)), []);
 // A parenthesised aside that is not a legend must not become a token.
 check('label defs: "(if given)" is not a token',
   F.labelDefPhrases('digits in killer cages sum to the number in the top left corner (if given)'), {});

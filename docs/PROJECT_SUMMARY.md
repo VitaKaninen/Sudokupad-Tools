@@ -515,7 +515,13 @@ way so it stays low-maintenance.
   chain (a bail degrades to the arc-consistent domains, never to nothing). A second cue
   (`hasPerLineConstDiffCue`, v3.163) catches rules that DEFINE the per-line constant without naming
   it, and `dropSameDiffClaimed` subtracts confidently-claimed lines from the whisper validator's
-  trusted-green set — per line, never per puzzle (one puzzle can hold both clue types). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
+  trusted-green set — per line, never per puzzle (one puzzle can hold both clue types).
+  **Palindrome lines (v3.164): `classifyPalindromeLines` / `computePalindromeRemovals`** — fold the
+  line at its centre; each fold pair is a plain equality, so the whole rule is one set intersection
+  per pair (no enumeration, no node cap, digit-set independent). f-puzzles declares them natively
+  (`palindrome`), so layer 0 usually pins them. A closed loop has no fold axis → dropped, not
+  guessed; a fold pair that ordinary sudoku forces to differ = the structural impossibility.
+  **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
   rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
   circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than

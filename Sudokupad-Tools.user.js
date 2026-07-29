@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.163.0
+// @version      3.164.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.163.0';
+  var SCRIPT_VERSION = '3.164.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8464,7 +8464,7 @@
   var FPUZ_LINE_CONSTRAINTS = {
     whispers: 'whisper', regionsumline: 'regionsum', entropicline: 'entropic',
     renbanline: 'renban', thermometer: 'thermo', betweenline: 'between',
-    zipperline: 'zipper',
+    zipperline: 'zipper', palindrome: 'palindrome',
     lockout: 'lockout', lockoutline: 'lockout'
   };
   function getNativeLineClues() {
@@ -8884,6 +8884,53 @@
   var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
   var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
   function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE, 'zipper', 'zipper'); }
+
+  // Palindrome lines (v3.164): the digits read the same in both directions, i.e.
+  // the two cells EQUIDISTANT FROM THE LINE'S CENTRE hold the SAME digit. Fold
+  // the line at its centre and every fold pair is a plain equality — an odd
+  // line's lone middle cell pairs with itself and is unconstrained. The simplest
+  // rule in the file: the pairs are independent, so a candidate survives iff its
+  // mirror cell can hold that same digit (a set intersection, no enumeration).
+  //
+  // f-puzzles DECLARES palindromes natively — key `palindrome`, the usual
+  // {lines:[["R5C4", …]]} shape (payloads fetched + decoded 2026-07-29:
+  // `2a8ncwsjcb`, `5zzqrmjaep`) — so layer 0 pins them outright and scl/sxsm
+  // fall through to the cue+colour ladder below.
+  //
+  // CATALOG-MEASURED over the 6,260 puzzles (2026-07-29, tag `palindrome`; 132
+  // of the 285 tagged puzzles carry rules text and are scoreable):
+  //   • bare /palindrom/ recalls 124/132 (93.9%). Eight setters describe the rule
+  //     without ever naming it — "digits along grey lines must read the same
+  //     backwards and forwards" (`6rs44b4pv2`, `f0d6t0yix3`, `o4gckt3h44`,
+  //     `oup3w41nfb`, `km2pzzh71j`, `qcij3qgadg`, `QP8dphbD78`, `LFMR2HQNJP`) —
+  //     so the "reads the same" branch is what takes recall to 132/132 (100%).
+  //   • Of the 9 hits outside the tag, 4 are genuine palindromes the catalog left
+  //     untagged (`4pd5gy143h`, `6nqzhupznu`, `ayk7228tr8`, `j22idv1qhe`), 4 are
+  //     dropped by the anti below, and ONE is an accepted known FP: `2lins9ixrk`
+  //     calls a BOX a "quasi-thermo-palindrome". No cue that reads the word can
+  //     dodge that one, and the colour layers still have to pin a line before
+  //     anything is checked.
+  // Deliberately NOT matched: the zipper family's "equidistant from the centre"
+  // phrasing. Every palindrome puzzle that words it that way also says
+  // "palindrome", and ZIPPER_CUE_RE already owns those words for a rival rule.
+  var PALINDROME_CUE_RE = /palindrom|reads?\s+the\s+same\b/;
+  // Two rules borrow the words for a DIFFERENT constraint, and both would be
+  // over-removals (the contract's one forbidden direction):
+  //   • "read the same when you ROLL OUT the line along its row/column"
+  //     (`3G8rJj4JGR`, `bu0cacffbu`, `ja5jn5uwkz`) — the line is not symmetric
+  //     about its own centre at all; the comparison is with a different line.
+  //   • "digits equidistant from the centre of a line must be CONSECUTIVE"
+  //     (bill-murphy/20250705-consecutive-palindromes) — the fold pairs differ
+  //     by one, so equality would delete exactly the digits the puzzle wants.
+  // The anti runs BEFORE layer 0: a puzzle that says this outright must not be
+  // claimed even if it also carries a native `palindrome` key (under-detect,
+  // never mis-apply).
+  var PALINDROME_ANTI_RE = /unroll|roll(?:s|ed|ing)?\s+(?:it\s+)?out|equidistant[^.]{0,60}consecutive/;
+  var PALINDROME_CLAUSE_RE = /palindrom|reads?\s+the\s+same\b/;
+  function classifyPalindromeLines() {
+    if (PALINDROME_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
+    return classifyCueLines(PALINDROME_CUE_RE, PALINDROME_CLAUSE_RE, 'palindrome', 'palindrome');
+  }
 
   // Same-difference lines (v3.159): every pair of ADJACENT digits along the line
   // differs by the same amount — and that amount is NOT given, it is per-line and
@@ -9777,6 +9824,7 @@
     { key: 'regionsum',   re: REGIONSUM_CLAUSE_RE },
     { key: 'parity',      re: PARITY_CLAUSE_RE },
     { key: 'zipper',      re: ZIPPER_CLAUSE_RE },
+    { key: 'palindrome',  re: PALINDROME_CLAUSE_RE },
     { key: 'entropic',    re: ENTROPIC_CLAUSE_RE },
     { key: 'modular',     re: MODULAR_CLAUSE_RE },
     { key: 'between',     re: BETWEEN_CLAUSE_RE },
@@ -10953,6 +11001,92 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, zipperCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Palindrome-line validator (v3.164) ────────────────────────────────────
+  // Fold the line at its centre: cell i and cell L−1−i hold the SAME digit. The
+  // fold pairs are independent of each other and of the digit set, so the whole
+  // rule is one intersection per pair — a candidate d in a cell survives iff its
+  // mirror cell can still hold d. Iterated to a fixpoint anyway, because two
+  // palindromes may cross and one's removal can feed the other.
+  //
+  // A CLOSED LOOP HAS NO CENTRE to fold at, so a drawn loop (first cell repeated
+  // as the last) is DROPPED rather than guessed at — picking an axis would be
+  // inventing the clue. Not counted as invalid: an unreadable drawing is our
+  // gap, not an impossible constraint.
+  //
+  // STRUCTURAL IMPOSSIBILITY (mark-independent, so it is our misread, not the
+  // puzzle's error): a fold pair that ordinary sudoku forces to DIFFER — same
+  // row, column, region or uniqueness cage — can never be equal, so no fill of
+  // that line exists at all. Conservative in the required direction:
+  // makeMustDiffer only answers true for units the puzzle guarantees (v3.162 —
+  // "no regions yet" answers false rather than inventing the regular boxing), so
+  // a satisfiable palindrome can never be flagged.
+  function computePalindromeRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyPalindromeLines();
+    if (cls.mode === 'none') return { noPalindrome: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noPalindrome: true, needSelection: true };
+    if (res.lines.length === 0) return { noPalindrome: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+    var mustDiffer = makeMustDiffer();
+
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;             // fogged reads as unconstrained
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                            // empty cell → never modified
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+
+    var lineData = [], invalid = 0;
+    lines.forEach(function (keys) {
+      if (keys.length > 2 && keys[0] === keys[keys.length - 1]) return;   // closed loop: no fold axis
+      var L = keys.length, pairs = [], impossible = false;
+      for (var i = 0; i < Math.floor(L / 2); i++) {
+        var a = keys[i], b = keys[L - 1 - i];
+        if (mustDiffer(a, b)) impossible = true;
+        pairs.push([a, b]);
+      }
+      if (pairs.length === 0) return;                               // 1-cell line constrains nothing
+      if (impossible) { invalid++; return; }
+      lineData.push(pairs);
+    });
+    if (lineData.length === 0) return { noPalindrome: true, invalid: invalid };
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (pairs) {
+        pairs.forEach(function (pr) {
+          var A = cellSet(pr[0]), B = cellSet(pr[1]);
+          [[pr[0], B], [pr[1], A]].forEach(function (side) {
+            var C = side[0], mirror = side[1];
+            if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+            Array.from(work[C]).forEach(function (d) {              // snapshot: set mutates in loop
+              if (mirror.has(d)) return;
+              work[C].delete(d);
+              var k = C + '/' + d;
+              if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+              changed = true;
+            });
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, palindromeCount: lineData.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Entropic-line validator ───────────────────────────────────────────────
@@ -12417,6 +12551,8 @@
         classify: classifySameDiffLines, compute: computeSameDiffRemovals, countKey: 'sameDiffCount', noneKey: 'noSameDiff' },
       { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines',
         classify: classifyParityLines, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
+      { name: 'palindrome', unitNoun: 'palindrome line', menuLabel: 'Palindrome lines',
+        classify: classifyPalindromeLines, compute: computePalindromeRemovals, countKey: 'palindromeCount', noneKey: 'noPalindrome' },
       { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines',
         classify: classifyZipperLines, compute: computeZipperRemovals, countKey: 'zipperCount', noneKey: 'noZipper' },
       { name: 'entropic', unitNoun: 'entropic line', menuLabel: 'Entropic lines',
