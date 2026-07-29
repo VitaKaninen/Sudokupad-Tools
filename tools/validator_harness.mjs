@@ -64,7 +64,6 @@ const NAMES = [
   'isGermanWhisperColor',
   // cue / clause regexes + composite cues
   'WHISPER_CUE_RE', 'WHISPERISH_RE', 'SELF_DEDUCTION_RE',
-  'LINE_MORPH_RE', 'lineTypeSelfDetermined',
   'DUTCH_CUE_RE', 'DUTCH_CLAUSE_RE', 'DUTCH_LOCKOUT_RE',
   'RENBAN_CUE_RE', 'RENBAN_CLAUSE_RE',
   'NABNER_CUE_RE', 'NABNER_CLAUSE_RE', 'NABNER_ANTI_RE',
@@ -88,7 +87,7 @@ const NAMES = [
   'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
   'lineStepGraph', 'reflectCellKey', 'walkBetweenSegment',
   // zipper stroke-joining + fold centre
-  'mergeZipperChains', 'zipperChains', 'zipperFoldCenter',
+  'mergeLineStrokes', 'lineClueChains', 'zipperChains', 'zipperFoldCenter',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -274,26 +273,6 @@ checkFalse('palindrome anti: a plain palindrome clue must survive it',
   F.PALINDROME_ANTI_RE.test('the digits along each gray line form a palindrome (read the same forwards and backwards)'));
 checkFalse('palindrome cue: a zipper is not a palindrome (its fold pairs SUM, they do not match)',
   F.PALINDROME_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
-// ── Conditional line TYPES (v3.165) — the rules give each line a type by colour,
-// then override or supplement it based on something the solver must deduce. All
-// three catalog hits are here; the near-misses are the ordinary legends that must
-// keep working.
-const WET = 'zippery when wet: • any line that is completely wet (only enters water cells) loses the property of its presenting colour, and instead becomes a zipper line. • any line that is completely dry behaves normally. • if a line is partly dry and partly wet, it retains its presenting property, but it is also a zipper line as well.';
-checkTrue('line morph: "loses the property … becomes a zipper line" (7kov2n4lrz)',
-  F.LINE_MORPH_RE.test(WET));
-checkTrue('line morph: a conditional EXTRA type (7wf14f41d2)',
-  F.LINE_MORPH_RE.test('any line that passes through both red and blue cells is also a renban (i.e. it contains a set of consecutive, non-repeating digits)'));
-checkTrue('line morph: "one line is also a thermometer", which one unstated (FMGPBBt24p)',
-  F.LINE_MORPH_RE.test('all lines have a length of 3 or more. one line is also a thermometer and digits will increase from its bulb.'));
-checkTrue('line morph: the guard routes through lineTypeSelfDetermined',
-  F.lineTypeSelfDetermined(WET) && F.lineTypeSelfDetermined('each line is exactly two of modular, entropic, or parity'));
-// A plain multi-type legend states types outright — it must NOT be read as morphing.
-checkFalse('line morph: the Dovetail legend is a plain declaration (y697kc2umn)',
-  F.LINE_MORPH_RE.test('normal rules for modular lines (mod), parity lines (par), german whispers (gw), double arrows (da), ten lines (ten), region sum lines (rsl), and entropic lines (ent) apply'));
-checkFalse('line morph: 7kov2n4lrz’s own colour legend, on its own, is not a morph',
-  F.LINE_MORPH_RE.test('• palindrome (grey) - a grey line must read the same in either direction. • renban (pink) - digits on a pink line don’t repeat, and form a consecutive sequence.'));
-checkFalse('line morph: an ordinary palindrome clue does not morph',
-  F.LINE_MORPH_RE.test('the digits along each gray line form a palindrome (read the same forwards and backwards)'));
 // Same difference (v3.159). Catalog-measured: 31/36 tagged puzzles fire, 0 real
 // over-fires. The named form is easy; the described ones have to stay off the
 // whisper family ("differ by at least 5") and off rules that say "same difference"
@@ -938,6 +917,26 @@ check('zipper: three chain-ends at one cell = refuse to join',
   F.zipperChains(yJunction).length, 3);
 const loop = [['0,0','1,0','1,1','0,1','0,0'], ['3,3','4,3']];
 check('zipper: a closed loop is left alone', F.zipperChains(loop).length, 2);
+// ── The joiner is now EVERY line validator's reader (v3.166) ────────────────
+// Same function, exercised as lineClueChains: the two shapes the degree-2 rule
+// has to tell apart, taken from real drawings in the catalog.
+// `DBFdgmG6mq` — a spiral drawn as four straight strokes, every junction degree 2.
+const spiral = [
+  ['0,0','1,0','2,0','3,0'], ['3,0','3,1','3,2','3,3'],
+  ['3,3','2,3','1,3','0,3'], ['0,3','0,2','0,1'],
+];
+check('strokes: a 4-stroke spiral joins into one 12-cell chain',
+  F.lineClueChains(spiral).map((c) => c.length), [12]);
+// `MM3mMQGJn2` — three chains radiating from one cell (degree 3): never joined.
+const star = [
+  ['0,4','1,3','2,2','3,1'], ['0,4','1,5','2,6','3,7'], ['0,4','1,4','2,4'],
+];
+check('strokes: a 3-way star stays three separate clues',
+  F.lineClueChains(star).map((c) => c.length).sort(), [3, 4, 4]);
+checkTrue('strokes: joining is idempotent (resolve + zipperChains both run it)',
+  JSON.stringify(F.lineClueChains(F.lineClueChains(spiral))) === JSON.stringify(F.lineClueChains(spiral)));
+check('strokes: untouched chains pass straight through',
+  F.lineClueChains([['0,0','1,0'], ['5,5','5,6']]).length, 2);
 check('zipper: an odd chain folds on its middle cell',
   F.zipperFoldCenter(['0,0','1,0','2,0']), { cx: 1.5, cy: 0.5 });
 check('zipper: an even STRAIGHT chain folds on the shared edge',

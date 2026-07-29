@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.165.0
+// @version      3.166.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.165.0';
+  var SCRIPT_VERSION = '3.166.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8628,7 +8628,7 @@
     var cue = hasWhisperRuleCue();
     if (!cue) return { mode: 'none', lines: [], allLines: all };
     // Solver-determined type (see SELF_DEDUCTION_RE) → don't auto-claim; hand-select.
-    if (lineTypeSelfDetermined(getPuzzleRulesBlob())) return { mode: 'ambiguous', lines: [], allLines: all };
+    if (SELF_DEDUCTION_RE.test(getPuzzleRulesBlob())) return { mode: 'ambiguous', lines: [], allLines: all };
 
     // Layer 2 — cue + single line colour → that colour is the whisper.
     var colors = {};
@@ -8671,36 +8671,26 @@
   // the third trigger. Catalog-checked: matches 1cwnilmrp0 + 3DrNDGMDnG, spares the
   // other two line-tagged puzzles that carry the loose phrase.
   var SELF_DEDUCTION_RE = /\bambiguous\s+lines?\b|\blines?\b[^.]{0,40}\b(?:is|are|be)\s+(?:exactly\s+)?(?:one|two)\s+of\b|(?:exactly|either)\s+(?:one|two)\s+of\b[^.]{0,80}(?:modular|entropic|parity|whisper|renban|region[- ]?sum|zipper|palindrome|nabner)/;
-  // ── A line's type can be CONDITIONAL, not just unstated (v3.165) ───────────
-  // SELF_DEDUCTION_RE covers "each line is exactly one of A, B, C" — the type is
-  // unknown from the start. This is the other shape: the rules DO tell you each
-  // line's type by colour, then add a clause that OVERRIDES or SUPPLEMENTS it
-  // depending on something the solver has to work out. `7kov2n4lrz` "Zippery
-  // When Wet" (Marty Sears) is the reported case — a full colour legend
-  // (renban/nabner/whisper/region-sum/parity/entropic/PALINDROME/same-difference)
-  // followed by: *"Any line that is completely wet (only enters water cells)
-  // LOSES THE PROPERTY of its presenting colour, and instead BECOMES A ZIPPER
-  // LINE … If a line is partly dry and partly wet … it is ALSO a zipper line."*
-  // Which lines are wet is a yin-yang deduction, so "grey = palindrome" is a
-  // HYPOTHESIS there, not a fact — and one of its two grey lines (r9c8-r9c9-r8c9)
-  // folds onto a pair inside box 9, so as a palindrome it is impossible. Our
-  // structural test dutifully reported that as a red "impossible clue" error on
-  // an untouched grid: the reasoning was right (v3.157 — an impossible clue means
-  // WE claimed the wrong type) but the conclusion was handed to the player as if
-  // the puzzle were broken. It is not: that line being unfillable as a palindrome
-  // is exactly the deduction proving it is wet.
+  // ── WE DO NOT DIAGNOSE A CLUE'S VALIDITY — that is the solver's job (v3.166) ─
+  // v3.165 added a LINE_MORPH_RE guard that forced every cue validator AMBIGUOUS
+  // when the rules could override a line's stated type ("a completely wet line
+  // loses the property of its presenting colour and becomes a zipper",
+  // `7kov2n4lrz`). It is REVERTED, and the reasoning behind it was the mistake:
   //
-  // Applies to EVERY cue validator, not just palindrome — a wet pink line is not
-  // a renban either — so it lives beside SELF_DEDUCTION_RE and both classifier
-  // entry points read them through lineTypeSelfDetermined().
+  //   • The puzzle STATES a colour for every line type. There is no ambiguity to
+  //     protect the player from, so there was no reason to disable eight working
+  //     validators — the cost of the guard was paid by every clue on the board.
+  //   • A clue that is broken as drawn SHOULD fail, on an empty grid or a full
+  //     one. That report is fine. What is NOT ours to do is work backwards from
+  //     it — "this line can't be a palindrome, so the rules must mean something
+  //     else here" is the SOLVER'S deduction to make, not a detection input.
+  //     A validator may eventually be what tells them; deciding it for them, and
+  //     silently switching itself off on the strength of it, is out of scope.
   //
-  // CATALOG-MEASURED (2026-07-29): fires on exactly 3 of the 4,825 puzzles with
-  // rules text, and all three genuinely need the manual override —
-  // `7kov2n4lrz` above; `7wf14f41d2` ("any line that passes through both red and
-  // blue cells is ALSO a renban"); `FMGPBBt24p` ("one line is also a
-  // thermometer", which line unstated). Zero collateral on the other 4,822.
-  var LINE_MORPH_RE = /\blines?\b[^.]{0,140}?\bloses?\b[^.]{0,40}?(?:propert|behaviou?r|rule|constraint|type|status)|\b(?:instead\s+)?(?:becomes?|turn(?:s|ed)?\s+into|transforms?\s+into)\s+an?\s+(?:zipper|renban|nabner|whisper|palindrome|parity|entropic|modular|region[- ]?sum|thermo\w*|between|arrow|ten|lockout|dutch)|\blines?\b[^.]{0,80}?\b(?:is|are|it)\s+(?:also|additionally)\s+an?\s+(?:zipper|renban|nabner|whisper|palindrome|parity|entropic|modular|region[- ]?sum|thermo\w*|between|arrow|ten|lockout|dutch)/;
-  function lineTypeSelfDetermined(blob) { return SELF_DEDUCTION_RE.test(blob) || LINE_MORPH_RE.test(blob); }
+  // So the impossible-clue report (v3.157) stands exactly as written, and the
+  // classifier does not try to second-guess it. Keep SELF_DEDUCTION_RE, which is
+  // a different thing entirely: there the rules never state which line is which,
+  // so there is no claim to make in the first place.
   function classifyCueLines(cueRe, clauseRe, nativeType, labelKey) {
     var all = getCosmeticLines();
     // Layer 0 (v3.90) — an f-puzzles payload states the type outright; skip the
@@ -8719,7 +8709,7 @@
     // named-colour layers below would wrongly grab every line. Force AMBIGUOUS so
     // the validator only runs on a hand-selection. (Same guard the entropic
     // ANTI-regex used to hard-code; now shared across all cue validators.)
-    if (lineTypeSelfDetermined(blob)) return { mode: 'ambiguous', lines: [], allLines: all };
+    if (SELF_DEDUCTION_RE.test(blob)) return { mode: 'ambiguous', lines: [], allLines: all };
     // Layer 1.5 (v3.132) — the puzzle LABELS its lines ("…double arrows (DA)…"
     // + a DA sticker on the line). An explicit declaration outranks every colour
     // heuristic below it; see the LINE-TYPE LABELS block for the two guards.
@@ -9141,7 +9131,7 @@
   // getDoubleArrows.
   function doubleArrowStructureAllowed() {
     var blob = getPuzzleRulesBlob();
-    return !BETWEEN_CUE_RE.test(blob) && !BETWEEN_LOCKOUT_RE.test(blob) && !lineTypeSelfDetermined(blob);
+    return !BETWEEN_CUE_RE.test(blob) && !BETWEEN_LOCKOUT_RE.test(blob) && !SELF_DEDUCTION_RE.test(blob);
   }
   function classifyDoubleArrowLines() {
     if (!doubleArrowCueFires(getPuzzleRulesBlob()))
@@ -9185,7 +9175,25 @@
     return set;
   }
 
-  // ── ONE ZIPPER CAN BE DRAWN AS SEVERAL STROKES (v3.124) ─────────────────────
+  // ── ONE LINE CLUE CAN BE DRAWN AS SEVERAL STROKES (v3.124; ALL line
+  //    validators v3.166) ──────────────────────────────────────────────────────
+  // THIS IS COMMON, NOT AN ODDITY. Setters draw a bent line as several strokes
+  // all the time — it is how most editors behave when you release the mouse at a
+  // corner — so every line validator must read the JOINED chain, not the strokes.
+  // Found for zippers in v3.124 (below, where `k9mm1xgca5`'s own fold-centre
+  // circles PROVE the merged reading) and generalised to every line validator in
+  // v3.166. It is applied in the two places they all pass through —
+  // resolveCueValidatorLines and computeWhisperLikeRemovals — so a new validator
+  // inherits it without asking.
+  //
+  // Every line rule is damaged by reading strokes as clues, but differently:
+  // the LOCAL ones (whisper, parity, entropic, modular, same difference) silently
+  // lose the comparison AT the join; the WHOLE-LINE ones (renban, nabner, ten,
+  // region sum) validate a set the puzzle never posed; and the FOLDED ones
+  // (zipper, palindrome) are worst, because the fold point depends on the chain's
+  // length — split a line and you don't under-constrain it, you assert a
+  // DIFFERENT and wrong set of pairings.
+  //
   // The between-line lesson (v3.121: "the drawn polyline is not the clue") has a
   // mirror image, and `k9mm1xgca5` "The Zip that Zips the Zips" is it. Its
   // R6C3→R9C3 zipper is stored as TWO line entries that meet end-to-end at R8C2:
@@ -9205,7 +9213,22 @@
   // leaves open, and we refuse to guess (under-detect, never mis-apply — the same
   // rule walkBetweenSegment follows). Closed loops (first === last) never join, and
   // a merge that would revisit a cell is rejected.
-  function mergeZipperChains(chains) {
+  //
+  // THE DEGREE-2 RULE IS WHAT MAKES THIS SAFE. Two clues may legitimately share
+  // an endpoint (the v3.160 lesson), so "these strokes touch" cannot mean "join
+  // them" on its own — the junction's DEGREE is the signal. Both shapes are drawn
+  // in the wild; a catalog scan of the 109 palindrome puzzles that declare their
+  // chains (607 strokes, 2026-07-29) found 9 with strokes meeting at an endpoint,
+  // including one of each:
+  //   • `DBFdgmG6mq` — a spiral of four straight strokes, each junction joining
+  //     exactly 2, so they merge into the one line the picture shows.
+  //   • `MM3mMQGJn2` "Relax, You're Two Tents" — THREE chains radiating from r5c1
+  //     in a star. That cell ends 3 chains, so nothing merges and they stay three
+  //     separate clues, which is what they are.
+  // (Both are geometry illustrations, not live regressions: neither puzzle ships
+  // rules text, so no cue fires and we never claim their lines. The load-bearing
+  // proof remains `k9mm1xgca5` above, where the setter marked the fold centres.)
+  function mergeLineStrokes(chains) {
     var items = (chains || [])
       .filter(function (k) { return k && k.length >= 2; })
       .map(function (k) { return { keys: k.slice(), parts: [k.slice()], alive: true }; });
@@ -9244,7 +9267,14 @@
   // validator, the centre dot and the eyeball preview all go through, so a fold
   // point can never mean three different things in three places.
   function zipperChains(lines) {
-    return mergeZipperChains(lines).map(function (it) { return it.keys; });
+    return lineClueChains(lines);
+  }
+  // The general form: drawn strokes → the chains the puzzle actually poses. Every
+  // line validator reads its clues through this (via resolveCueValidatorLines /
+  // computeWhisperLikeRemovals), so none of them can go back to folding, summing
+  // or walking half a line. Idempotent — joining twice changes nothing.
+  function lineClueChains(lines) {
+    return mergeLineStrokes(lines).map(function (it) { return it.keys; });
   }
   // A zipper chain's FOLD CENTRE in CELL units (x.5 = a cell centre, a whole number
   // = a grid line). Odd length → the middle cell; even → the midpoint between the
@@ -9358,7 +9388,7 @@
     var scale = parseFloat(settings.zipperCenterDotScale);
     if (!isFinite(scale) || scale <= 0) scale = DEFAULTS.zipperCenterDotScale;
 
-    mergeZipperChains(cls.lines).forEach(function (item) {
+    mergeLineStrokes(cls.lines).forEach(function (item) {
       // A merged zipper is drawn by several paths; any one of them carries the
       // colour and width (they are the same line), so take the first that matched.
       var info = null;
@@ -9616,16 +9646,21 @@
   // mode → require a selection and validate every line the selection touches, only
   // altering selected cells (the player's manual override — same policy as whisper).
   // Returns { lines:[[keys]…], masked, selection } or { needSelection:true }.
+  // JOIN THE STROKES FIRST, then select/filter (v3.166). A clue drawn in several
+  // strokes is ONE clue — see mergeLineStrokes — so the join has to happen before
+  // anything reasons about a chain: before the selection test (selecting the whole
+  // line must cover the whole line, not one stroke of it) and before unitFilter
+  // (the whole-clue contract judges the clue, and half a clue is not one).
   function resolveCueValidatorLines(cls, unitFilter) {
     if (cls.mode === 'ambiguous') {
       var sel = getSelectedCells();
       if (!sel || sel.size === 0) return { needSelection: true };
-      var ls = cls.allLines.filter(function (l) { return l.keys.some(function (k) { return sel.has(k); }); })
-                           .map(function (l) { return l.keys; });
+      var ls = lineClueChains(cls.allLines.map(function (l) { return l.keys; }))
+        .filter(function (keys) { return keys.some(function (k) { return sel.has(k); }); });
       if (ls.length === 0) return { needSelection: true };
       return { lines: ls, masked: true, selection: sel };
     }
-    var lines = cls.lines;
+    var lines = lineClueChains(cls.lines);
     if (unitFilter) lines = lines.filter(function (keys) { return unitFilter(keys); });
     return { lines: lines, masked: false, selection: null };
   }
@@ -9653,15 +9688,18 @@
     var selectionOnly = settings.validateSelectionOnly === true;
     var ambiguous = cls.mode === 'ambiguous';
 
+    // Strokes joined first, exactly as resolveCueValidatorLines does it (v3.166) —
+    // a whisper drawn in two strokes has a real neighbour pair AT the join, and
+    // reading the strokes apart silently drops that one comparison.
     var lines, masked;
     if (ambiguous) {
       if (!selection || selection.size === 0) return none(true);
-      lines = cls.allLines.filter(function (l) { return l.keys.some(function (k) { return selection.has(k); }); })
-                          .map(function (l) { return l.keys; });
+      lines = lineClueChains(cls.allLines.map(function (l) { return l.keys; }))
+        .filter(function (keys) { return keys.some(function (k) { return selection.has(k); }); });
       if (lines.length === 0) return none(true);
       masked = true;                                    // only alter selected cells
     } else {
-      lines = cls.lines;
+      lines = lineClueChains(cls.lines);
       masked = selectionOnly;
       if (masked && (!selection || selection.size === 0)) return none();
     }
@@ -10956,7 +10994,7 @@
     // Fold structure is fixed by geometry: pairs + optional lone centre (odd line).
     // JOIN end-to-end strokes first (v3.124) — a zipper the setter drew in two
     // strokes is ONE clue, and folding each stroke separately pairs the wrong cells
-    // (see mergeZipperChains for the `k9mm1xgca5` proof).
+    // (see mergeLineStrokes for the `k9mm1xgca5` proof).
     var lineData = zipperChains(lines).map(function (keys) {
       var pairs = [], L = keys.length;
       for (var i = 0; i < Math.floor(L / 2); i++) pairs.push([keys[i], keys[L - 1 - i]]);
@@ -11078,39 +11116,15 @@
       return true;
     }
 
-    // TWO STROKES THAT MEET AT AN ENDPOINT ARE UNDECIDABLE (v3.165) — and for
-    // THIS rule that is fatal in the over-removal direction, so they are dropped.
-    // Every other line validator can treat a stroke as a clue, because its rule
-    // is local (adjacent pairs, a running sum, a set): splitting a chain only
-    // weakens the check. A palindrome's constraint is the FOLD, which depends on
-    // the whole chain's length — so folding two halves separately does not
-    // under-constrain, it asserts a DIFFERENT and wrong set of equalities.
-    // Catalog-measured (2026-07-29, the 109 palindrome puzzles with declared
-    // chains, 607 strokes): 9 puzzles draw palindrome strokes that meet at an
-    // endpoint, and the two readings genuinely cannot be told apart —
-    //   • `DBFdgmG6mq` spirals ONE line through four straight strokes
-    //     (r1c1→r1c4→r4c4→r4c1→r2c1); read separately, each straight stroke folds
-    //     onto a pair in its own row or column, so all four are "impossible" —
-    //     joining is the only reading that works.
-    //   • `MM3mMQGJn2` "Relax, You're Two Tents" radiates THREE separate
-    //     palindromes out of r5c1 in a star; each is individually valid and
-    //     joining any two of them would invent a clue.
-    // No geometric test separates those (the v3.160 lesson: two clues may share
-    // both endpoints), so we decline both readings rather than guess one. Not
-    // counted as `invalid` — an undecidable drawing is our gap, not an
-    // impossible constraint.
-    var endHits = {};
-    lines.forEach(function (keys) {
-      if (keys.length < 2) return;
-      var a = keys[0], b = keys[keys.length - 1];
-      endHits[a] = (endHits[a] || 0) + 1;
-      if (b !== a) endHits[b] = (endHits[b] || 0) + 1;
-    });
-
+    // `lines` arrives already stroke-JOINED (resolveCueValidatorLines →
+    // lineClueChains, v3.166). That matters more here than for any other line
+    // rule: a palindrome's constraint is the FOLD, which depends on the whole
+    // chain's length, so folding two strokes of one line separately does not
+    // merely under-constrain — it asserts a DIFFERENT, wrong set of equalities
+    // (`DBFdgmG6mq`, four strokes of one spiral, each "impossible" on its own).
     var lineData = [], invalid = 0;
     lines.forEach(function (keys) {
       if (keys.length > 2 && keys[0] === keys[keys.length - 1]) return;   // closed loop: no fold axis
-      if (keys.length >= 2 && (endHits[keys[0]] > 1 || endHits[keys[keys.length - 1]] > 1)) return;
       var L = keys.length, pairs = [], impossible = false;
       for (var i = 0; i < Math.floor(L / 2); i++) {
         var a = keys[i], b = keys[L - 1 - i];
@@ -12457,7 +12471,12 @@
   //      supply, a total the cells can't reach — DROP those clues, count them, and
   //      return the count on EVERY exit path including the <none> one. Puzzles are
   //      peer-reviewed, so an impossible clue means WE mis-detected it; never let it
-  //      pass as a green all-clear, and never wipe the cells over it. Keep the bound
+  //      pass as a green all-clear, and never wipe the cells over it. REPORT it and
+  //      STOP THERE (v3.166): a clue that is broken as drawn is allowed to fail on
+  //      an untouched grid, but working BACKWARDS from that failure — "so the rules
+  //      must mean something else for this line, so I'll switch myself off" — is
+  //      the SOLVER's deduction, not ours. We never diagnose a clue's validity.
+  //      Keep the bound
   //      LOOSE (repeats allowed unless the rule forbids them) so a satisfiable clue
   //      can never be flagged — and check whether your rule even HAS such a bound
   //      (between-line interiors may repeat, so they have none).
@@ -12467,6 +12486,19 @@
   //      half-checked). Line validators: reuse resolveCueValidatorLines + one of the
   //      shared engines (computeBandLineRemovals / computeWhisperLikeRemovals) — a
   //      new line type is usually a near-clone of an existing one.
+  //      ONE CLUE IS OFTEN DRAWN AS SEVERAL STROKES — assume it, don't discover it
+  //      (v3.124, generalised to every line validator in v3.166). Setters break a
+  //      bent line at its corners routinely, so the stored stroke list is NOT the
+  //      clue list. You inherit the fix by taking your lines from
+  //      resolveCueValidatorLines / computeWhisperLikeRemovals, which both run
+  //      lineClueChains(); if you ever read cls.lines DIRECTLY, call lineClueChains()
+  //      yourself or you are validating fragments. Strokes join only where exactly
+  //      TWO chain-ends meet — a 3-way junction is left alone, because two clues may
+  //      legitimately share an endpoint (v3.160) and only the degree tells them
+  //      apart. Check what a fragment does to YOUR rule: LOCAL rules quietly lose the
+  //      comparison at the join, WHOLE-LINE rules validate a set the puzzle never
+  //      posed, and FOLDED rules (zipper, palindrome) pair up entirely the wrong
+  //      cells — that last one OVER-removes, which the contract forbids.
   //      A DRAWN CHAIN IS NOT ALWAYS ONE CLUE (v3.120/v3.121): if the constraint is
   //      bounded by markers (between-line circles, lockout diamonds), a setter may
   //      thread several onto one polyline AND the stored strokes may turn where the
@@ -12513,11 +12545,12 @@
   //      regex against the ones already in that list: a legend phrase matching two
   //      types claims NOTHING, so a collision silently disables the layer for both
   //      (v3.159: "same difference" also reads as whisper language → `not` guard).
-  //      Both "the puzzle won't say which line is which" guards are inherited for
-  //      free via classifyCueLines → lineTypeSelfDetermined (SELF_DEDUCTION_RE =
-  //      the type is unstated; LINE_MORPH_RE, v3.165 = the type is stated then
-  //      OVERRIDDEN on a solver deduction, `7kov2n4lrz`). If you ever classify
-  //      OUTSIDE classifyCueLines, call that helper yourself.
+  //      SELF_DEDUCTION_RE (the rules never say which line is which) is inherited
+  //      for free via classifyCueLines. Note what it is NOT: a licence to switch
+  //      validators off because a clue looks wrong. WE DO NOT DIAGNOSE CLUE
+  //      VALIDITY (v3.166) — a broken-as-drawn clue may fail on an empty grid and
+  //      that is fine, but reasoning BACKWARDS from the failure to "so we must
+  //      have the wrong rule here" is the solver's deduction, not ours.
   //   2b. MEASURE A NEW CUE AGAINST THE CATALOG BEFORE SHIPPING IT — a cue regex is
   //      the one part of a validator that can OVER-remove, and eyeballing phrasings
   //      does not find the collisions. Add the validator to tools/cue_recall.py
