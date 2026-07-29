@@ -16,7 +16,8 @@ UNREADABLE at 0).*
 **Validate Constraints (v3.53; cages added v3.56; little killers v3.57; dropdown menu + run-all
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
-modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153; same-difference lines
+v3.159):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -462,6 +463,7 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Little killer** | total outside `n×min … n×max` | **new**; cells may repeat, so this is the loose bound |
 | **Arrow / double arrow** | target range `tc×min…tc×max` disjoint from line range | **new**; a 10-cell shaft can't sum under 10, one circle can't exceed 9 |
 | **Region sum** | no S in every segment's `n-smallest … n-largest` range | **new**; segments are one region → distinct digits |
+| **Same difference** | no difference `d` fills the line over the FULL digit set (`sameDiffLineSupport` with `st.fullSet` in every cell) | v3.159; the test is the validator's own engine run mark-free — e.g. a 3-cell closed loop of mutually-conflicting cells has no `d` at all |
 
 **Every one of these tests is provably conservative — a satisfiable clue can never be flagged.** If a
 legal fill exists, its sum/length necessarily lies inside the loose bound the test checks (e.g. for
@@ -487,12 +489,19 @@ pencilmarks and real conflict matrices against a 60M-node reference:**
 | **Arrow / double arrow** (`computeSupported`, ~11248) | signed total = 0 | tc≥3, or tc=2 with ≥8 line cells | **safe** — same reason (signed suffix bound). Bail∩deduction = **∅**; **0 bails in 4000** trials. |
 | **Ten line** (`lineSupport`) | every complete fill, digits REPEAT | **11 open cells** | **was broken** → `tenLineTilingSupport` fallback (v3.155). |
 | **Region sum** (`enumSegment`) | every distinct-cell ordering | **7-cell segment** | **was broken** → `regionSumSegmentSupport`, subsets + matching (v3.156). |
+| **Same difference** (`sameDiffExactFills`, 200k) | every fill at one difference `d`; branches ≤2 per cell (`prev±d`) | not reached on any real line — only runs when the line has internal conflicts or is a loop, stops as soon as every arc-consistent value is witnessed | **safe by CONSTRUCTION** (v3.159) — a bail falls back to the arc-consistent domains, which are a sound over-approximation, so it keeps every elimination the chain relation alone proves. A cap whose bail still removes is a different animal from one that gives up on the clue. |
 
 The pattern: a cap is fine when the **pruning strength tracks the constraint strength** (both
 sum-target searches), and fatal when it doesn't (ten lines repeat digits, so fills are exponential
 regardless of the target; region-sum segments enumerated orderings when only the *subset* mattered).
 `betweenInteriorsFeasible`'s 20k budget is a third, safe shape: it seeks **one** solution, not all
-of them, and answers FEASIBLE on overrun (under-remove). Every other validator (kropki, cage, thermo,
+of them, and answers FEASIBLE on overrun (under-remove). `sameDiffExactFills` is a fourth: **its
+bail degrades to a weaker but sound answer instead of to nothing** — the arc-consistent domains it
+falls back on are already a correct over-approximation of the support, so a cap hit costs only the
+extra eliminations the conflict matrix would have added. When designing a new search, prefer that
+shape; better still, look for the one that needs no cap at all (a chain CSP is solved exactly by arc
+consistency, which is why same-difference searches only when conflicts or a loop break the chain).
+Every other validator (kropki, cage, thermo,
 whisper, Dutch, XV, between, renban, nabner, parity, zipper, entropic, modular) is pairwise, per-cell,
 bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial, no cap, nothing to
 audit.
@@ -1060,6 +1069,72 @@ PROJECT_SUMMARY.
 circle. All 7 computed folds match all 7 circles — including a 4-cell circle on a grid CORNER and
 2-cell circles on cell EDGES — and the merge is what makes the 7th match. Pinned in
 `validator_harness.mjs`.
+
+## Same-difference-line validator (v3.159)
+
+Every pair of **adjacent** digits along the line differs by the same amount **d**, and d is a
+per-line **unknown the solver has to deduce** ("this difference must be determined for each turquoise
+line"). So d is part of the enumeration, never an input — the same shape as region-sum's S and the
+arrow circle's total. `computeSameDiffRemovals`, cue-gated via `classifySameDiffLines` →
+`classifyCueLines(SAMEDIFF_CUE_RE, SAMEDIFF_CLAUSE_RE, null, 'samediff')` (no f-puzzles native key
+exists for this type). Turquoise is the convention but grey and yellow occur too, so colour is never
+trusted alone.
+
+**For a fixed d the line is a CHAIN CSP — and arc consistency decides a chain EXACTLY.** After the
+domains stop shrinking, every surviving value provably extends to a full fill: polynomial, no
+search, no cap, nothing to audit. Only two things break the chain shape:
+
+- **Conflicts** — two of the line's cells sharing a row/column/region/uniqueness cage must differ
+  (`makeMustDiffer`, a per-line matrix). The everyday case is a straight 3-run `r1c1-r1c2-r1c3`: the
+  fill `a, a+d, a` satisfies the chain but repeats a digit in the row, so the run cannot fold back.
+  That single rule is what takes 1 and 9 off the middle cell of any straight 3-run.
+- **A closed loop** — the wrap edge turns the chain into a cycle. (The duplicated endpoint is
+  dropped and the wrap edge IS enforced here, unlike parity: for this rule it is load-bearing, and
+  `sameDiffExactFills` checks it as the last step of a fill.)
+
+Those two go to `sameDiffExactFills`: cell 0 picks from its domain, every later cell is forced to
+`prev±d`, so the tree branches ≤2 ways, and it stops as soon as every arc-consistent value has been
+witnessed. It is capped at 200k nodes and **a cap hit falls back to the arc-consistent domains** —
+see the node-cap audit table for why that makes this cap a different animal from the two v3.155/6
+had to remove.
+
+`d = 0` (every cell equal) is admitted by the maths and killed by the first conflict, which every
+real drawn line has — orthogonally adjacent cells share a row or column. It is not special-cased
+away, so a hypothetical conflict-free line still gets the right answer.
+
+**Structural test:** the validator's own engine run over `st.fullSet` in every cell. No d fits the
+line mark-free → the clue as we read it is impossible → dropped, counted, reported (a 3-cell closed
+loop of mutually-conflicting cells is the clean example: three distinct digits cannot be pairwise
+equidistant). A bail answers "possible", never "impossible".
+
+**Cue, catalog-measured 2026-07-29** (tag `same_difference`, 36 tagged): recall **86.1%** (31/36),
+**3 FPs, all genuine same-difference puzzles the catalog left untagged** (`k4g3ubb8qe`,
+philip-newman's two "sequence lines" dailies) — i.e. 0 real over-fires. Clause blindness: 17
+multi-colour puzzles, **0 UNREADABLE**, 16 pin a colour, 1 NO-COLOUR (`lc3vr050ng`, whose line types
+are the solver's own deduction → correctly ambiguous). Phrasing families covered: the named form,
+the described form either way round, "arithmetic sequence/progression", "evenly spaced sequence",
+"increase/differ by the same amount", and "constant difference" with no adjacency word at all
+(`uwygvvt8nd`). Both spellings of "neighbouring" occur — `hva096ojxs` writes "neigbouring" — which
+is why the described forms key off "same difference" itself rather than the adjacency word.
+
+Four of the five misses are **correctly** not ours: the "same difference" is between two diagonals
+of a 2×2 dot (`F28G66PTLg`), the halves of a ± sign (`v5fyfcm6yj`), an orange dot pair
+(`H3MfbFJ83R`) or a "difference bomb" (`uojuxaw1qw`) — there is no line to claim. **The fifth is
+left open on purpose:** `jeu4qiw80c` ("this number indicates the difference between adjacent digits
+along that line") would need `difference between (adjacent|neighbouring) digits`, and that phrasing
+also catches `23xbq0xofa`'s "the difference between neighbouring digits is at least 2" — a
+whisper-like rule on the **diagonals**. Claiming that as a same-difference line would over-remove,
+the one failure mode the contract forbids. `SAMEDIFF_ANTI_RE` drops `r3xtlrd6qv` "Regional
+Differences", where "each sum of adjacent segments … has the same difference" is a rule about
+**segment sums**, not adjacent digits.
+
+**A clause collision can silently disable the LINE-TYPE LABEL layer for two validators at once.**
+`WHISPERISH_RE` is `whisper|\bdiffer(s|ence)?\b`, so a legend phrase "same difference (SD)" reads as
+whisper language too — and the layer's "a phrase matching two types claims nothing" rule would then
+kill the sticker for **both**. `LINE_LABEL_TYPES` entries may now carry a `not` regex, and the
+whisper entry excludes `SAMEDIFF_CLAUSE_RE`. Scoped to the label legend deliberately: widening
+`WHISPERISH_RE` is what keeps the trusted-green layer safe elsewhere. Check this collision whenever
+a new cue validator is added.
 
 ## Entropic-line validator
 

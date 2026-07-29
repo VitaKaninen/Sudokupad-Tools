@@ -71,6 +71,7 @@ const NAMES = [
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
   'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
+  'SAMEDIFF_CUE_RE', 'SAMEDIFF_ANTI_RE', 'SAMEDIFF_CLAUSE_RE',
   'BETWEEN_CUE_RE', 'BETWEEN_CLAUSE_RE', 'BETWEEN_LOCKOUT_RE',
   'DOUBLEARROW_NAME_RE', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE',
   'DOUBLEARROW_CLAUSE_RE', 'doubleArrowCueFires',
@@ -91,6 +92,8 @@ const NAMES = [
   'thermoLongestChain',
   // ten-line structural feasibility
   'tenLineSegSizes', 'tenLinePartitionable', 'tenLineTilingSupport', 'regionSumSegmentSupport',
+  // same-difference chain support
+  'sameDiffLineSupport', 'sameDiffExactFills',
   // region colouring
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
@@ -248,6 +251,37 @@ checkTrue('region-sum cue: "each 3x3 box" spans the size (bl168ah6g9)',
 // Zipper
 checkTrue('zipper cue: equal distance from the center',
   F.ZIPPER_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
+// Same difference (v3.159). Catalog-measured: 31/36 tagged puzzles fire, 0 real
+// over-fires. The named form is easy; the described ones have to stay off the
+// whisper family ("differ by at least 5") and off rules that say "same difference"
+// about something that is not a line's adjacent digits.
+checkTrue('same-diff cue: named lines (1j53hl97cx, dc0dbdewab)',
+  F.SAMEDIFF_CUE_RE.test('same difference lines (turquoise): each pair of adjacent digits on a turquoise line have the same difference'));
+checkTrue('same-diff cue: described, colour first (3mjyxrx5og, ln6peautd7)',
+  F.SAMEDIFF_CUE_RE.test('adjacent digits along a turquoise line always have the same difference. this difference must be determined for each turquoise line'));
+checkTrue('same-diff cue: the "neigbouring" typo is real and must still fire (hva096ojxs)',
+  F.SAMEDIFF_CUE_RE.test('on a grey line, any two neigbouring digits have the same difference'));
+checkTrue('same-diff cue: arithmetic sequence (12io305up4, philip-newman dailies)',
+  F.SAMEDIFF_CUE_RE.test('each gray line contains an arithmetic sequence of digits, in either increasing or decreasing order'));
+checkTrue('same-diff cue: "increase by the same amount" (f9h3FHGDBn)',
+  F.SAMEDIFF_CUE_RE.test('digits along a grey line must increase by the same amount, in the same direction'));
+checkTrue('same-diff cue: "evenly spaced sequence" (8wcx3ar7h0)',
+  F.SAMEDIFF_CUE_RE.test('the digits along each line form an evenly spaced sequence (such as 1 3 5 7 or 2 5 8)'));
+checkTrue('same-diff cue: "constant difference" with no adjacency word (uwygvvt8nd)',
+  F.SAMEDIFF_CUE_RE.test('lines contain digits in order with a constant difference (e.g. 1-2-3, 4-6-8, 7-4-1)'));
+// The near misses that must stay silent — each one would be an OVER-removal.
+checkFalse('same-diff cue: a German whisper is not a same difference',
+  F.SAMEDIFF_CUE_RE.test('adjacent digits on a green line have a difference of at least 5'));
+checkFalse('same-diff cue: "difference between neighbouring digits is at least 2" (23xbq0xofa)',
+  F.SAMEDIFF_CUE_RE.test('along every positive diagonal the difference between neighbouring digits is at least 2'));
+checkFalse('same-diff cue: "different difference" is the OPPOSITE rule (0ham0u0jtt peach)',
+  F.SAMEDIFF_CUE_RE.test('the difference between the values of adjacent cells on a peach line must be different for every pair of adjacent cells on that line'));
+checkFalse('same-diff cue: a 2x2 dot pairs two DIAGONALS, not a line (F28G66PTLg)',
+  F.SAMEDIFF_CUE_RE.test('a dot in the centre of a 2x2 square indicates that the two digits in its positive diagonal have the same difference as the two digits in its negative diagonal'));
+checkTrue('same-diff anti: "sum of adjacent segments … same difference" is not ours (r3xtlrd6qv)',
+  F.SAMEDIFF_ANTI_RE.test('box borders divide lines into segments. each sum of adjacent segments on one of these lines has the same difference'));
+checkFalse('same-diff clause: must not read a whisper clause and steal its colour',
+  F.SAMEDIFF_CLAUSE_RE.test('adjacent digits on a green line have a difference of at least 5'));
 // Between lines (v3.119: real catalog phrasings from the 53 non-native between_line puzzles)
 checkTrue('between cue: numerically between the digits in the circles (xm3e3npmmk)',
   F.BETWEEN_CUE_RE.test('digits along a line must be numerically between the digits in circles at each end'));
@@ -303,13 +337,16 @@ check('label defs: Dovetail legend → one phrase per token', dove, {
 });
 // Each phrase must resolve to exactly ONE validator's clause regex — that is what
 // lineLabelTypes() requires before a token may claim a line.
+// Mirrors LINE_LABEL_TYPES (which is multi-line, so it cannot be extracted): the
+// third slot is the entry's optional `not` guard.
 const claimOf = (phrase) => [
-  ['whisper', F.WHISPERISH_RE], ['dutch', F.DUTCH_CLAUSE_RE], ['renban', F.RENBAN_CLAUSE_RE],
+  ['whisper', F.WHISPERISH_RE, F.SAMEDIFF_CLAUSE_RE], ['dutch', F.DUTCH_CLAUSE_RE],
+  ['renban', F.RENBAN_CLAUSE_RE],
   ['nabner', F.NABNER_CLAUSE_RE], ['tenline', F.TEN_LINE_CLAUSE_RE],
   ['regionsum', F.REGIONSUM_CLAUSE_RE], ['parity', F.PARITY_CLAUSE_RE], ['zipper', F.ZIPPER_CLAUSE_RE],
   ['entropic', F.ENTROPIC_CLAUSE_RE], ['modular', F.MODULAR_CLAUSE_RE], ['between', F.BETWEEN_CLAUSE_RE],
-  ['doublearrow', F.DOUBLEARROW_CLAUSE_RE],
-].filter(([, re]) => re.test(phrase)).map(([k]) => k);
+  ['doublearrow', F.DOUBLEARROW_CLAUSE_RE], ['samediff', F.SAMEDIFF_CLAUSE_RE],
+].filter(([, re, not]) => re.test(phrase) && !(not && not.test(phrase))).map(([k]) => k);
 check('label types: Dovetail tokens each resolve to one validator',
   Object.fromEntries(Object.entries(dove).map(([tok, ph]) => [tok, claimOf(ph)])), {
     mod: ['modular'], par: ['parity'], gw: ['whisper'], da: ['doublearrow'],
@@ -318,6 +355,13 @@ check('label types: Dovetail tokens each resolve to one validator',
 // A parenthesised aside that is not a legend must not become a token.
 check('label defs: "(if given)" is not a token',
   F.labelDefPhrases('digits in killer cages sum to the number in the top left corner (if given)'), {});
+// v3.159: WHISPERISH_RE is `whisper|differ(s|ence)`, so "same difference (sd)" read
+// as whisper language too — two claims, and the "exactly one type" rule then
+// silenced the label layer for BOTH. The whisper entry carries a `not` guard now.
+check('label types: "same difference (sd)" claims same difference only',
+  claimOf('same difference lines'), ['samediff']);
+check('label types: the whisper legend phrase is untouched by that guard',
+  claimOf('german whispers'), ['whisper']);
 
 checkTrue('double arrow clause: matches its own clause (zetamath/angel)',
   F.DOUBLEARROW_CLAUSE_RE.test('double arrows: the sum of the digits along a red line connecting two circles is equal to the sum of the digits in the circles'));
@@ -564,6 +608,65 @@ checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable
   }
   checkTrue('region seg: an empty cell flags empty, not a bail',
             F.regionSumSegmentSupport([S(1), new Set()], D9).empty);
+}
+// ── same-difference chain support (v3.159) ──────────────────────────────────
+// The difference is a per-line UNKNOWN, so every d is enumerated. For a fixed d
+// the line is a chain CSP and arc consistency is exact; conflicts (same row /
+// column / region / cage) and a loop's wrap edge need the capped exact search.
+{
+  const D9 = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const S = (...ds) => new Set(ds);
+  const full = n => Array.from({ length: n }, () => new Set(D9));
+  const noDiff = (n) => Array.from({ length: n }, () => new Array(n).fill(false));
+  const allDiff = (n) => Array.from({ length: n },
+    (_, i) => Array.from({ length: n }, (__, j) => i !== j));
+  const sup = (sets, diff, loop) =>
+    F.sameDiffLineSupport(sets.length, sets, diff || noDiff(sets.length), !!loop, D9)
+      .support.map(s => [...s].sort((a, b) => a - b).join(''));
+  const diffs = (sets, diff, loop) =>
+    [...F.sameDiffLineSupport(sets.length, sets, diff || noDiff(sets.length), !!loop, D9).diffs]
+      .sort((a, b) => a - b);
+
+  // Free 3-cell line, no conflicts: d = 0 alone supports every digit everywhere.
+  check('same diff: 3 free cells constrain nothing', sup(full(3)),
+        ['123456789', '123456789', '123456789']);
+  check('same diff: every difference is still open there', diffs(full(3)),
+        [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  // THE EVERYDAY DEDUCTION: three cells of one row, so all three must differ. The
+  // fill has to be a genuine arithmetic run (a turn would repeat the digit two
+  // back), which locks the middle out of 1 and 9 — the ends stay open.
+  check('same diff: a straight 3-run in one row loses 1 and 9 in the middle',
+        sup(full(3), allDiff(3)), ['123456789', '2345678', '123456789']);
+  // Same three cells with NO conflict (a diagonal hop across three regions): the
+  // fill may fold back, so the middle keeps 1 and 9. This contrast is the whole
+  // reason the conflict matrix is built per line.
+  check('same diff: without conflicts the same 3 cells keep everything',
+        sup(full(3), noDiff(3)), ['123456789', '123456789', '123456789']);
+  // Four in a row: only d = 1 and d = 2 fit four distinct terms in 1-9.
+  check('same diff: a straight 4-run in one row', sup(full(4), allDiff(4)),
+        ['123456789', '2345678', '2345678', '123456789']);
+  check('same diff: only differences 1 and 2 survive four in a row',
+        diffs(full(4), allDiff(4)), [1, 2]);
+  // A solved cell propagates both ways along the chain.
+  check('same diff: 3 _ then a free cell, ends fixed at 3 and 7',
+        sup([S(3), new Set(D9), S(7)], allDiff(3))[1], '5');
+  // d = 0 is legal maths and is killed by the first conflict, not special-cased.
+  check('same diff: two free conflicting cells cannot be equal',
+        diffs(full(2), allDiff(2)), [1, 2, 3, 4, 5, 6, 7, 8]);
+  check('same diff: two free cells with no conflict may be equal',
+        diffs(full(2), noDiff(2)), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
+  // A 3-cell closed loop of mutually-conflicting cells is IMPOSSIBLE for every d
+  // (three distinct digits cannot be pairwise equidistant) — no marks involved, so
+  // this is the structural test that reports "we mis-read the clue".
+  check('same diff: a 3-cell conflicting loop is structurally impossible',
+        diffs(full(3), allDiff(3), true), []);
+  // A 4-cell loop is fine: 1,2,3,2 walks back round at d = 1.
+  checkTrue('same diff: a 4-cell loop is satisfiable',
+            diffs(full(4), noDiff(4), true).length > 0);
+  // Contradictory marks (not a structural fault): no d fits, every candidate goes,
+  // the cells empty, and the run reports the red "no valid combination".
+  check('same diff: {1} then {1} conflicting has no support at all',
+        sup([S(1), S(1)], allDiff(2)), ['', '']);
 }
 // ── thermo arm length (v3.157) ──────────────────────────────────────────────
 // A STRICT thermometer rises by >=1 every cell, so an arm longer than the digit

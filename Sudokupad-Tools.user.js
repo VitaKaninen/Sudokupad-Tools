@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.158.0
+// @version      3.159.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.158.0';
+  var SCRIPT_VERSION = '3.159.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8767,6 +8767,51 @@
   var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
   function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE, 'zipper', 'zipper'); }
 
+  // Same-difference lines (v3.159): every pair of ADJACENT digits along the line
+  // differs by the same amount — and that amount is NOT given, it is per-line and
+  // must be deduced ("this difference must be determined for each turquoise line").
+  // So the difference is part of the enumeration, exactly like region-sum's S and
+  // the arrow circle's total; see computeSameDiffRemovals.
+  //
+  // No f-puzzles native key exists for it (nativeType null) — it is always a
+  // cosmetic line + a rules cue. Turquoise is the strong convention (16 of the
+  // catalog's 36 tagged puzzles name it) but grey and yellow occur too, so colour
+  // alone is never trusted: cue-gated like renban/nabner.
+  //
+  // CATALOG-MEASURED over the 6,260 puzzles (2026-07-29, tag `same_difference`,
+  // 36 tagged): recall 86.1% (31/36) with 3 "false positives" — all three are
+  // genuine same-difference puzzles the catalog simply left untagged
+  // (`k4g3ubb8qe`, philip-newman's two "sequence lines" dailies), i.e. 0 real
+  // over-fires. Clause blindness: 17 multi-colour puzzles, 0 UNREADABLE, 16 pin a
+  // colour, 1 NO-COLOUR (`lc3vr050ng`, whose line types are the solver's own
+  // deduction → correctly ambiguous).
+  //   • The 5 misses are all correctly-not-ours: the "same difference" is between
+  //     two DIAGONALS of a 2x2 dot (`F28G66PTLg`), the two halves of a +/- sign
+  //     (`v5fyfcm6yj`), an orange dot pair (`H3MfbFJ83R`) or a "difference bomb"
+  //     (`uojuxaw1qw`) — no line to claim. Only `jeu4qiw80c` ("this number
+  //     indicates the difference between adjacent digits along that line") is a
+  //     real gap, and it is left open ON PURPOSE: the phrasing that catches it,
+  //     `difference between (adjacent|neighbouring) digits`, also catches
+  //     `23xbq0xofa`'s "the difference between neighbouring digits is at least 2",
+  //     a whisper-like rule on the DIAGONALS. Claiming that as a same-difference
+  //     line would OVER-remove — the one failure mode the contract forbids.
+  //   • SAMEDIFF_ANTI_RE drops `r3xtlrd6qv` "Regional Differences": "each sum of
+  //     adjacent segments on one of these lines has the same difference" is a rule
+  //     about SEGMENT SUMS, not adjacent digits — same words, different clue.
+  // Both spellings of "neighbouring" appear in the wild (`hva096ojxs` writes
+  // "neigbouring"), which is why the described forms key off "same difference"
+  // itself rather than the adjacency word.
+  var SAMEDIFF_CUE_RE = /same[\s-]?difference[\s-]?(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.;:\n]{0,80}(?:same|equal|identical|constant)\s+difference|(?:same|equal|identical|constant)\s+difference[^.;:\n]{0,80}(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)[^.;:\n]{0,80}(?:arithmetic\s+(?:sequence|progression)|evenly[\s-]spaced\s+(?:sequence|digits|values|numbers)|(?:differ|increas|decreas|chang|step)\w*\s+by\s+the\s+(?:same|equal|constant)\s+(?:amount|value|number|difference))|(?:arithmetic\s+(?:sequence|progression)|evenly[\s-]spaced\s+(?:sequence|digits|values|numbers)|(?:differ|increas|decreas|chang|step)\w*\s+by\s+the\s+(?:same|equal|constant)\s+(?:amount|value|number|difference))[^.;:\n]{0,80}(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)/;
+  var SAMEDIFF_ANTI_RE = /(?:sums?|totals?)\s+of\s+(?:\w+\s+){0,2}segments?/;
+  // Named-colour clause trigger: this rule's own vocabulary only. Deliberately
+  // does NOT include a bare "difference" — that is the whisper family's word
+  // ("differ by at least 5") and would hand a whisper's colour to this validator.
+  var SAMEDIFF_CLAUSE_RE = /same[\s-]?difference|(?:same|equal|identical|constant)\s+difference|arithmetic\s+(?:sequence|progression)|evenly[\s-]spaced|by\s+the\s+(?:same|equal|constant)\s+(?:amount|value|number|difference)/;
+  function classifySameDiffLines() {
+    if (SAMEDIFF_ANTI_RE.test(getPuzzleRulesBlob())) return { mode: 'none', lines: [], allLines: [] };
+    return classifyCueLines(SAMEDIFF_CUE_RE, SAMEDIFF_CLAUSE_RE, null, 'samediff');
+  }
+
   // Between lines: every non-endpoint cell holds a digit STRICTLY between the two
   // endpoint ("bulb") circle values. In f-puzzles a between line is a first-class
   // `betweenline` constraint (mapped to 'between' in FPUZ_LINE_CONSTRAINTS), so a
@@ -9569,8 +9614,16 @@
   // Which token maps to which validator: the clause regex each one already owns.
   // Declared here, after the last of them (DUTCH_CLAUSE_RE), so every entry is
   // assigned by the time this runs.
+  // An entry may carry a `not` regex — a phrase it must NOT also match. Only one
+  // needs it: WHISPERISH_RE is `whisper|\bdiffer(s|ence)?\b`, so the legend phrase
+  // "same difference (SD)" reads as whisper language too, and the "matches two
+  // types → claims nothing" rule would silently disable the layer for BOTH. The
+  // whisper family's word is "differ BY at least 5"; "same difference" is another
+  // rule's name, so excluding it here is a narrowing, not a guess. Scoped to the
+  // label legend on purpose — WHISPERISH_RE itself still guards green for the
+  // trusted-colour layer, where widening is what keeps whispers safe.
   var LINE_LABEL_TYPES = [
-    { key: 'whisper',     re: WHISPERISH_RE },
+    { key: 'whisper',     re: WHISPERISH_RE, not: SAMEDIFF_CLAUSE_RE },
     { key: 'dutch',       re: DUTCH_CLAUSE_RE },
     { key: 'renban',      re: RENBAN_CLAUSE_RE },
     { key: 'nabner',      re: NABNER_CLAUSE_RE },
@@ -9581,7 +9634,8 @@
     { key: 'entropic',    re: ENTROPIC_CLAUSE_RE },
     { key: 'modular',     re: MODULAR_CLAUSE_RE },
     { key: 'between',     re: BETWEEN_CLAUSE_RE },
-    { key: 'doublearrow', re: DOUBLEARROW_CLAUSE_RE }
+    { key: 'doublearrow', re: DOUBLEARROW_CLAUSE_RE },
+    { key: 'samediff',    re: SAMEDIFF_CLAUSE_RE }
   ];
   // Every "<phrase> (TOK)" definition in the rules, as { tok: phrase }. The phrase
   // class excludes , . ; ( ) so it can never run backwards past the previous list
@@ -9599,7 +9653,9 @@
   function lineLabelTypes() {
     var phrases = labelDefPhrases(getPuzzleRulesBlob()), out = {};
     Object.keys(phrases).forEach(function (tok) {
-      var hits = LINE_LABEL_TYPES.filter(function (t) { return t.re.test(phrases[tok]); });
+      var hits = LINE_LABEL_TYPES.filter(function (t) {
+        return t.re.test(phrases[tok]) && !(t.not && t.not.test(phrases[tok]));
+      });
       if (hits.length === 1) out[tok] = hits[0].key;
     });
     return out;
@@ -10414,6 +10470,215 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
     return { removals: removals, parityCount: lineData.length, emptiedCells: emptied };
+  }
+
+  // ── Same-difference-line validator (v3.159) ───────────────────────────────
+  // Every ADJACENT pair along the line differs by the same amount d, and d is a
+  // per-line UNKNOWN the solver has to deduce. So d is part of the enumeration,
+  // never an input — the same shape as region-sum's S and the arrow circle's
+  // total. A candidate survives iff SOME d admits a complete legal fill of the
+  // whole line with that digit in that cell (the elimination contract).
+  //
+  // Why this needs no exhaustive search in the common case: FOR A FIXED d THE
+  // LINE IS A CHAIN CSP (cell i constrains only cell i±1), and arc consistency
+  // decides a chain EXACTLY — after the domains stop shrinking, every surviving
+  // value provably extends to a full fill. Polynomial, no cap, nothing to audit.
+  //
+  // Two things break the chain shape, and only those need a real search:
+  //   • CONFLICTS — two cells of the line sharing a row/column/region/uniqueness
+  //     cage must differ (makeMustDiffer). A straight 3-run r1c1-r1c2-r1c3 is the
+  //     everyday case: the fill a, a+d, a is legal on the chain but repeats a
+  //     digit in the row, so d must not fold back.
+  //   • A CLOSED LOOP — the wrap edge turns the chain into a cycle.
+  // The search branches at most 2 ways per cell (v±d), so it is cheap in
+  // practice, and it stops early the moment every arc-consistent value has been
+  // witnessed. It is still capped — and A CAP HIT HERE IS NOT A SILENT NO-OP
+  // (the v3.155/v3.156 audit's failure mode): it falls back to the ARC-CONSISTENT
+  // domains, which are a sound over-approximation, so a bail keeps every
+  // elimination the chain relation alone proves and only loses what the conflicts
+  // would have added. Under-remove, never over-remove.
+  //
+  // d = 0 (every cell equal) is admitted by the maths and killed by the first
+  // conflict, which every real drawn line has — orthogonally adjacent cells share
+  // a row or column. It is not special-cased away, so a hypothetical line with no
+  // conflicts at all still gets the right answer.
+  //
+  // Pure + top-level so the harness can test it.
+  //   n     — cells on the line (a loop's duplicated endpoint already dropped)
+  //   sets  — [Set<digit>] each cell's current candidates, in line order
+  //   diff  — n×n booleans, diff[i][j] = these two cells must DIFFER
+  //   loop  — closed line: cell n−1 is adjacent to cell 0 as well
+  // → { support:[Set…] , diffs:Set<d> (which differences are still possible), bailed }
+  function sameDiffLineSupport(n, sets, diff, loop, digitList) {
+    var CAP = 200000;
+    var support = [], i, j, k;
+    for (i = 0; i < n; i++) support.push(new Set());
+    var diffs = new Set(), bailed = false;
+    if (!n || !digitList.length) return { support: support, diffs: diffs, bailed: false };
+    var span = digitList[digitList.length - 1] - digitList[0];
+    var conflicted = false;
+    for (i = 0; i < n && !conflicted; i++)
+      for (j = i + 1; j < n; j++) if (diff[i][j]) { conflicted = true; break; }
+    var edges = [];
+    for (i = 0; i + 1 < n; i++) edges.push([i, i + 1]);
+    if (loop && n > 2) edges.push([n - 1, 0]);
+    if (!edges.length) {                                  // 1 cell: nothing is constrained
+      sets[0].forEach(function (v) { support[0].add(v); });
+      for (i = 0; i <= span; i++) diffs.add(i);
+      return { support: support, diffs: diffs, bailed: false };
+    }
+    // Drop every value of `to` with no partner in `from` at distance d.
+    function prune(from, to, d) {
+      var drop = [];
+      to.forEach(function (v) { if (!from.has(v - d) && !from.has(v + d)) drop.push(v); });
+      drop.forEach(function (v) { to.delete(v); });
+      return drop.length > 0;
+    }
+    for (var d = 0; d <= span; d++) {
+      var dom = [], dead = false;
+      for (k = 0; k < n; k++) dom.push(new Set(sets[k]));
+      var changed = true, guard = 0;
+      while (changed && guard++ < 2 * n + 4) {
+        changed = false;
+        for (var e = 0; e < edges.length; e++) {
+          if (prune(dom[edges[e][0]], dom[edges[e][1]], d)) changed = true;
+          if (prune(dom[edges[e][1]], dom[edges[e][0]], d)) changed = true;
+        }
+      }
+      for (k = 0; k < n; k++) if (dom[k].size === 0) dead = true;
+      if (dead) continue;                                 // this difference is impossible
+      if (!conflicted && !loop) {                         // a plain chain — AC is exact
+        diffs.add(d);
+        for (k = 0; k < n; k++) dom[k].forEach(function (v) { support[k].add(v); });
+        continue;
+      }
+      var ex = sameDiffExactFills(n, dom, diff, loop, d, CAP);
+      if (ex.bailed) {                                    // cap hit → keep the sound superset
+        bailed = true;
+        diffs.add(d);
+        for (k = 0; k < n; k++) dom[k].forEach(function (v) { support[k].add(v); });
+        continue;
+      }
+      if (!ex.any) continue;                              // no conflict-free fill at this d
+      diffs.add(d);
+      for (k = 0; k < n; k++) ex.sup[k].forEach(function (v) { support[k].add(v); });
+    }
+    return { support: support, diffs: diffs, bailed: bailed };
+  }
+  // Exact per-cell support for ONE difference d, honouring the conflict matrix and
+  // (for a loop) the wrap edge. Cell 0 picks from its domain; every later cell is
+  // forced to prev±d, so the tree branches ≤2 ways. Stops as soon as every
+  // arc-consistent value has been witnessed — the usual exit, since most fills are
+  // redundant. Pure + top-level for the harness.
+  function sameDiffExactFills(n, dom, diff, loop, d, cap) {
+    var sup = [], i;
+    for (i = 0; i < n; i++) sup.push(new Set());
+    var vals = new Array(n), nodes = 0, bailed = false, any = false, done = false;
+    var first = Array.from(dom[0]);
+    function record() {
+      any = true;
+      var full = true;
+      for (var k = 0; k < n; k++) {
+        sup[k].add(vals[k]);
+        if (sup[k].size < dom[k].size) full = false;
+      }
+      if (full) done = true;
+    }
+    function placeable(idx, v) {
+      if (!dom[idx].has(v)) return false;
+      for (var p = 0; p < idx; p++) if (vals[p] === v && diff[p][idx]) return false;
+      return true;
+    }
+    function walk(idx) {
+      if (bailed || done) return;
+      if (nodes++ > cap) { bailed = true; return; }
+      if (idx === n) {
+        if (loop && n > 2 && Math.abs(vals[n - 1] - vals[0]) !== d) return;
+        record();
+        return;
+      }
+      var opts = idx === 0 ? first : (d === 0 ? [vals[idx - 1]] : [vals[idx - 1] - d, vals[idx - 1] + d]);
+      for (var oi = 0; oi < opts.length; oi++) {
+        if (!placeable(idx, opts[oi])) continue;
+        vals[idx] = opts[oi];
+        walk(idx + 1);
+        if (bailed || done) return;
+      }
+    }
+    walk(0);
+    return { sup: sup, any: any, bailed: bailed };
+  }
+  function computeSameDiffRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifySameDiffLines();
+    if (cls.mode === 'none') return { noSameDiff: true };
+    var res = resolveCueValidatorLines(cls, unitFilter);
+    if (res.needSelection) return { noSameDiff: true, needSelection: true };
+    if (res.lines.length === 0) return { noSameDiff: true };
+    var lines = res.lines, masked = res.masked, selection = res.selection;
+    var isFogged = getFogTester();
+    var mustDiffer = makeMustDiffer();
+
+    var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return st.fullSet;             // fogged reads as unconstrained
+      if (st.values[key] != null) return new Set([st.values[key]]);
+      if (work[key]) return work[key];
+      return st.fullSet;                                            // empty cell → never modified
+    }
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    // Per line: drop a loop's duplicated endpoint, build its conflict matrix, and
+    // run the MARK-INDEPENDENT feasibility test — could ANY difference fill this
+    // line over the full digit set? A "no" cannot be the puzzle's fault (its clues
+    // are peer-reviewed), so it means we claimed the wrong line type: drop it,
+    // count it, report it. A bail answers "possible", never "impossible".
+    var lineData = [], invalid = 0;
+    lines.forEach(function (keys) {
+      var loop = keys.length > 2 && keys[0] === keys[keys.length - 1];
+      var cells = loop ? keys.slice(0, -1) : keys;
+      var n = cells.length, i, j;
+      if (n < 2) return;                                            // 1 cell constrains nothing
+      var dm = [];
+      for (i = 0; i < n; i++) { dm.push([]); for (j = 0; j < n; j++) dm[i].push(false); }
+      for (i = 0; i < n; i++)
+        for (j = i + 1; j < n; j++)
+          if (mustDiffer(cells[i], cells[j])) { dm[i][j] = true; dm[j][i] = true; }
+      var full = [];
+      for (i = 0; i < n; i++) full.push(st.fullSet);
+      var s = sameDiffLineSupport(n, full, dm, loop, digitList);
+      if (!s.bailed && s.diffs.size === 0) { invalid++; return; }
+      lineData.push({ cells: cells, dm: dm, loop: loop });
+    });
+    if (lineData.length === 0) return { noSameDiff: true, invalid: invalid };
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lineData.forEach(function (ld) {
+        var r = sameDiffLineSupport(ld.cells.length, ld.cells.map(cellSet), ld.dm, ld.loop, digitList);
+        ld.cells.forEach(function (C, i) {
+          if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
+          Array.from(work[C]).forEach(function (d) {                // snapshot: set mutates in loop
+            if (r.support[i].has(d)) return;
+            work[C].delete(d);
+            var k = C + '/' + d;
+            if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: C, digit: String(d) }); }
+            changed = true;
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+    return { removals: removals, sameDiffCount: lineData.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Zipper-line validator ─────────────────────────────────────────────────
@@ -11872,6 +12137,21 @@
   //      picture crosses. Derive clues by WALKING the drawn-step graph between markers
   //      (betweenSegments / lineStepGraph / walkBetweenSegment + getCellCenteredCircles)
   //      rather than trusting stroke order, and apply unitFilter to the SEGMENTS.
+  //      A CLOSED LOOP'S FIRST CELL IS REPEATED as its last (v3.144, the renban
+  //      lesson): drop the duplicate, then decide DELIBERATELY whether your rule has
+  //      a wrap edge (whisper and same-difference enforce it; parity does not — an
+  //      under-constrained loop is safe, a double-counted cell is not).
+  //   1b. IF YOUR SEARCH HAS A NODE CAP, AUDIT IT (v3.155/v3.156) — "cap hit → bail"
+  //      is safe but SILENT: nothing removed, nothing said. Measure where the cap
+  //      actually dies against the clue sizes real puzzles draw, and check the bail
+  //      zone against the zone where the clue can eliminate anything. A cap is only
+  //      acceptable when the pruning strength TRACKS the constraint strength (both
+  //      sum-target searches) or when a bail falls back to a sound over-approximation
+  //      that still removes (sameDiffLineSupport's arc-consistent domains). If it
+  //      neither prunes nor degrades gracefully, the cap is a bug — replace the
+  //      search (tenLineTilingSupport, regionSumSegmentSupport). Record the verdict
+  //      in the audit table in docs/VALIDATORS.md. Best of all: find the shape that
+  //      needs NO cap (a chain CSP is exactly solved by arc consistency).
   //   2. Detection, one of two shapes (the menu lists only detected validators;
   //      re-evaluated per menu open so late model loads / SPA navigation stay correct):
   //        • LINE validators → a `classify` field = your classify*Lines() fn.
@@ -11884,7 +12164,22 @@
   //      A cue-gated line validator MUST also pass its own `labelKey` to
   //      classifyCueLines and register that key in LINE_LABEL_TYPES — that is how it
   //      inherits the LINE-TYPE LABEL layer (a puzzle that states "…renban (RB)…"
-  //      and stickers its lines); see the LINE-TYPE LABELS block.
+  //      and stickers its lines); see the LINE-TYPE LABELS block. Check your CLAUSE
+  //      regex against the ones already in that list: a legend phrase matching two
+  //      types claims NOTHING, so a collision silently disables the layer for both
+  //      (v3.159: "same difference" also reads as whisper language → `not` guard).
+  //   2b. MEASURE A NEW CUE AGAINST THE CATALOG BEFORE SHIPPING IT — a cue regex is
+  //      the one part of a validator that can OVER-remove, and eyeballing phrasings
+  //      does not find the collisions. Add the validator to tools/cue_recall.py
+  //      (VALIDATORS + CLAUSES) and run it: recall vs the catalog tag, every FP
+  //      triaged (a real over-fire is a bug; an untagged-but-genuine puzzle is
+  //      noise), and UNREADABLE at 0 in the clause-blindness table — an unreadable
+  //      clause means the validator can never pin its lines on a multi-colour
+  //      puzzle. Record the measured numbers in the cue's comment, with the puzzle
+  //      ids, so the next change to it can tell a regression from a known gap.
+  //      A phrasing deliberately left UNMATCHED because catching it would over-fire
+  //      is worth a line of its own — otherwise it gets "fixed" later by someone
+  //      who only sees the miss.
   //   3. The registry entry below (name/unitNoun/menuLabel/compute/countKey/noneKey
   //      + classify OR detect per above). `menuLabel` may be a FUNCTION when the
   //      wording depends on what the puzzle holds — read it via validatorLabel(def),
@@ -11895,14 +12190,32 @@
   //        • NON-line validators → add a `case` to validatorClueObjects() that reuses
   //          your detection fn (the FOOLPROOF PRINCIPLE: preview from the SAME fn
   //          compute() reads, so it can never drift from what runs).
+  //      validatorClueObjects is ALSO what the "missing candidates" warning counts
+  //      over (v3.151, validatorClueCellGroups) — skip this and the run silently
+  //      stops warning that a blank cell weakened the check.
+  //   4b. HARNESS CASES for whatever pure logic you added (tools/validator_harness.mjs
+  //      — add the fn/regex names to NAMES; it EXTRACTS them from this file, so a
+  //      case can't test a stale copy). Cover the cue's near-misses and the
+  //      deduction the validator exists to make, and anchor each expectation to the
+  //      puzzle id or the documented rule it comes from. `node tools/validator_harness.mjs`
+  //      green is the gate for committing any validator change.
   //   5. PROJECT_SUMMARY / docs/VALIDATORS.md — add the new validator to the
-  //      "Validate Constraints" entry with its version.
+  //      "Validate Constraints" entry with its version, plus its own section, plus a
+  //      row in the structural-test and node-cap-audit tables (even if the row says
+  //      "no bound exists" / "no cap" — a missing row reads as "not yet checked").
   //
   //  ADDING A CROSS-CUTTING FEATURE to validators (like the v3.91 eyeball): apply it
   //  to EVERY existing validator retroactively AND extend THIS checklist so the next
   //  validator inherits it without being asked. New shared behaviour lives in the
   //  generic machinery (makeValidatorEye, applyOneValidator, the shared engines) so a
   //  registry entry gets it for free — that's the design goal; keep it that way.
+  //  When the feature CAN'T be generic — a per-validator judgement like "what is this
+  //  rule's structural impossibility?" (v3.157) or "does this search's cap ever bail
+  //  where it matters?" (v3.156) — the retroactive sweep must leave a PER-VALIDATOR
+  //  ROW in the matching docs/VALIDATORS.md table, including the ones that answer
+  //  "none, and here is why". A table with a validator missing from it is
+  //  indistinguishable from a sweep that quietly skipped it, and that is exactly the
+  //  gap a later reader cannot tell from a deliberate exemption.
   // ════════════════════════════════════════════════════════════════════════════
   function constraintValidators() {
     return [
@@ -11949,6 +12262,8 @@
         classify: classifyTenLines, compute: computeTenLineRemovals, countKey: 'tenLineCount', noneKey: 'noTenLine' },
       { name: 'region sum', unitNoun: 'region-sum line', menuLabel: 'Region sum lines',
         classify: classifyRegionSumLines, compute: computeRegionSumRemovals, countKey: 'regionSumCount', noneKey: 'noRegionSum' },
+      { name: 'same difference', unitNoun: 'same-difference line', menuLabel: 'Same difference lines',
+        classify: classifySameDiffLines, compute: computeSameDiffRemovals, countKey: 'sameDiffCount', noneKey: 'noSameDiff' },
       { name: 'parity', unitNoun: 'parity line', menuLabel: 'Parity lines',
         classify: classifyParityLines, compute: computeParityRemovals, countKey: 'parityCount', noneKey: 'noParity' },
       { name: 'zipper', unitNoun: 'zipper line', menuLabel: 'Zipper lines',

@@ -470,7 +470,7 @@ way so it stays low-maintenance.
 - **Validate Constraints — the validator subsystem (v3.53+; full documentation in
   [VALIDATORS.md](VALIDATORS.md)):** floating button + popup menu of per-constraint validators
   (Kropki, cages, little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
-  between lines, renban, nabner, ten lines, region-sum, parity, zipper, entropic, modular) that remove — never add — centre candidates with no
+  between lines, renban, nabner, ten lines, region-sum, parity, same difference, zipper, entropic, modular) that remove — never add — centre candidates with no
   complete support. Entry points: `buildValidateButton` / `openValidateMenu` /
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
@@ -503,7 +503,11 @@ way so it stays low-maintenance.
   (`combineFogFilter`) still governs runs, but the 👁 preview is disabled on a fog puzzle
   (`puzzleHasFog()`, tooltip explains why) because it draws clues that are still hidden; the same
   predicate disables Easy Shade outright (`effRegionColorFill` / `effShadedRegionColor`). Full detail
-  in [VALIDATORS.md](VALIDATORS.md). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
+  in [VALIDATORS.md](VALIDATORS.md). **Same-difference lines (v3.159): `classifySameDiffLines` /
+  `computeSameDiffRemovals` / `sameDiffLineSupport` / `sameDiffExactFills`** — adjacent digits differ
+  by one per-line UNKNOWN d, so every d is enumerated; for a fixed d the line is a chain CSP that arc
+  consistency solves exactly, and the capped search runs only where conflicts or a loop break the
+  chain (a bail degrades to the arc-consistent domains, never to nothing). **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
   cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
   rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
   circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than
