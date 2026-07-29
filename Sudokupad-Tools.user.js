@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.168.0
+// @version      3.169.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.168.0';
+  var SCRIPT_VERSION = '3.169.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -11708,17 +11708,46 @@
     // circle that happens to sit on a dumped line's end is not a bulb; see
     // thermoBulbShaftCompatible.
     var bulbFills = getThermoBulbCellFills();
+    function bulbAt(k, color) {
+      var fills = bulbFills[k];
+      return !!fills && fills.some(function (f) { return thermoBulbShaftCompatible(f, color); });
+    }
+    function endBulbs(c) {
+      return (bulbAt(c.keys[0], c.color) ? 1 : 0) + (bulbAt(c.keys[c.keys.length - 1], c.color) ? 1 : 0);
+    }
+    // THESE WAYPOINTS CAN BE TRANSPOSED (v3.169) — the v3.83 trap, and the LAST
+    // reader still exposed to it. `FLqFBMpTJB` stores its top-left thermo as
+    // (1.5,2.5)(2.5,2.5)(1.5,1.5)(2.5,1.5) and RENDERS it at x=160,96 → 160,160 →
+    // 96,96 → 96,160, an exact [x,y]→[y,x] swap, so a (col,row) read of the model
+    // lands on the transpose of the drawn cells. The bulbs are read from the DOM,
+    // so they are in RENDER space and can arbitrate: count the chains with a
+    // colour-compatible bulb at exactly one end, both ways round, and take the
+    // better reading. Strictly-better only, so a tie leaves the model reading
+    // alone and nothing changes on a puzzle that was already right.
+    // THIS IS THE WEAKER OF THE TWO GUARDS and only decides the FALLBACK — see
+    // getThermoDetection, where the DOM reader (whose geometry is the render by
+    // construction) now goes first. It is deliberately weak evidence: on this
+    // puzzle the thermo set is SYMMETRIC about the main diagonal, so the wrong
+    // reading still scored 4 of 5 and produced four real-looking thermos with
+    // their middles in the wrong order — a transposition can hide almost
+    // completely behind a symmetric picture.
+    var flipped = chains.map(function (c) {
+      return {
+        color: c.color,
+        keys: c.keys.map(function (k) { var p = k.split(','); return p[1] + ',' + p[0]; })
+      };
+    });
+    function scoreChains(list) {
+      var n = 0;
+      list.forEach(function (c) { if (endBulbs(c) === 1) n++; });
+      return n;
+    }
+    if (scoreChains(flipped) > scoreChains(chains)) chains = flipped;
+
     var kept = [];
     chains.forEach(function (c) {
-      var chain = c.keys;
-      function bulbAt(k) {
-        var fills = bulbFills[k];
-        return !!fills && fills.some(function (f) { return thermoBulbShaftCompatible(f, c.color); });
-      }
-      var atStart = bulbAt(chain[0]) ? 1 : 0;
-      var atEnd = bulbAt(chain[chain.length - 1]) ? 1 : 0;
-      if (atStart + atEnd !== 1) return;                 // no bulb / both ends → not a verifiable thermo
-      kept.push(atStart ? chain : chain.slice().reverse());
+      if (endBulbs(c) !== 1) return;                     // no bulb / both ends → not a verifiable thermo
+      kept.push(bulbAt(c.keys[0], c.color) ? c.keys : c.keys.slice().reverse());
     });
     return kept;
   }
@@ -11894,12 +11923,30 @@
     // chain because it demands a real bulb circle at exactly one shaft end — it
     // cannot invent a thermo out of a whisper line — so it remains the right
     // fallback for an f-puzzles puzzle whose thermo is drawn cosmetically.
+    // THE DOM OUTRANKS cp.thermos ON THE NON-NATIVE BRANCH (v3.169; it was the
+    // other way round through v3.168). `cp.thermos` gives an ORDER but not a
+    // trustworthy coordinate space — its wayPoints can be stored transposed vs
+    // what is rendered (see getThermoChainsFromModel), and a thermometer's whole
+    // constraint is the ORDER of the cells it runs through, so a transposed read
+    // is not "slightly off": it validates a path the puzzle never draws.
+    // `FLqFBMpTJB` is the live case — its five grey thermos came back as four,
+    // each threaded through the right cells in the WRONG order (R2C3-R2C2-R3C3-R3C2
+    // for a thermo drawn R2C3-R3C3-R2C2-R3C2), because that puzzle's thermo set is
+    // symmetric about the main diagonal and the transpose therefore still lands on
+    // real cells with a real bulb.
+    // getThermoChainsFromDOM has no such failure mode: it reads the drawn `<path d>`
+    // itself, so its geometry IS the render. It stays as narrow as ever (a
+    // colour-compatible bulb at exactly one end of a fill:none, marker-end-free
+    // `#arrows` path), so it cannot invent a thermo out of some other line — which
+    // is what makes it safe to promote. The model stays as the fallback for a
+    // puzzle whose thermo renders somewhere the DOM reader can't see, now with its
+    // own (weaker) transposition guard.
     var chains;
     if (hasNativePayload()) {
       chains = nativeLinesFor('thermo') || getThermoChainsFromDOM();
     } else {
-      chains = getThermoChainsFromModel();
-      if (chains.length === 0) chains = getThermoChainsFromDOM();
+      chains = getThermoChainsFromDOM();
+      if (chains.length === 0) chains = getThermoChainsFromModel();
     }
     var covered = {};
     chains.forEach(function (ch) { ch.forEach(function (k) { covered[k] = 1; }); });

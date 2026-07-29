@@ -691,13 +691,34 @@ cell centre, the X is a 2-point path from one CORNER of the whole grid to the op
 
 ## Thermo validator
 
+> **⚠️ THE DOM OUTRANKS `cp.thermos` SINCE v3.169 — the precedence used to be the other way round,
+> and `cp.thermos` wayPoints can be TRANSPOSED vs what is rendered (the v3.83 trap; this was its last
+> live reader).** `FLqFBMpTJB` stores its top-left thermo as `(1.5,2.5)(2.5,2.5)(1.5,1.5)(2.5,1.5)`
+> and *draws* it at `x=160,96 → 160,160 → 96,96 → 96,160` — an exact `[x,y]→[y,x]` swap — so a
+> `(col,row)` read of the model lands on the transpose of the drawn cells. **A thermometer's entire
+> constraint is the ORDER of its cells**, so a transposed read is not "slightly off": it validates a
+> path the puzzle never draws. Reported symptom: 4 of its 5 thermos detected, each threaded through
+> the right cells in the **wrong order** — `R2C3-R2C2-R3C3-R3C2` for a thermo drawn
+> `R2C3-R3C3-R2C2-R3C2`. **This puzzle's thermo set is symmetric about the main diagonal**, which is
+> why it hid so well: the transpose still lands on real cells carrying a real bulb, so the bulb gate
+> passed 4 of 5 (the 5th, a 2-cell thermo at R5C3-R5C2, transposed onto two bulbless cells and was
+> the one dropped). Same lesson as `vd0mn9xqjw`'s diagonal-only whisper loss — **if a symptom is
+> "works except on the symmetric ones", suspect row/col swap first.**
+> `getThermoChainsFromDOM` has no such failure mode (it parses the drawn `<path d>`, so its geometry
+> *is* the render) and is narrow enough that it can't invent a thermo, which is what makes promoting
+> it safe; verified in the live DOM to return all 5 chains in drawn order. The model stays as the
+> fallback for a thermo rendered where the DOM reader can't see it, and now carries its own **weaker**
+> guard: the DOM-read bulbs are in render space, so score the chains as-is vs transposed by "has a
+> colour-compatible bulb at exactly one end" and take the strictly-better reading (a tie changes
+> nothing).
+
 **Thermo validator (v3.67; DOM fallback for cosmetic-drawn thermos v3.67.1):**
 `computeThermoRemovals` (independent of the other three; always-on — the per-validator enable
 settings were removed v3.104). Digits strictly increase from the round bulb to the tip; a **slow**
 thermo relaxes this to non-decreasing EXCEPT where ordinary Sudoku rules would forbid the repeat
 (same row/column/region/cage) — there it must still strictly increase. **Two detection sources,
-model preferred, DOM fallback** (`getThermos` = `getThermoChainsFromModel()` else
-`getThermoChainsFromDOM()`, then `buildThermoTrees(chains)` merges either source's chains the same
+DOM preferred, model fallback** (`getThermos` = `getThermoChainsFromDOM()` else
+`getThermoChainsFromModel()`, then `buildThermoTrees(chains)` merges either source's chains the same
 way): **Model** (`Framework.app.puzzle.currentPuzzle.thermos`) — SudokuPad's native constraint key;
 a FLAT list of one entry per rendered polyline ARM, entries sharing the same `line` object
 (identity, not stringified) are the same arm. **DOM fallback (v3.67.1 — a real puzzle needed it):**
