@@ -285,7 +285,11 @@ way so it stays low-maintenance.
   repaints when ready; null for normal sudoku → geometry only), `buildModelRegionMap`,
   `buildRegionGroups` (collapses geometric pieces sharing a logical id into one colour group). Both
   the multi-colour borders and Easy Shade fills read the one `regionColors[]` array, so they always
-  match.
+  match. **Author-drawn boxes (v3.158):** `inferAuthorRegionWalls` (reads region walls from cosmetic
+  paths in `#underlay`/`#arrows`/`#overlay`), `regularBoxWalls` (completes a gapped wall set to a
+  regular box layout), `regionOutlinePaths` (synthesises `d` strings so the centre border has
+  something to draw when there are no cage-box paths to clone) — see "Puzzles that declare
+  `regions: []`" below.
 - **Shaded regions:** `assignExtraRegionColors` (samples each `cage-extraregion` path's cells via
   `isPointInFill` at cell centres, colours via `colourShadedRegions`, stores idx in
   `dataset.spdrExtraColorIdx`), `regionFeatureActive`/`extraRegionsMovedBelowBorders` (predicate
@@ -814,6 +818,39 @@ Add a new line layer (or change what counts as a line path) → edit
 filled block-arrow shapes (`isLineFill`); other layers are plain `fill:none` stroke lines, so the
 fill pass stays `#arrows`-only.
 
+### Puzzles that declare `regions: []` — the boxes are cosmetics (v3.158)
+A `.scl` can carry an explicitly EMPTY `regions` array. SudokuPad then has no boxes at all: no
+`type:'region'` entries in `currentPuzzle.cages` (only the 18 `rowcol` ones) and **no
+`path.cage-box` in `#cell-grids`** — the layer holds nothing but `path.cell-grid`. Authors who do
+this (Marty Sears routinely) still HAVE boxes and just draw them by hand as cosmetic lines in
+`#overlay`, so the borders are on screen and nothing we read knows about them. Symptoms were: the
+digit-set prompt offering **2 digits**, no region borders, no region fill, and Easy Shade finding
+nothing. Two independent causes, both fixed:
+
+1. **Digit count.** `cageCellCount` counted `r\d+c\d+` matches, so SudokuPad's RANGE notation
+   `"r1c1-r1c9"` (used by every `rowcol` cage) scored **2**. Harmless on a normal puzzle — the
+   9-cell `type:'region'` cages win the max — but on these puzzles the ranges are the *only* unique
+   cages, so `detectDigitCount` returned 2. It now expands a range to the rectangle it spans.
+2. **Region geometry.** `inferRegionsFromSVG` gains a fallback used **only when `#cell-grids` has no
+   region paths at all**, so nothing that already works can change. `inferAuthorRegionWalls` accepts
+   a cosmetic path as a wall only if every segment is axis-aligned, sits ON a grid line, and lies
+   inside the grid — which is exactly what separates a box border from a clue line (those run
+   through cell CENTRES) and from the decorative ring several of these puzzles wear (outside the
+   grid: Triple Trouble's is at −21.3 … 597.3). A candidate is accepted only if it partitions the
+   grid into **N regions of N cells** — the sudoku box invariant, and the one test that keeps this
+   safe on region-less puzzles generally. `regularBoxWalls` then repairs walls drawn with GAPS
+   (Pseudo Cluedo's rooms are joined by doorways): if every drawn wall lies on exactly one regular
+   bw×bh layout and covers ≥60% of it, that layout is the boxes. The centre border normally CLONES
+   cage-box paths, so `regionOutlinePaths` synthesises outlines for it.
+
+Verified (regions / digit count): `3mjyxrx5og` 9×9 ✓, `68spijnw4s` 9×9 ✓, `ln6peautd7` 12 boxes of
+12 (3×4) ✓, `00tjfy70pd` 9×9 ✓, `el9sus7p0o` 9×9 via the gapped-wall repair ✓, `s7221r2i0r`
+"Abstract Art" correctly **declines** (its regions are the solver's job to find; the faint staircase
+lines fit no box layout) — digit count 8 there, still right. Unchanged: `n7a6oi1gyy` (normal 9×9),
+`pdnc0ckv87` (Squishdoku — overlapping boxes are not a partition, stays one blob, 9 digits).
+The author's own black lines stay visible under our borders; the existing **"Hide author-drawn
+region borders"** toggle (session-only, Region borders section) removes them.
+
 ## Terminology
 - **Region / cage-box** — a bordered area; its boundaries are `#cell-grids path:not(.cell-grid)`.
 - **Strip / border strip** — a coloured `<rect>` we draw along a region edge.
@@ -842,6 +879,11 @@ shrink-to-fit width — see `applyControlsWidthCap`) and makes UI work look corr
   rules (~190 chars), anti-king + whisper + thermo. The user flags this one as **laying out
   differently** from the other two — check every UI/layout change against both it and a long-rules
   puzzle, since they do not always give the same result.
+- **`regions: []` family (boxes drawn as cosmetics)** — `3mjyxrx5og` "Triple Trouble", `68spijnw4s`,
+  `ln6peautd7` "Gross Misconduct" (12×12, 3×4 boxes), `00tjfy70pd` "Another World",
+  `el9sus7p0o` "Pseudo Cluedo" (walls with doorway gaps), `s7221r2i0r` "Abstract Art" (regions
+  UNKNOWN by design — must stay un-inferred). Check any region-geometry or digit-count change
+  against all six; see "Puzzles that declare `regions: []`" above.
 - **f-puzzles render-path puzzle — https://sudokupad.app/3x3zm2co6o** (9×9) — built in **f-puzzles**,
   converted via the marktekfan penpa-import tool. Kept for its **native** f-puzzles constraints
   (4 Kropki, 1 Arrow, X-diagonal/`sudokuX`, 33 cages) **plus** cosmetics — an all-cosmetic puzzle

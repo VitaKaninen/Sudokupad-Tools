@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.157.0
+// @version      3.158.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.157.0';
+  var SCRIPT_VERSION = '3.158.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -3087,7 +3087,140 @@
     return assign(0) ? bt : null;
   }
 
-  // Returns { regions, cellSize, rows, cols } derived from the live SVG, or null.
+  // ── Author-drawn region borders (puzzles that declare NO regions) ────────────
+  // A puzzle whose `.scl` carries `regions: []` has no boxes in the model and no
+  // `path.cage-box` in #cell-grids — SudokuPad draws nothing, so region borders,
+  // region fill and Easy Shade all see one 81-cell blob. Several such puzzles DO
+  // have boxes and the author simply drew them by hand as cosmetic lines in
+  // #overlay (Marty Sears does this routinely: 3mjyxrx5og "Triple Trouble",
+  // 68spijnw4s, ln6peautd7 "Gross Misconduct"; also 00tjfy70pd "Another World").
+  // The borders are on screen; nothing we read knows about them.
+  //
+  // Recover them from the drawn geometry. A cosmetic path is a region border only
+  // if EVERY segment is axis-aligned AND sits ON a grid line (its perpendicular
+  // coordinate is a multiple of the cell size) AND the whole path lies inside the
+  // grid. Those three tests are what separate a box border from everything else an
+  // author draws: clue lines run through cell CENTRES (half-cell offsets), and the
+  // decorative ring most of these puzzles wear sits OUTSIDE the grid (Triple
+  // Trouble's is at −21.3 … 597.3, well past the 0…576 board).
+  //
+  // Endpoints ALONG a wall may be off-grid — a wall can stop mid-edge to leave a
+  // doorway (el9sus7p0o "Pseudo Cluedo") — so a partially covered cell edge counts
+  // as blocked. Returns a Set of blocked-edge keys in inferRegionsFromSVG's format.
+  function inferAuthorRegionWalls(cs, rows, cols) {
+    var walls = new Set();
+    ['underlay', 'arrows', 'overlay'].forEach(function (id) {
+      var layer = document.getElementById(id);
+      if (!layer) return;
+      layer.querySelectorAll('path').forEach(function (p) {
+        var d = p.getAttribute('d') || '';
+        if (!d || !pathIsRectilinear(d)) return;
+        var segs = rectilinearSegments(d);
+        if (!segs.length) return;
+        var onGrid = function (v) { return Math.abs(v / cs - Math.round(v / cs)) < 1e-3; };
+        var inside = function (v, max) { return v >= -1e-3 && v <= max + 1e-3; };
+        for (var i = 0; i < segs.length; i++) {
+          var s = segs[i];
+          var vertical = Math.abs(s.x1 - s.x2) < 0.01;
+          if (!onGrid(vertical ? s.x1 : s.y1)) return;
+          if (!inside(s.x1, cols * cs) || !inside(s.x2, cols * cs)) return;
+          if (!inside(s.y1, rows * cs) || !inside(s.y2, rows * cs)) return;
+        }
+        segs.forEach(function (s) {
+          if (Math.abs(s.x1 - s.x2) < 0.01) {
+            var c = Math.round(s.x1 / cs);
+            if (c <= 0 || c >= cols) return;                 // outer boundary — no edge to block
+            var r0 = Math.floor(Math.min(s.y1, s.y2) / cs + 1e-6);
+            var r1 = Math.ceil(Math.max(s.y1, s.y2) / cs - 1e-6);
+            for (var r = Math.max(0, r0); r < Math.min(rows, r1); r++) walls.add(r + ',' + (c - 1) + ',' + r + ',' + c);
+          } else {
+            var rr = Math.round(s.y1 / cs);
+            if (rr <= 0 || rr >= rows) return;
+            var c0 = Math.floor(Math.min(s.x1, s.x2) / cs + 1e-6);
+            var c1 = Math.ceil(Math.max(s.x1, s.x2) / cs - 1e-6);
+            for (var cc = Math.max(0, c0); cc < Math.min(cols, c1); cc++) walls.add((rr - 1) + ',' + cc + ',' + rr + ',' + cc);
+          }
+        });
+      });
+    });
+    return walls;
+  }
+
+  // Complete a GAPPED wall set to a regular box layout. Walls drawn with holes in
+  // them flood-fill into one blob (Pseudo Cluedo's rooms are joined by doorways),
+  // but they still say WHERE the borders run: if every drawn wall lies on the
+  // boundary of exactly one regular bw×bh box layout, that layout is the puzzle's
+  // boxes. Two guards keep this from inventing boxes: no wall may sit OFF the
+  // layout (which is what rejects s7221r2i0r "Abstract Art", whose faint staircase
+  // lines fit no box layout — its regions are the solver's job to find), and the
+  // drawn walls must cover most of the layout's boundary, so one box-aligned
+  // decoration can't conjure a full grid of boxes. Degenerate 1×N / N×1 layouts
+  // (regions = whole rows or columns) are never boxes and are excluded.
+  var BOX_LAYOUT_MIN_COVERAGE = 0.6;   // Pseudo Cluedo, the motivating case, covers 80.6%
+  function regularBoxWalls(drawn, rows, cols) {
+    if (!drawn || !drawn.size || rows !== cols) return null;
+    var edges = [];
+    drawn.forEach(function (k) {
+      var p = k.split(',').map(Number);
+      edges.push(p[0] !== p[2] ? { h: true, line: p[2], at: p[1] } : { h: false, line: p[3], at: p[0] });
+    });
+    var winner = null;
+    for (var bw = 2; bw < cols; bw++) {
+      var bh = rows / bw;
+      if (!Number.isInteger(bh) || bh < 2 || bw * bh !== rows) continue;
+      var off = edges.some(function (e) { return e.h ? (e.line % bh !== 0) : (e.line % bw !== 0); });
+      if (off) continue;
+      var total = 0, covered = 0;
+      for (var r = bh; r < rows; r += bh) for (var c = 0; c < cols; c++) {
+        total++; if (drawn.has((r - 1) + ',' + c + ',' + r + ',' + c)) covered++;
+      }
+      for (var c2 = bw; c2 < cols; c2 += bw) for (var r2 = 0; r2 < rows; r2++) {
+        total++; if (drawn.has(r2 + ',' + (c2 - 1) + ',' + r2 + ',' + c2)) covered++;
+      }
+      if (!total || covered / total < BOX_LAYOUT_MIN_COVERAGE) continue;
+      if (winner) return null;                       // ambiguous — two layouts fit, trust neither
+      winner = { bw: bw, bh: bh };
+    }
+    if (!winner) return null;
+    var walls = new Set();
+    for (var hr = winner.bh; hr < rows; hr += winner.bh) for (var hc = 0; hc < cols; hc++) walls.add((hr - 1) + ',' + hc + ',' + hr + ',' + hc);
+    for (var vc = winner.bw; vc < cols; vc += winner.bw) for (var vr = 0; vr < rows; vr++) walls.add(vr + ',' + (vc - 1) + ',' + vr + ',' + vc);
+    return walls;
+  }
+
+  // Outline every region as rectilinear `d` strings (including the outer frame),
+  // so the centre border — which normally CLONES #cell-grids' cage-box paths — has
+  // something to draw on a puzzle whose boxes we inferred rather than read.
+  function regionOutlinePaths(regionOf, rows, cols, cs) {
+    var out = [];
+    function same(r1, c1, r2, c2) {
+      if (r1 < 0 || r1 >= rows || c1 < 0 || c1 >= cols) return false;
+      if (r2 < 0 || r2 >= rows || c2 < 0 || c2 >= cols) return false;
+      return regionOf[r1][c1] === regionOf[r2][c2];
+    }
+    for (var r = 0; r <= rows; r++) {
+      var run = -1;
+      for (var c = 0; c <= cols; c++) {
+        var isEdge = c < cols && !same(r - 1, c, r, c);
+        if (isEdge && run < 0) run = c;
+        if (!isEdge && run >= 0) { out.push('M' + (run * cs) + ' ' + (r * cs) + ' L' + (c * cs) + ' ' + (r * cs)); run = -1; }
+      }
+    }
+    for (var cc = 0; cc <= cols; cc++) {
+      var vrun = -1;
+      for (var rr = 0; rr <= rows; rr++) {
+        var vEdge = rr < rows && !same(rr, cc - 1, rr, cc);
+        if (vEdge && vrun < 0) vrun = rr;
+        if (!vEdge && vrun >= 0) { out.push('M' + (cc * cs) + ' ' + (vrun * cs) + ' L' + (cc * cs) + ' ' + (rr * cs)); vrun = -1; }
+      }
+    }
+    return out;
+  }
+
+  // Returns { regions, cellSize, rows, cols, borderPaths } derived from the live
+  // SVG, or null. `borderPaths` is non-null only when the regions came from
+  // author-drawn cosmetics (see inferAuthorRegionWalls) — the centre border needs
+  // its own outlines then, because there are no cage-box paths to clone.
   function inferRegionsFromSVG() {
     var cellGrids = document.getElementById('cell-grids');
     var svgEl    = document.getElementById('svgrenderer');
@@ -3173,43 +3306,74 @@
       }
     }
 
-    cellGrids.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
-      parsePath(p.getAttribute('d') || '');
-    });
+    var nativeBorders = cellGrids.querySelectorAll('path:not(.cell-grid)');
+    nativeBorders.forEach(function (p) { parsePath(p.getAttribute('d') || ''); });
 
-    // BFS flood-fill to identify connected cell groups (= regions).
-    var regionOf = [];
-    for (var r = 0; r < rows; r++) regionOf.push(new Array(cols).fill(-1));
+    // BFS flood-fill to identify connected cell groups (= regions). Takes the
+    // blocked-edge set as an argument so the author-drawn fallback below can try
+    // more than one candidate.
+    function floodFill(walls) {
+      var regionOf = [];
+      for (var r = 0; r < rows; r++) regionOf.push(new Array(cols).fill(-1));
 
-    var regions = [];
-    for (var sr = 0; sr < rows; sr++) {
-      for (var sc = 0; sc < cols; sc++) {
-        if (regionOf[sr][sc] !== -1) continue;
-        var ri = regions.length;
-        var cells = [];
-        var queue = [[sr, sc]];
-        regionOf[sr][sc] = ri;
-        while (queue.length) {
-          var cur = queue.shift();
-          var cr = cur[0], cc = cur[1];
-          cells.push([cr, cc]);
-          [[cr-1,cc],[cr+1,cc],[cr,cc-1],[cr,cc+1]].forEach(function (nb) {
-            var nr = nb[0], nc = nb[1];
-            if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || regionOf[nr][nc] !== -1) return;
-            // Edge key: smaller-index cell first.
-            var key = (nr < cr || (nr === cr && nc < cc))
-              ? nr+','+nc+','+cr+','+cc
-              : cr+','+cc+','+nr+','+nc;
-            if (blocked.has(key)) return;
-            regionOf[nr][nc] = ri;
-            queue.push([nr, nc]);
-          });
+      var regions = [];
+      for (var sr = 0; sr < rows; sr++) {
+        for (var sc = 0; sc < cols; sc++) {
+          if (regionOf[sr][sc] !== -1) continue;
+          var ri = regions.length;
+          var cells = [];
+          var queue = [[sr, sc]];
+          regionOf[sr][sc] = ri;
+          while (queue.length) {
+            var cur = queue.shift();
+            var cr = cur[0], cc = cur[1];
+            cells.push([cr, cc]);
+            [[cr-1,cc],[cr+1,cc],[cr,cc-1],[cr,cc+1]].forEach(function (nb) {
+              var nr = nb[0], nc = nb[1];
+              if (nr < 0 || nr >= rows || nc < 0 || nc >= cols || regionOf[nr][nc] !== -1) return;
+              // Edge key: smaller-index cell first.
+              var key = (nr < cr || (nr === cr && nc < cc))
+                ? nr+','+nc+','+cr+','+cc
+                : cr+','+cc+','+nr+','+nc;
+              if (walls.has(key)) return;
+              regionOf[nr][nc] = ri;
+              queue.push([nr, nc]);
+            });
+          }
+          regions.push(cells);
         }
-        regions.push(cells);
+      }
+      return { regions: regions, regionOf: regionOf };
+    }
+
+    var out = floodFill(blocked), borderPaths = null;
+
+    // NO native region borders at all → the puzzle declared `regions: []` and
+    // SudokuPad drew no boxes. Fall back to the author's own cosmetic border lines.
+    // A candidate is only accepted when it partitions the grid into exactly N
+    // regions of N cells each — the sudoku box invariant. That single test is what
+    // makes this safe to run on every region-less puzzle: Abstract Art's decorative
+    // staircases fall out as 64 singletons and are dropped, and any puzzle that
+    // genuinely has no boxes keeps its one-blob result.
+    if (!nativeBorders.length && rows === cols) {
+      var candidates = [];
+      var drawn = inferAuthorRegionWalls(cs, rows, cols);
+      if (drawn && drawn.size) {
+        candidates.push(drawn);
+        var boxed = regularBoxWalls(drawn, rows, cols);   // repairs doorway gaps
+        if (boxed) candidates.push(boxed);
+      }
+      for (var ci = 0; ci < candidates.length; ci++) {
+        var attempt = floodFill(candidates[ci]);
+        if (attempt.regions.length !== rows) continue;
+        if (!attempt.regions.every(function (cells) { return cells.length === rows; })) continue;
+        out = attempt;
+        borderPaths = regionOutlinePaths(attempt.regionOf, rows, cols, cs);
+        break;
       }
     }
 
-    return { regions: regions, cellSize: cs, rows: rows, cols: cols };
+    return { regions: out.regions, cellSize: cs, rows: rows, cols: cols, borderPaths: borderPaths };
   }
 
   // ── DEVICE-PIXEL SNAPPING for the region borders ────────────────────────────
@@ -3633,8 +3797,16 @@
     // Drawing here instead of via CSS on #cell-grids (z=8) ensures center border
     // strokes appear BELOW #underlay (z=3), so circles, pills, and other feature
     // elements render above the center border rather than behind it.
+    // On a puzzle with NO cage-box paths whose boxes we inferred from the author's
+    // cosmetic lines, there is nothing to clone — draw geo.borderPaths instead.
+    var centerSources = [];
+    if (cellGridsEl) cellGridsEl.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
+      centerSources.push(p.getAttribute('d') || '');
+    });
+    if (!centerSources.length && geo.borderPaths) centerSources = geo.borderPaths;
+
     if (needCenterBorder) {
-      if (cellGridsEl) {
+      if (centerSources.length) {
         var centerStroke = hexToRgba(settings.regionBorderColor, settings.regionBorderOpacity);
         // centerWidth is hoisted above — the colour-strip quantizers need it too.
         // The centre border (box outlines AND the outer frame — both are
@@ -3652,8 +3824,7 @@
           snapGroup.setAttribute('opacity', String(op0 != null ? op0 : 1));
           mainGroup.appendChild(snapGroup);
         }
-        cellGridsEl.querySelectorAll('path:not(.cell-grid)').forEach(function (p) {
-          var dAttr = p.getAttribute('d') || '';
+        centerSources.forEach(function (dAttr) {
           if (snapGroup && pathIsRectilinear(dAttr)) {
             rectilinearSegments(dAttr).forEach(function (sg) {
               var vertical = Math.abs(sg.x1 - sg.x2) < 0.01;
@@ -13452,11 +13623,27 @@
   // 1-9 even though the grid is only 7 wide. Its rows/cols (7 cells) are smaller
   // and don't win. A 9x9 → 9, a 6x6 → 6, all from the same rule.
   // Falls back to the grid size when the model isn't loaded / has no regions.
+  // A cage's `cells` is an array, a comma-separated RC list ("r1c1,r1c2,…"), or —
+  // for the native row/column cages — a RANGE naming only its two corners
+  // ("r1c1-r1c9"). Counting `r\d+c\d+` matches scores every range as 2 cells, which
+  // is invisible on a normal puzzle (the 9-cell `type:'region'` box cages win the
+  // max) but is the WHOLE answer on a puzzle that declares `regions: []`: its only
+  // unique cages are the 18 rowcol ranges, so the digit count came out as 2 and the
+  // prompt offered a 2-digit set (3mjyxrx5og, el9sus7p0o, 68spijnw4s, ln6peautd7,
+  // s7221r2i0r, 00tjfy70pd). Expand a range to the rectangle it spans.
   function cageCellCount(c) {
     var cells = c && c.cells;
     if (Array.isArray(cells)) return cells.length;
-    var m = String(cells || '').match(/r\d+c\d+/gi);
-    return m ? m.length : 0;
+    var total = 0;
+    String(cells || '').split(',').forEach(function (part) {
+      var range = /r(\d+)c(\d+)\s*-\s*r(\d+)c(\d+)/i.exec(part);
+      if (range) {
+        total += (Math.abs(+range[3] - +range[1]) + 1) * (Math.abs(+range[4] - +range[2]) + 1);
+      } else if (/r\d+c\d+/i.test(part)) {
+        total += 1;
+      }
+    });
+    return total;
   }
   function detectDigitCount() {
     var N = detectGridSize();
