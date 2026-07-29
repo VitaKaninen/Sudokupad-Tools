@@ -503,7 +503,12 @@ way so it stays low-maintenance.
   (`combineFogFilter`) still governs runs, but the 👁 preview is disabled on a fog puzzle
   (`puzzleHasFog()`, tooltip explains why) because it draws clues that are still hidden; the same
   predicate disables Easy Shade outright (`effRegionColorFill` / `effShadedRegionColor`). Full detail
-  in [VALIDATORS.md](VALIDATORS.md). **Same-difference lines (v3.159): `classifySameDiffLines` /
+  in [VALIDATORS.md](VALIDATORS.md). **Regions: `makeRegionOf` / `makeSameRegion` (v3.162)** — the
+  ONE answer to "do these two cells share a region?", and it may be "this puzzle has none"
+  (model region cages → `inferRegionsFromSVG` geometry accepted as N regions of N cells → regular
+  boxing only where native box borders exist → null). Every conflict test goes through it;
+  `regularBoxDims` is called in exactly one place. Inventing a boxing on a puzzle whose regions the
+  solver must deduce over-removes and can fake an "impossible clue" error. **Same-difference lines (v3.159): `classifySameDiffLines` /
   `computeSameDiffRemovals` / `sameDiffLineSupport` / `sameDiffExactFills`** — adjacent digits differ
   by one per-line UNKNOWN d, so every d is enumerated; for a fixed d the line is a chain CSP that arc
   consistency solves exactly, and the capped search runs only where conflicts or a loop break the

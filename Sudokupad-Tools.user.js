@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.161.0
+// @version      3.162.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.161.0';
+  var SCRIPT_VERSION = '3.162.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7793,13 +7793,81 @@
   // list), iterated to a fixpoint like the cage validator.
 
   // Regular box dimensions for an N×N grid: { h: rows, w: cols }. h = the largest
-  // divisor of N that is ≤ √N (so 9→3×3, 6→2×3, 8→2×4, 12→3×4, 16→4×4). Used for
-  // the box-conflict test; jigsaw/irregular regions aren't derived here, so on
-  // such a (rare) puzzle the box constraint is simply under-applied, never wrong.
+  // divisor of N that is ≤ √N (so 9→3×3, 6→2×3, 8→2×4, 12→3×4, 16→4×4). ONLY valid
+  // once makeRegionOf() has established the puzzle actually HAS boxes — see the
+  // banner there; deriving it unconditionally is what broke `s7221r2i0r`.
   function regularBoxDims(N) {
     var h = 1;
     for (var k = 1; k * k <= N; k++) if (N % k === 0) h = k;
     return { h: h, w: N / h };
+  }
+
+  // ── "WHICH CELLS SHARE A REGION?" — ONE ANSWER, AND IT MAY BE "THERE ARE NONE"
+  // (v3.162) ───────────────────────────────────────────────────────────────────
+  // Every validator that forbids a repeat needs this, and every one of them used to
+  // answer it the same wrong way: model region map if present, ELSE assume the
+  // REGULAR boxing. That last step is a fabrication, and on a puzzle whose regions
+  // are the SOLVER'S JOB it invents constraints the puzzle does not have.
+  //
+  // `s7221r2i0r` "Abstract Art" (Marty Sears) is the reported case: an 8×8 whose
+  // rules say *"Divide the grid into eight non-overlapping 2x4 regions, which can
+  // each be placed either horizontally or vertically"*. It declares no region cages
+  // and SudokuPad draws no box borders (`#cell-grids` holds only `path.cell-grid`),
+  // so we conjured a fixed 2×4 boxing — placement and all. That made the 8-cell
+  // same-difference ring in rows 5-7 STRUCTURALLY IMPOSSIBLE (feasible differences:
+  // none), so the run reported a red "impossible clue" error on every click,
+  // including on an empty grid, because the structural test never reads the marks.
+  // With row/column conflicts alone the same ring is satisfiable at d=1.
+  //
+  // Returns fn(key) → region id, or **NULL when the puzzle has no regions at all**,
+  // in which case NO pair of cells may be assumed to share one. Sources, best first:
+  //   1. MODEL region cages — the puzzle states them (jigsaws included).
+  //   2. DRAWN geometry via inferRegionsFromSVG(), accepted only when it partitions
+  //      the grid into exactly N regions of N cells (the sudoku box invariant). This
+  //      covers boxes SudokuPad drew and boxes the author drew by hand, and it is
+  //      strictly better than the regular guess: it gets jigsaws right.
+  //   3. Native box borders exist but didn't flood-fill into a clean partition →
+  //      keep the old regular-boxing behaviour. Boxes demonstrably exist, so this is
+  //      the same guess as before and cannot regress an ordinary puzzle.
+  //   4. Nothing drawn, nothing declared → NULL. Under-constrain, never invent.
+  // Not cached: the model map is async-primed (null on the first call), so a cache
+  // could freeze a pre-load answer. Each caller builds it once per compute.
+  function makeRegionOf() {
+    var N = detectGridSize();
+    var regionMap = getModelRegionMap();
+    if (regionMap) {
+      return function (key) {
+        var p = key.split(',');
+        var id = regionMap[p[1] + ',' + p[0]];
+        return id == null ? null : 'm' + id;
+      };
+    }
+    var inf = null; try { inf = inferRegionsFromSVG(); } catch (e) { inf = null; }
+    if (inf && inf.regions && inf.rows === N && inf.cols === N && inf.regions.length === N &&
+        inf.regions.every(function (cells) { return cells.length === N; })) {
+      var of = {};
+      inf.regions.forEach(function (cells, i) {
+        cells.forEach(function (rc) { of[rc[1] + ',' + rc[0]] = 'g' + i; });   // [row,col] → "col,row"
+      });
+      return function (key) { var id = of[key]; return id == null ? null : id; };
+    }
+    var cg = document.getElementById('cell-grids');
+    if (!cg || !cg.querySelector('path:not(.cell-grid)')) return null;         // no boxes exist
+    var bd = regularBoxDims(N);
+    return function (key) {
+      var p = key.split(',');
+      return Math.floor(+p[1] / bd.h) + ':' + Math.floor(+p[0] / bd.w);
+    };
+  }
+  // The predicate form: "do these two cells share a region?" — false whenever the
+  // puzzle has no regions, so a caller needs no null check of its own.
+  function makeSameRegion() {
+    var regionOf = makeRegionOf();
+    if (!regionOf) return function () { return false; };
+    return function (a, b) {
+      var ra = regionOf(a);
+      return ra != null && ra === regionOf(b);
+    };
   }
 
   // Cell-key sets for every cage that forbids repeats (unique !== false), incl.
@@ -7828,27 +7896,19 @@
   // column, same region, or a shared uniqueness cage. Built once per pass (it reads
   // the region map + cages), returns the predicate.
   //
-  // Shared by the Kropki and whisper validators: both need "these two neighbours of
-  // mine must take DISTINCT partners", which is what turns a pairwise clue into a
-  // chain constraint. Uses the model's region map when available (so JIGSAW regions
-  // are honoured) and falls back to regular boxes — same regionId shape the
-  // region-sum validator uses; note the model map is keyed "row,col", the OPPOSITE
-  // of our "col,row" cell keys.
+  // Shared by the Kropki, whisper, ten-line, same-difference and between validators:
+  // all need "these two cells must take DISTINCT digits", which is what turns a
+  // pairwise clue into a chain constraint. The region half comes from makeSameRegion
+  // — which honours jigsaws AND answers a flat "no" on a puzzle whose regions the
+  // solver has yet to determine (v3.162; it used to fabricate a regular boxing).
   function makeMustDiffer() {
-    var N = detectGridSize();
-    var bd = regularBoxDims(N);
-    var regionMap = getModelRegionMap();
+    var sameRegion = makeSameRegion();
     var cageSets = getUniqueCageCellSets();
-    function regionId(key) {
-      var p = key.split(','), col = +p[0], row = +p[1];
-      if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
-      return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);
-    }
     return function mustDiffer(a, b) {
       if (a === b) return false;
       var ap = a.split(','), bp = b.split(',');
       if (ap[0] === bp[0] || ap[1] === bp[1]) return true;          // same column / same row
-      if (regionId(a) === regionId(b)) return true;
+      if (sameRegion(a, b)) return true;
       for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true;
       return false;
     };
@@ -7946,12 +8006,14 @@
     if (unitFilter) lks = lks.filter(function (lk) { return unitFilter(lk.keys); });
     if (lks.length === 0) return { noLittleKillers: true };
 
-    var N = detectGridSize();
-    var bd = regularBoxDims(N);
+    // Region conflicts come from makeSameRegion (v3.162) — a puzzle whose regions
+    // the solver must still deduce has NO box constraint to apply, and inventing one
+    // over-removes. Diagonal cells never share a row or column, so region + cage is
+    // the whole conflict set here.
+    var sameRegion = makeSameRegion();
     var cageSets = getUniqueCageCellSets();
-    function boxId(key) { var p = key.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
     function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
-    function conflict(a, b) { return boxId(a) === boxId(b) || shareCage(a, b); }
+    function conflict(a, b) { return sameRegion(a, b) || shareCage(a, b); }
 
     // Per-diagonal conflict matrix (which cell pairs must differ).
     var diags = lks.map(function (lk) {
@@ -10318,14 +10380,15 @@
     var lines = res.lines, masked = res.masked, selection = res.selection;
     var isFogged = getFogTester();
 
-    var N = detectGridSize();
-    var bd = regularBoxDims(N);
-    var regionMap = getModelRegionMap();   // { "row,col" (0-indexed, row-major) : logicalId } | null
-    function regionId(key) {
-      var p = key.split(','), col = +p[0], row = +p[1];
-      if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
-      return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);   // regular box fallback
-    }
+    // A region-sum line is SEGMENTED by the region borders, so unlike every other
+    // validator this one needs the region IDENTITY, not just "do these two share
+    // one" — and it cannot run at all without regions (v3.162). Fabricating the
+    // regular boxing here cut the line into segments the puzzle never drew, which
+    // is a wrong ANSWER rather than a weak one. No regions → decline; a puzzle
+    // whose rules name region-sum lines but whose regions the solver must still
+    // deduce is simply not checkable yet.
+    var regionId = makeRegionOf();
+    if (!regionId) return { noRegionSum: true };
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
     var work = {};
     Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
@@ -10735,19 +10798,14 @@
     var lines = res.lines, masked = res.masked, selection = res.selection;
     var isFogged = getFogTester();
 
-    var N = detectGridSize();
-    var bd = regularBoxDims(N);
-    var regionMap = getModelRegionMap();   // { "row,col" : logicalId } | null
-    function regionId(key) {
-      var p = key.split(','), col = +p[0], row = +p[1];
-      if (regionMap) { var id = regionMap[row + ',' + col]; if (id != null) return 'm' + id; }
-      return Math.floor(row / bd.h) + ':' + Math.floor(col / bd.w);
-    }
     // Two paired cells must differ only where an ordinary sudoku unit forbids a
-    // repeat — same row, column, or box/region (all guaranteed true → safe).
+    // repeat — same row, column, or region (all guaranteed true → safe). The region
+    // half is makeSameRegion (v3.162): "no regions yet" answers false rather than
+    // inventing the regular boxing.
+    var sameRegion = makeSameRegion();
     function mustDiffer(a, b) {
       var ap = a.split(','), bp = b.split(',');
-      return ap[0] === bp[0] || ap[1] === bp[1] || regionId(a) === regionId(b);
+      return ap[0] === bp[0] || ap[1] === bp[1] || sameRegion(a, b);
     }
     var work = {};
     Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
@@ -11787,15 +11845,15 @@
     if (unitFilter) raw = raw.filter(function (u) { return unitFilter(u.keys); });
     if (raw.length === 0) return { noArrows: true };
 
-    var N = detectGridSize();
-    var bd = regularBoxDims(N);
+    // Region conflicts via makeSameRegion (v3.162): never fabricate a boxing on a
+    // puzzle whose regions are the solver's to determine.
+    var sameRegion = makeSameRegion();
     var cageSets = getUniqueCageCellSets();
-    function boxId(key) { var p = key.split(','); return Math.floor(p[1] / bd.h) + ',' + Math.floor(p[0] / bd.w); }
     function shareCage(a, b) { for (var i = 0; i < cageSets.length; i++) if (cageSets[i].has(a) && cageSets[i].has(b)) return true; return false; }
     function conflict(a, b) {
       var ap = a.split(','), bp = b.split(',');
       if (ap[0] === bp[0] || ap[1] === bp[1]) return true;          // same column / same row
-      return boxId(a) === boxId(b) || shareCage(a, b);
+      return sameRegion(a, b) || shareCage(a, b);
     }
 
     // Per-unit cell list (target cells first) + conflict matrix (which cell
@@ -12170,6 +12228,15 @@
   //      lesson): drop the duplicate, then decide DELIBERATELY whether your rule has
   //      a wrap edge (whisper and same-difference enforce it; parity does not — an
   //      under-constrained loop is safe, a double-counted cell is not).
+  //   1a. NEVER INVENT A SUDOKU UNIT. Rows and columns are free — every puzzle has
+  //      them. REGIONS ARE NOT: ask makeSameRegion() / makeRegionOf(), which answer
+  //      "there are none" on a puzzle whose regions the solver must still deduce,
+  //      and NEVER derive regularBoxDims() yourself. An invented conflict is not a
+  //      weaker check, it is a WRONG one — it removes digits the puzzle allows, and
+  //      it can make a perfectly good clue read as structurally impossible, which
+  //      then fails loudly on a grid the player has not even started (v3.162,
+  //      `s7221r2i0r`). Same rule for the digit set: read it from st.uni, never
+  //      assume 1..N.
   //   1b. IF YOUR SEARCH HAS A NODE CAP, AUDIT IT (v3.155/v3.156) — "cap hit → bail"
   //      is safe but SILENT: nothing removed, nothing said. Measure where the cap
   //      actually dies against the clue sizes real puzzles draw, and check the bail

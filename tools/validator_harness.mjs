@@ -667,6 +667,27 @@ checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable
   // the cells empty, and the run reports the red "no valid combination".
   check('same diff: {1} then {1} conflicting has no support at all',
         sup([S(1), S(1)], allDiff(2)), ['', '']);
+
+  // ── AN INVENTED REGION IS A WRONG ANSWER, NOT A WEAK ONE (v3.162) ──────────
+  // `s7221r2i0r` "Abstract Art": an 8x8 whose eight 2x4 regions are the SOLVER'S to
+  // place. We used to assume the regular 2x4 boxing anyway, which made its 8-cell
+  // same-difference ring structurally impossible — a red "impossible clue" error on
+  // every click, even on an empty grid (the structural test never reads the marks).
+  // Ring, in drawn order, 0-indexed [col,row]; duplicate endpoint already dropped.
+  {
+    const ring = [[1,5],[1,6],[2,6],[3,6],[3,5],[3,4],[2,4],[1,4]];
+    const D8 = [1,2,3,4,5,6,7,8];
+    const bd = F.regularBoxDims(8);                 // { h:2, w:4 }
+    const box = ([c,r]) => `${Math.floor(r/bd.h)}:${Math.floor(c/bd.w)}`;
+    const matrix = (useBoxes) => ring.map((a,i) => ring.map((b,j) =>
+      i !== j && (a[0] === b[0] || a[1] === b[1] || (useBoxes && box(a) === box(b)))));
+    const diffsOf = (useBoxes) => [...F.sameDiffLineSupport(
+      ring.length, ring.map(() => new Set(D8)), matrix(useBoxes), true, D8).diffs];
+    check('same diff: the invented 2x4 boxing makes the ring impossible (the bug)',
+          diffsOf(true), []);
+    check('same diff: with row/column conflicts alone the ring fills at d=1',
+          diffsOf(false), [1]);
+  }
 }
 // ── thermo arm length (v3.157) ──────────────────────────────────────────────
 // A STRICT thermometer rises by >=1 every cell, so an arm longer than the digit

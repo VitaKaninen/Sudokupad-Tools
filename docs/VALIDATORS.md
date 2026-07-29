@@ -432,6 +432,56 @@ uniform contradiction signal; the post-run Undo button restores the marks. Itera
 fixpoint. Only centre marks are removed; nothing is ever added. Variable targets (arrow circle,
 region-sum S) are part of the enumeration, not fixed inputs.
 
+### NEVER INVENT A SUDOKU UNIT — regions may not exist yet (v3.162)
+
+Rows and columns are free: every puzzle has them, and two cells sharing one must differ. **Regions
+are not.** Until v3.162 every conflict test answered "same region?" the same way — the model's
+region map if present, **else assume the regular boxing** (`regularBoxDims`). That fallback is a
+fabrication, and on a puzzle whose regions are the *solver's job* it invents constraints the puzzle
+does not have.
+
+`s7221r2i0r` "Abstract Art" (Marty Sears) is the reported case — an 8×8 whose rules open *"Divide
+the grid into eight non-overlapping 2x4 regions, which can each be placed either horizontally or
+vertically."* It declares no region cages and SudokuPad draws no box borders (`#cell-grids` holds
+only `path.cell-grid`), so we conjured a fixed 2×4 boxing, placement and all. Consequences, both
+measured:
+
+| clue | with the invented boxing | with row/column conflicts alone |
+|---|---|---|
+| the 8-cell same-difference ring | **no feasible difference → "impossible clue" red error** | fills at `d = 1` |
+| each 3-cell same-difference L | `d ∈ {1,2,3}` | `d ∈ {1..7}` |
+
+The ring is the reported bug: the structural test is **mark-independent**, so the error fired on
+every click — on a fully pencilled grid, on an empty one, and on a grid with every candidate
+deleted. The L's are the quieter half: the extra conflicts narrowed real, legal differences out of
+existence, i.e. **over-removal**, the one failure mode the elimination contract forbids.
+
+**`makeRegionOf()` is now the single answer**, and it is allowed to say *there are none*:
+
+1. **model region cages** — the puzzle states them (jigsaws included);
+2. **drawn geometry** via `inferRegionsFromSVG()`, accepted only when it partitions the grid into
+   exactly N regions of N cells (the sudoku box invariant). Covers boxes SudokuPad drew and boxes
+   the author drew by hand, and it beats the regular guess outright: it gets jigsaws right;
+3. **native box borders exist but didn't flood-fill cleanly** → keep the old regular boxing. Boxes
+   demonstrably exist, so this is the same guess as before and cannot regress an ordinary puzzle;
+4. **nothing declared, nothing drawn → `null`.** No pair of cells may be assumed to share a region.
+
+`makeSameRegion()` wraps it as a predicate that is simply `false` when there are no regions, and
+every conflict site now goes through one or the other — `makeMustDiffer` (Kropki, whisper, ten line,
+same difference, between), little killer, zipper, sum/double arrow. `regularBoxDims` is called in
+exactly one place: inside `makeRegionOf`, case 3.
+
+**Region sum is the exception that has to decline.** Its `regionId` doesn't test distinctness, it
+**segments the line** — so a fabricated boxing there cuts the line into segments the puzzle never
+drew, which is a wrong answer rather than a weak one. No regions → the validator returns
+"nothing to check". A puzzle that names region-sum lines but leaves its regions to the solver
+genuinely is not checkable yet.
+
+**The digit set has the same shape of trap on this puzzle** and is *not* changed here: the rules say
+one of 1-9 is missing and which one is unknown, so the honest set is all nine (over-permissive →
+under-remove → sound). `detectDigitSet` flags an 8×8 as an anomaly and *prompts* rather than
+silently applying 1-8, which is the right division of labour — the human decides.
+
 ### AN IMPOSSIBLE CLUE IS OUR MISREAD, NOT THE PUZZLE'S ERROR (v3.157)
 
 **Working assumption: every clue in every puzzle is VALID.** The catalog's puzzles are peer-reviewed
