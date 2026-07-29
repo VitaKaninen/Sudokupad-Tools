@@ -707,10 +707,17 @@ cell centre, the X is a 2-point path from one CORNER of the whole grid to the op
 > `getThermoChainsFromDOM` has no such failure mode (it parses the drawn `<path d>`, so its geometry
 > *is* the render) and is narrow enough that it can't invent a thermo, which is what makes promoting
 > it safe; verified in the live DOM to return all 5 chains in drawn order. The model stays as the
-> fallback for a thermo rendered where the DOM reader can't see it, and now carries its own **weaker**
-> guard: the DOM-read bulbs are in render space, so score the chains as-is vs transposed by "has a
-> colour-compatible bulb at exactly one end" and take the strictly-better reading (a tie changes
-> nothing).
+> fallback for a thermo rendered where the DOM reader can't see it, and reads its wayPoints as **RC**
+> (v3.170 — see "Model coordinates are RC" in LESSONS_LEARNED; v3.169 still read CR and leaned on the
+> scoring guard instead). On top of that it keeps a **weaker** belt-and-braces guard: the DOM-read
+> bulbs are in render space, so score both readings by "has a colour-compatible bulb at exactly one
+> end" and take the strictly-better one (a tie keeps the RC read).
+>
+> **Why nobody noticed for 100 versions:** read as CR, the model's chains failed the bulb gate on any
+> **asymmetric** puzzle, returned nothing, and let the DOM fallback quietly do the job. The DOM reader
+> has effectively been the thermo source all along; `FLqFBMpTJB` is the one shape that returned
+> wrong-but-plausible chains and so blocked its own fallback. That is also why the v3.169 precedence
+> swap is low-risk — it formalises what was already happening.
 
 **Thermo validator (v3.67; DOM fallback for cosmetic-drawn thermos v3.67.1):**
 `computeThermoRemovals` (independent of the other three; always-on — the per-validator enable

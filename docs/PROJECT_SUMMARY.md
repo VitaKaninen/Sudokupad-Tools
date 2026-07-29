@@ -846,7 +846,12 @@ hard-coded px and all. So the rule for all of our on-puzzle UI is *parentage, no
 
 ### Clue-line read sites (keep in sync)
 Cosmetic **line** clues (whisper/renban/region-sum/palindrome/thermo shafts) are read from the DOM
-in **three** subsystems that must agree on which SVG layers and which paths count — a fix in one
+in **three** subsystems that must agree on which SVG layers and which paths count. (**DOM only —
+there is no model path, and don't add one.** `cp.lines` does not exist on any payload format;
+`getCosmeticLines` had a dead branch for it until v3.170, and since model coordinates are RC that
+branch was a latent transposition bug across every line validator. See "Model coordinates are RC" in
+LESSONS_LEARNED.)
+The layers/paths must agree because a fix in one
 silently drifts from the others (the v3.83→v3.84 gap: detection learned `#overlay` lines but
 rendering/highlight didn't). Single source of truth = `LINE_DOM_LAYER_IDS` (the layer list) +
 `isLineCluePath` (the per-path gate), both defined next to `applyLineFill`. The three consumers:

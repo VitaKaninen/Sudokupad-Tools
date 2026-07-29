@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.169.0
+// @version      3.170.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.169.0';
+  var SCRIPT_VERSION = '3.170.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8381,10 +8381,23 @@
     return null;
   }
 
-  // Every cosmetic line as { color, keys } — from the MODEL (cp.lines), falling
-  // back to stroked <path>s in the DOM for cosmetic-only puzzles. Reads the STROKE
-  // ATTRIBUTE (author's original colour; our object-shading only rewrites inline
-  // style). Thermos (cp.thermos) and arrows (marker-end) are excluded.
+  // Every cosmetic line as { color, keys } — read from the DOM: stroked <path>s.
+  // Reads the STROKE ATTRIBUTE (author's original colour; our object-shading only
+  // rewrites inline style). Thermos (cp.thermos) and arrows (marker-end) are excluded.
+  //
+  // ── DOM-ONLY, DELIBERATELY: THERE IS NO MODEL BRANCH ANY MORE (v3.170) ──────
+  // Through v3.169 this preferred `cp.lines` and fell back to the DOM. That branch
+  // was DEAD CODE — audited across all three payload formats on SudokuPad v0.611.0
+  // (`ltvk2kk8b0` fpuz, `k18i652bjj` sxsm, `FLqFBMpTJB` scl), `'lines' in cp` is
+  // **false**: the key does not exist, so every line validator has always been
+  // reading the DOM. It was also a LANDMINE, which is why it is gone rather than
+  // merely unused. Every coordinate pair in SudokuPad's puzzle model is **[row, col]**
+  // (see the MODEL COORDINATES ARE RC block above `getArrowsFromModel`), so the day
+  // SudokuPad starts populating `cp.lines` this branch would silently start handing
+  // TRANSPOSED cells to all ~14 cue-gated line validators at once — the v3.169
+  // thermo bug, but across the whole subsystem instead of one reader. The DOM path
+  // is the one that has actually been exercised in every release to date; keeping a
+  // second, unexercised, wrong-by-convention path in front of it bought nothing.
   //
   // DOM source = the shared LINE_DOM_LAYER_IDS layers (#arrows + #overlay), gated by
   // the shared isLineCluePath predicate — see that block for why lines live in more
@@ -8523,16 +8536,6 @@
     var N = detectGridSize();
     function inGrid(k) { var p = k.split(','); return +p[0] >= 0 && +p[0] < N && +p[1] >= 0 && +p[1] < N; }
     var out = [];
-    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
-      ? Framework.app.puzzle.currentPuzzle : null;
-    if (cp && Array.isArray(cp.lines)) {
-      cp.lines.forEach(function (l) {
-        if (!l || !Array.isArray(l.wayPoints) || l.wayPoints.length < 2) return;
-        var keys = expandLineChain(l.wayPoints);
-        if (keys.length >= 2 && keys.every(inGrid)) out.push({ color: l.color || '', keys: keys });
-      });
-      if (out.length > 0) return out;
-    }
     var cs = getGridCellSize();
     if (!cs) return out;
     var seen = {};
@@ -11682,11 +11685,13 @@
       if (!t || !t.line || !Array.isArray(t.line.wayPoints)) return;
       if (!groups.has(t.line)) groups.set(t.line, t.line);
     });
+    // wayPoints are [row+0.5, col+0.5] — see the MODEL COORDINATES ARE RC block
+    // above getArrowsFromModel for the proof. v3.169 read them as (col, row).
     var chains = [];
     groups.forEach(function (line) {
       var wp = line.wayPoints, chain = [];
       for (var i = 0; i < wp.length; i++) {
-        var col = Math.round(wp[i][0] - 0.5), row = Math.round(wp[i][1] - 0.5);
+        var row = Math.round(wp[i][0] - 0.5), col = Math.round(wp[i][1] - 0.5);
         if (!inGrid(col, row)) { chain = null; break; }
         chain.push(col + ',' + row);
       }
@@ -11715,22 +11720,16 @@
     function endBulbs(c) {
       return (bulbAt(c.keys[0], c.color) ? 1 : 0) + (bulbAt(c.keys[c.keys.length - 1], c.color) ? 1 : 0);
     }
-    // THESE WAYPOINTS CAN BE TRANSPOSED (v3.169) — the v3.83 trap, and the LAST
-    // reader still exposed to it. `FLqFBMpTJB` stores its top-left thermo as
-    // (1.5,2.5)(2.5,2.5)(1.5,1.5)(2.5,1.5) and RENDERS it at x=160,96 → 160,160 →
-    // 96,96 → 96,160, an exact [x,y]→[y,x] swap, so a (col,row) read of the model
-    // lands on the transpose of the drawn cells. The bulbs are read from the DOM,
-    // so they are in RENDER space and can arbitrate: count the chains with a
-    // colour-compatible bulb at exactly one end, both ways round, and take the
-    // better reading. Strictly-better only, so a tie leaves the model reading
-    // alone and nothing changes on a puzzle that was already right.
-    // THIS IS THE WEAKER OF THE TWO GUARDS and only decides the FALLBACK — see
-    // getThermoDetection, where the DOM reader (whose geometry is the render by
-    // construction) now goes first. It is deliberately weak evidence: on this
-    // puzzle the thermo set is SYMMETRIC about the main diagonal, so the wrong
-    // reading still scored 4 of 5 and produced four real-looking thermos with
-    // their middles in the wrong order — a transposition can hide almost
-    // completely behind a symmetric picture.
+    // BELT AND BRACES ON TOP OF THE RC READ ABOVE. RC is the model's documented-by-
+    // evidence convention, but this reader is now only a FALLBACK (getThermoDetection
+    // puts the DOM first), so it is cheap to also let the render arbitrate: the bulbs
+    // come from the DOM, hence render space, so score both readings by "colour-
+    // compatible bulb at exactly one end" and take the better. STRICTLY better, so a
+    // tie keeps the RC read and a puzzle that was already right is untouched.
+    // It is deliberately WEAK evidence and must never be the primary guard: on
+    // `FLqFBMpTJB` the WRONG reading still scored 4 of 5, because that puzzle's
+    // thermo set is symmetric about the main diagonal — a transposition can hide
+    // almost completely behind a symmetric picture.
     var flipped = chains.map(function (c) {
       return {
         color: c.color,
@@ -12225,11 +12224,30 @@
     return resolved.map(function (r) { return { circle: r.chain[0], shaft: r.chain.slice(1) }; });
   }
 
+  // ── MODEL COORDINATES ARE RC — EVERY STRUCTURE, NO EXCEPTIONS (v3.170) ──────
+  // Every coordinate PAIR in SudokuPad's puzzle model is [row+0.5, col+0.5], i.e.
+  // the transpose of the [x, y] a reader naturally assumes. Read as (col, row) it
+  // silently lands on the mirrored cell — the v3.83 trap, and the single most
+  // expensive recurring bug in this file. Verified live on v0.611.0:
+  //   • `cp.arrowSums[].bulb.center` — `3x3zm2co6o`, center [0.5,6.5] renders r1c7.
+  //   • `cp.cosmetic[].cosmetic.center` — PROVES the convention outright, because
+  //     each entry also carries a self-labelling `rc:[row,col]` beside it:
+  //     `FLqFBMpTJB` has `rc:[9,-1]` with `center:[9.5,-0.5]`.
+  //   • `cp.thermos[].line.wayPoints` — `FLqFBMpTJB`, wayPoint [1.5,2.5] renders at
+  //     x=160,y=96 (cellSize 64) = col 2.5, row 1.5. This one cost v3.169: the
+  //     comment here used to claim thermos was "the OPPOSITE of arrowSums", which
+  //     was simply wrong. They are the same, and everything else is too.
+  // COROLLARY, worth internalising: a model read that "works" is either swapping
+  // already or being saved by a downstream gate. Pre-v3.169 the thermo reader was
+  // the latter — its transposed chains failed the bulb gate on any ASYMMETRIC
+  // puzzle, returned nothing, and let the DOM fallback do the job unnoticed. Only
+  // `FLqFBMpTJB`, whose thermo set is symmetric about the main diagonal, produced
+  // wrong-but-plausible chains and so blocked its own fallback.
+  // The safe default is therefore the DOM (its geometry IS the render); read the
+  // model only where it says something the DOM can't, and swap when you do.
+  //
   // Native model source: cp.arrowSums, one entry per rendered ARM —
-  // { bulb: { center, width, height, … }, arrow: { wayPoints } }. NB the
-  // coordinates are [row+0.5, col+0.5] (RC order) — the OPPOSITE of
-  // cp.thermos' line.wayPoints — verified against the rendered shaft on
-  // test puzzle 3x3zm2co6o (bulb center [0.5,6.5] renders at r1c7).
+  // { bulb: { center, width, height, … }, arrow: { wayPoints } }, RC per the above.
   // Returns raw arms for resolveArrowArms.
   function getArrowsFromModel() {
     var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
