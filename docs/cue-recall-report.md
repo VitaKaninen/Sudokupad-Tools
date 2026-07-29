@@ -42,42 +42,7 @@ recall 99.0%  -  504 tagged, 499 hit, 5 missed, 61 false-positive
 - [9qx3iprv0x](https://sudokupad.app/9qx3iprv0x) `sxsm` **RAT RUN 37: Fruitful** - rat run 37: fruitful fill the grid with the digits 1-9, so that in each row and column, one of the digits 1-9 is missing
 - [ceyzcgb9os](https://sudokupad.app/ceyzcgb9os) `sxsm` **RAT RUN: One Year Earlier** - rat run: one year earlier for the final preliminary 'free-roam' trial, the nine shortlisted rats were placed in a 9x9 sp
 - [dpsvou0v90](https://sudokupad.app/dpsvou0v90) `sxsm` **5 Pickles and a Dream** - ...d irregular region. german whispers: adjacent digits on a green line differ by at least 3. less than v: if two digits are either side of a v
-- [gcme2530d6](https://sudokupad.app/gcme2530d6) `sxsm` **Colour Coordinated Sums** - colour coordinated sums normal sudoku rules apply.  the two digits on an arrow give the coordinates of a particular targ
-- [hypzc2xwbi](https://sudokupad.app/hypzc2xwbi) `sxsm` **RAT RUN 18: Mirror Maze** - rat run 18: mirror maze normal sudoku rules apply.  aim of experiment: finkz the rat must reach the cupcake by finding a
-- [iovwq0jc5n](https://sudokupad.app/iovwq0jc5n) `sxsm` **Exclusive Lines** - ...he lines can now be german whisper lines (adjacent digits differ by at least 5)  checkpoint 2: additionally, the lines can now be parity lin
-- [j0e1hqfsp4](https://sudokupad.app/j0e1hqfsp4) `sxsm` **Stay in Your Box** - ...s apply.  invisible lines: - every box contains an invisible 'index line' whose route must be determined. - the index lines are all 9 cells 
-- [j22idv1qhe](https://sudokupad.app/j22idv1qhe) `sxsm` **Sudokulike (Dynamic Fog Edition)** - ...backwards. 1->2->3: german whisper: two cells connected by a german whisper path must have a difference of at least 5. 1->2->3->4: region su
-- [j5947yd09n](https://sudokupad.app/j5947yd09n) `sxsm` **Uniqueness, with a Nudge** - ...ains the value 4.   german whispers: if two cells are joined by a green line, the values must differ by at least 5.  white dots: cell values
-- [james-sinclair/double-entendre](https://sudokupad.app/james-sinclair/double-entendre) `sxsm` **Double Entendre** - ... with the same sum. german whispers: along green lines, values differ from their neighbors by at least 5. renban lines: purple lines contain
-- [james-sinclair/underling](https://sudokupad.app/james-sinclair/underling?setting-arrowsabovelines=1) `sxsm` **Underling** - ...wed by other rules. german whispers: along the green line, digits differ from their neighbors by at least 5. digits in cells with a shaded c
-- [jaw9z4nws6](https://sudokupad.app/jaw9z4nws6) `sxsm` **Web Design** - ... away in a straight line (horizontally, vertically or diagonally.) any further and the thread will break! • two silky threads may not cross 
-- [jbliq30p6u](https://sudokupad.app/jbliq30p6u) `sxsm` **Roots in the Fog** - ...ircle.  along green lines, neighboring values differ by at least 5. on each purple line, the set of values consists of consecutive integers 
-- [jewe3tzhy9](https://sudokupad.app/jewe3tzhy9) `sxsm` **RAT RUN 36: Alternating Currant** - ...rm a valid 'zipper' line, with finkz and phinx at the ends and the cupcake cell in the middle.
-- [jm86sbi0bb](https://sudokupad.app/jm86sbi0bb) `sxsm` **Fillomino Whispers** - fillomino whispers 𝗙𝗶𝗹𝗹𝗼𝗺𝗶𝗻𝗼. divide the grid into regions of orthogonally connected cells. regions can be upto 9 cells 
-- [k39j633cdo](https://sudokupad.app/k39j633cdo) `sxsm` **Re-framed** - ...t digits on a green german whisper line must differ by at least 5. a skunkworks collaboration with nordy and riffclown.
-- [k4g3ubb8qe](https://sudokupad.app/k4g3ubb8qe) `sxsm` **Yin-Yang-Yong** - ...fferent regions.  • german whisper (green): adjacent digits on a green line have a difference of at least 5.  • nabner (yellow): no two digi
-- [k4zgmts5h9](https://sudokupad.app/k4zgmts5h9) `sxsm` **RAT RUN: Hit and Miss** - rat run: hit and miss normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach the cupcakes by fin
-- [m9qm0m5qj0](https://sudokupad.app/m9qm0m5qj0) `sxsm` **RAT RUN 22: Copyrat** - rat run 22: copyrat normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach cupcakes by finding a
-- [mlt4l6zcak](https://sudokupad.app/mlt4l6zcak) `sxsm` **Colour Coordinated Differences** - colour coordinated differences normal sudoku rules apply.  the two digits on an arrow give the coordinates of a particul
-- [o2u3rfkurb](https://sudokupad.app/o2u3rfkurb) `sxsm` **RAT RUN 32: Veracity** - rat run 32: veracity normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach cupcakes by finding 
-- [pdywima58n](https://sudokupad.app/pdywima58n) `sxsm` **FEEDING FRIENDSy: It's Not Pea-sy Being Green** - ...(marked with dotted lines). ______________________________  #friendshipgoals: marty! croakz the frog has noticed a delicious fly whirring ar
-- [philip-newman/2026-03-18-easy-as-17-42-67-v2](https://sudokupad.app/philip-newman/2026-03-18-easy-as-17-42-67-v2) `sxsm` **2026-03-18: Easy As 17-42-67** - ...les apply. sequence lines: digits along lines must form an arithmetic sequence: each pair of adjacent digits on the same line differ by the 
-- [philip-newman/20260530-that-feeling-won](https://sudokupad.app/philip-newman/20260530-that-feeling-won) `sxsm` **2026-05-30: That Feeling Won** - ...ot repeat. sequence lines: digits along grey lines must form an arithmetic sequence: each pair of adjacent digits on the same line differ by
-- [pja7uaxak9](https://sudokupad.app/pja7uaxak9) `sxsm` **RAT RUN 39: Together Apart** - rat run 39: together apart normal sudoku rules apply.   aim of experiment: finkz and phinx must both reach different cup
-- [pz0m04p9ag](https://sudokupad.app/pz0m04p9ag) `sxsm` **Icy Escape** - icy escape normal sudoku rules apply.  you must find your way out of the icy cave. your path begins and ends at the corn
-- [qcccbe8xug](https://sudokupad.app/qcccbe8xug) `sxsm` **5's live in Foggy Flats** - ...t digits along each german whisper line must have a difference of at least 5. digits along each thermometer must increase starting from the 
-- [rfb5h314eq](https://sudokupad.app/rfb5h314eq) `sxsm` **Counting on Quiet Knights** - counting on quiet knights normal sudoku rules apply. a digit in a circle indicates how many times that digit appears in 
-- [s9cv8zfe81](https://sudokupad.app/s9cv8zfe81) `sxsm` **Fives Sudoku** - fives sudoku normal sudoku rules apply. digits in cells separated by a 5 must have either a sum or difference of 5. all 
-- [twqc1a8ybe](https://sudokupad.app/twqc1a8ybe) `sxsm` **Let's see where this goes** - let's see where this goes fill each row, column and box with the same 8 distinct digits from 1 to 9. the solver has to f
-- [udyn0tghcs](https://sudokupad.app/udyn0tghcs) `sxsm` **RAT RUN 34: On Reflection** - ...ed with a thin pink line).
-- [up5nrki10o](https://sudokupad.app/up5nrki10o) `sxsm` **RAT RUN 38: Synchronicity** - rat run 38: synchronicity normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach different cupca
-- [wqqeaa26jf](https://sudokupad.app/wqqeaa26jf) `sxsm` **The Whispering Forest** - ...column and region.  german whispers: adjacent digits on a green vine line must have a difference of at least 3.  knight's tour: sir doku mov
-- [wxhrpva2lr](https://sudokupad.app/wxhrpva2lr) `sxsm` **RAT RUN 12: Visiting Order** - ...ct path into 'index lines'; in any box, the nth cell visited by finkz is called 'position n'. (so, for example, in box 7, r9c2 is position 1
-- [xpkfq77yk0](https://sudokupad.app/xpkfq77yk0) `sxsm` **Fillominosaurus** - ...ins). a thick black line is a region border. adjacent digits on a dark green line differ by exactly 5. digits separated by a white dot are c
-- [ydgn4bxilt](https://sudokupad.app/ydgn4bxilt) `sxsm` **RAT RUN 28: Hypothesis** - rat run 28: hypothesis normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach different cupcakes
-- [ydykj28b2l](https://sudokupad.app/ydykj28b2l) `sxsm` **Kurodoku** - kurodoku chaos construction: place the digits from 1 to 9 exactly once in every row, column, and region. regions consist
-- [zsk8n4tjvw](https://sudokupad.app/zsk8n4tjvw) `sxsm` **RAT RUN 13: Triskaidekaphilia** - rat run 13: triskaidekaphilia normal sudoku rules apply.  aim of experiment: finkz the rat must reach the cupcake by fin
-- [4tc1g21b3x](https://sudokupad.app/4tc1g21b3x) `sxsm` **Pentomino Islands** - pentomino islands normal sudoku rules apply. adjacent digits on any pentomino must differ in value by at least 5.
+- _... 36 more (use `--n`)_
 
 ## renban  (`RENBAN_CUE_RE` vs tag `renban`)
 recall 94.4%  -  428 tagged, 404 hit, 24 missed, 36 false-positive
@@ -136,17 +101,42 @@ recall 94.4%  -  428 tagged, 404 hit, 24 missed, 36 false-positive
 - [james-sinclair/studious](https://sudokupad.app/james-sinclair/studious) `sxsm` **Studious** - ...bors by at least 5. renban lines: purple lines contain a non-repeating set of consecutive digits in any order.  find more puzzles like this 
 - [jbliq30p6u](https://sudokupad.app/jbliq30p6u) `sxsm` **Roots in the Fog** - ...ircle.  along green lines, neighboring values differ by at least 5. on each purple line, the set of values consists of consecutive integers 
 - [jl4sby2gl2](https://sudokupad.app/jl4sby2gl2) `sxsm` **The one and only sum** - ...igits along a green line must differ by at least 5. neighboring digits along an orange line must differ by at least 4. a pink line contains 
-- [ocw0x2hxdd](https://sudokupad.app/ocw0x2hxdd) `sxsm` **Three in the Spotlight** - ...traint (ie a single line, single dot, or single cage) must include at least one 3. three's company: every 3 must be horizontally adjacent (i
-- [pc6ejr0nze](https://sudokupad.app/pc6ejr0nze) `sxsm` **Dutch Flat Mates: Pick-up Sticks** - ...d (3,6,9). • a pink renban stick must contain a set of consecutive digits, arranged in some order. • along an orange dutch whisper stick, ad
-- [pnyv6sn7qm](https://sudokupad.app/pnyv6sn7qm) `sxsm` **Déjà Vu Part 1: Doublers** - ...rd region sum line, renban, nabner, thermo, kropki, xv, and quadruple rules apply, with respect to cell values.  region sum line: box border
-- [q83v6obrdn](https://sudokupad.app/q83v6obrdn) `sxsm` **Full Rank Tessellation** - full rank tessellation tessellation - fill each cell (octagons and squares) with a digit from 1-9.  - cells sharing an e
-- [qkmbbu7yux](https://sudokupad.app/qkmbbu7yux) `sxsm` **Lest We Forget** - ...nce of at least 5.  renban: the digits in the grey cross are from a consecutive sequence of digits.
-- [r411ysr073](https://sudokupad.app/r411ysr073) `sxsm` **Foggy Fireworks** - ...igh (7,8,9) digit.  renban lines: a purple line contains a set of consecutive digits. thermometer: along a grey line, digits strictly increa
-- [ydykj28b2l](https://sudokupad.app/ydykj28b2l) `sxsm` **Kurodoku** - kurodoku chaos construction: place the digits from 1 to 9 exactly once in every row, column, and region. regions consist
-- [yg5hbdwc6j](https://sudokupad.app/yg5hbdwc6j) `sxsm` **Entropic Toast** - ...e like digits along renban (purple) lines. digits inside a killer cage form a set of consecutive digits in any order  -- no guessing is need
-- [yjy08cqz6p](https://sudokupad.app/yjy08cqz6p) `sxsm` **∑ or μ** - ...igits on the golden line. the digits along each grey line must sum to 10. the four cells surrounding the white circle in box 6 must contain 
-- [yl0n45rfll](https://sudokupad.app/yl0n45rfll) `sxsm` **Yin Yang Doubler Uniqueness** - ...d 5 (value 10) on a renban, shaded 5 can't appear anywhere else on a renban, but unshaded 5 could because it has a value of 9.  renban: valu
-- [zeu960ln92](https://sudokupad.app/zeu960ln92?setting-nogrid=true) `sxsm` **Accounting Circles Tessellation** - accounting circles tessellation tessellation - fill each cell with a digit from 1-9. - cells sharing an edge can't have 
+- _... 11 more (use `--n`)_
+
+## nabner  (`NABNER_CUE_RE` vs tag `nabner`)
+recall 100.0%  -  39 tagged, 39 hit, 0 missed, 5 false-positive
+
+### MISSED (tagged, cue silent)
+
+_none_
+
+### FALSE POSITIVE (cue fired, no tag)
+
+- [2q3ha7ca76](https://sudokupad.app/2q3ha7ca76) `fpuz` **July 24, 2022: Antirenban** - july 24, 2022: antirenban normal sudoku rules apply. a cage may not contain any duplicated or consecutive digits. for in
+- [rlkbec6hy3](https://sudokupad.app/rlkbec6hy3) `fpuz` **Trickster** - ...igits along a green line must differ in value by at least 5. gold lines contain a non-repeating set of digits, and no two digits on the same
+- [etuf5ak2y4](https://sudokupad.app/etuf5ak2y4) `sxsm` **RAT RUN 8: Discontinuous** - ...ch must be a valid 'nabner line'; no two cells anywhere on a path segment can have consecutive or equal values. eg: if a path segment contai
+- [k4g3ubb8qe](https://sudokupad.app/k4g3ubb8qe) `sxsm` **Yin-Yang-Yong** - ...e of at least 5.  • nabner (yellow): no two digits anywhere on a yellow line may be consecutive (or the same.)  • entropic (orange): any gro
+- [pnyv6sn7qm](https://sudokupad.app/pnyv6sn7qm) `sxsm` **Déjà Vu Part 1: Doublers** - ...n sum line, renban, nabner, thermo, kropki, xv, and quadruple rules apply, with respect to cell values.  region sum line: box borders divide
+
+## ten line  (`TEN_LINE_CUE_RE` vs tag `ten_line`)
+recall 96.6%  -  29 tagged, 28 hit, 1 missed, 10 false-positive
+
+### MISSED (tagged, cue silent)
+
+- [LPMhrPLMDQ](https://sudokupad.app/LPMhrPLMDQ) `other` **Ace is High** - ...u rules apply. each line consists of one or more contiguous groups of cells, each of which sums to 10. these groups of cells cannot overlap.
+
+### FALSE POSITIVE (cue fired, no tag)
+
+- [9JLLbT9Jj7](https://sudokupad.app/9JLLbT9Jj7) `other` **Re-framed** - ...apply. along a blue line, each line segment within a different 3x3 box must sum to the same total. different lines may have different totals
+- [9R8DNm8dq6](https://sudokupad.app/9R8DNm8dq6) `other` **Buffet** - ...ve opposite parity; ten lines (gray/t): digits along a ten line must be entirely divided into non-overlapping groups of adjacent cells which
+- [Ftfnn4L2tQ](https://sudokupad.app/Ftfnn4L2tQ) `other` **10 (Types of) Lines** - 10 (types of) lines normal sudoku rules apply. digits in a circle appear at least once each in the four surrounding cells. from left t
+- [DrTgmjtJtq](https://sudokupad.app/DrTgmjtJtq) `other` **The Magic Column** - ...s along a thin blue line always add up to 10. blue lines never pass through any empty cells.
+- [2yiw0yc01y](https://sudokupad.app/2yiw0yc01y) `sxsm` **Tenfold** - tenfold normal sudoku rules apply. draw a one-cell-wide loop of orthogonally connected cells. the loop can't touch itsel
+- [7613uxdt7g](https://sudokupad.app/7613uxdt7g) `sxsm` **Quad Code** - ...digits along a grey line can be divided into one or more non-overlapping groups of adjacent cells, each of which sums to 10.  the digits in 
+- [7fapjms0yv](https://sudokupad.app/7fapjms0yv) `sxsm` **Dovetail** - ...whose digits sum to ten. eg 71246 is a valid fill for a length 5 line, because it can be broken into 712 and 46, each of which sum to 10. al
+- [aadq3z8j80](https://sudokupad.app/aadq3z8j80) `sxsm` **Right Twice a Day** - ...igits along a green line must differ by at least 5. each pink line contains a set of consecutive, non-repeating digits, which can appear in 
+- [iutvqv1ht8](https://sudokupad.app/iutvqv1ht8) `sxsm` **My First Soduko** - ...dark grey lines are ten lines which is an idea we stole from zetamaths. a ten line is made of groups of adjaxent digits which do'nt overlap 
+- [rjv6naxv8x](https://sudokupad.app/rjv6naxv8x) `sxsm` **Reg10ns** - ...es apply. each blue line is both a "region sum line" and a "10 line". region sum line: box borders divide each blue line into segments with 
 
 ## region sum  (`REGIONSUM_CUE_RE` vs tag `region_sum`)
 recall 94.5%  -  326 tagged, 308 hit, 18 missed, 41 false-positive
@@ -199,22 +189,7 @@ recall 94.5%  -  326 tagged, 308 hit, 18 missed, 41 false-positive
 - [if8eo8da5h](https://sudokupad.app/if8eo8da5h) `sxsm` **Guided Sums** - ...this line acts as a region sum line: box borders divide the line into segments with the same sum. each line must cross at least one box bord
 - [iovwq0jc5n](https://sudokupad.app/iovwq0jc5n) `sxsm` **Exclusive Lines** - ...zzle, all lines are region sum lines (ie the 3x3 box borders divide the lines into segments; each segment along an individual line has the s
 - [j22idv1qhe](https://sudokupad.app/j22idv1qhe) `sxsm` **Sudokulike (Dynamic Fog Edition)** - ...east 5. 1->2->3->4: region sum: box borders divided the path into segments of equal sums. 1->2->3->4->5: dutch whisper: two cells connected 
-- [james-sinclair/double-entendre](https://sudokupad.app/james-sinclair/double-entendre) `sxsm` **Double Entendre** - ...e connected circle. region sum lines: box borders divide each blue line into segments with the same sum. german whispers: along green lines,
-- [jl4sby2gl2](https://sudokupad.app/jl4sby2gl2) `sxsm` **The one and only sum** - ...rders dive the blue region sum line into segments with the same sum. the sum of all digits that belong to one constraint type (e.g. all digi
-- [k2fdb6ghnl](https://sudokupad.app/k2fdb6ghnl) `sxsm` **obezyanka nol** - ...ery row, column and region.  shade ten cells so that there is exactly one shaded cell in each row, column and region. shaded cells cannot co
-- [k4zgmts5h9](https://sudokupad.app/k4zgmts5h9) `sxsm` **RAT RUN: Hit and Miss** - rat run: hit and miss normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach the cupcakes by fin
-- [oj8y6yrx16](https://sudokupad.app/oj8y6yrx16?setting-foganim=1&setting-toolletter=1) `sxsm` **RAT RUN 19: Brainwaves** - rat run 19: brainwaves in this experiment, nine letters of the alphabet (to be determined) must be used to fill the grid
-- [pnyv6sn7qm](https://sudokupad.app/pnyv6sn7qm) `sxsm` **Déjà Vu Part 1: Doublers** - ...its cell.  standard region sum line, renban, nabner, thermo, kropki, xv, and quadruple rules apply, with respect to cell values.  region sum
-- [pyufyvwwpw](https://sudokupad.app/pyufyvwwpw) `sxsm` **Tree Squirrel** - ...ers divide the blue line into segments. each segment's total is found by summing the digits on that segment. the segment totals must increas
-- [qz9m4zn7nf](https://sudokupad.app/qz9m4zn7nf) `sxsm` **Blue Arrow** - ...ide the grid into 9 regions, each consisting of 9 orthogonally connected cells. place the digits 1-9 exactly once in every row, column, and 
-- [r3xtlrd6qv](https://sudokupad.app/r3xtlrd6qv) `sxsm` **Regional Differences** - regional differences normal sudoku rules apply.  box borders divide lines into segments. each sum of adjacent segments o
-- [rd2kn6vy6d](https://sudokupad.app/rd2kn6vy6d) `sxsm` **Regional Heatwave** - regional heatwave normal sudoku rules apply. some of the grid is covered in fog; entering a correct digit will clear all
-- [rmac5anfcn](https://sudokupad.app/rmac5anfcn) `sxsm` **How Shall We Split This?** - ...ules apply.  • each line is divided into segments at 'split points', to be discovered on certain cell edges crossed by the line. • each segm
-- [tdr0ywy332](https://sudokupad.app/tdr0ywy332) `sxsm` **Global Warming** - ...it grey thermometer lines into segments. starting from the bulb, the sum of each segment must increase. additionally, within each segment, s
-- [urooueeutg](https://sudokupad.app/urooueeutg) `sxsm` **Modular Zigzag** - modular zigzag normal sudoku rules apply. digits cannot repeat along the marked diagonal. every 2×2 square of cells must
-- [vcncpwgckm](https://sudokupad.app/vcncpwgckm) `sxsm` **RAT RUN 14: Thermoregulation** - rat run 14: thermoregulation normal sudoku rules apply.  aim of experiment: finkz the rat must reach the cupcake by find
-- [wv8l8x67dy](https://sudokupad.app/wv8l8x67dy) `sxsm` **RAT RUN 4: Borderline** - ...ath will be a valid region sum line - ie: box borders (dotted lines) will divide the path into segments which each have the same sum.
-- [wxhrpva2lr](https://sudokupad.app/wxhrpva2lr) `sxsm` **RAT RUN 12: Visiting Order** - ...ct path into 'index lines'; in any box, the nth cell visited by finkz is called 'position n'. (so, for example, in box 7, r9c2 is position 1
+- _... 16 more (use `--n`)_
 
 ## parity  (`PARITY_CUE_RE` vs tag `parity_line`)
 recall 95.1%  -  41 tagged, 39 hit, 2 missed, 37 false-positive
@@ -251,18 +226,7 @@ recall 95.1%  -  41 tagged, 39 hit, 2 missed, 37 false-positive
 - [iwfv5d36aw](https://sudokupad.app/iwfv5d36aw) `sxsm` **Zipper Gramophone** - ...its, in any order.  parity lines (peach): digits along a peach 'parity line' must alternate between odd and even.
 - [jfpmjqq6pw](https://sudokupad.app/jfpmjqq6pw) `sxsm` **Augen auf beim Rat(t)enkauf!** - ...ermo from the bulb. parity: adjacent digits on a red line differ in parity. kropki pairs: black dots indicate digits in a 1:2 ratio, white d
 - [jfyralmfoe](https://sudokupad.app/jfyralmfoe) `sxsm` **Breadcrumbs** - ...g. if one cell on a parity line contains a 5, then no other cell on a parity line may contain a 5.  constraints:  a) along a red line, adjac
-- [l00604nlbr](https://sudokupad.app/l00604nlbr) `sxsm` **Lupin's Loop 2 - Space Invasion** - ...along the loop, one parity forces the route to turn (making a 90° angle) while the other forces it to continue straight (making a 180° angle
-- [ndo5ff4agt](https://sudokupad.app/ndo5ff4agt) `sxsm` **Limitations 8** - ... red line alternate parity (odd/even);  5) adjacent digits along a grey line have the same difference. (separate lines may have different di
-- [nw6kb2aayl](https://sudokupad.app/nw6kb2aayl) `sxsm` **Snake Egg Sudoku** - snake egg sudoku normal sudoku rules apply. in addition, the grid contains four snakes, each starting and ending on the 
-- [r3n9cwda1t](https://sudokupad.app/r3n9cwda1t) `sxsm` **Rip City** - ...lumn, row, and box  parity line: adjacent digits on the red line alternate between even and odd digits  white kropki dots: white dots separa
-- [up5nrki10o](https://sudokupad.app/up5nrki10o) `sxsm` **RAT RUN 38: Synchronicity** - rat run 38: synchronicity normal sudoku rules apply.  aim of experiment: finkz and phinx must both reach different cupca
-- [vanmy8509l](https://sudokupad.app/vanmy8509l) `sxsm` **Assembly Required** - ...tive digits along a parity line have different parity.  arrows, region sums, renbans, dutch whispers, and parity lines are not given and mus
-- [w6uzuj1m0m](https://sudokupad.app/w6uzuj1m0m) `sxsm` **Befuddlement** - ...f there is a 2 on a parity line, 2 or double 1 can't appear anywhere else on a parity line, but double 2 could because it has a value of 4. 
-- [wv01avmfs9](https://sudokupad.app/wv01avmfs9) `sxsm` **RAT RUN 5: Disparity** - rat run 5: disparity normal sudoku rules apply: place the digits 1-9 in each row, column, and 3x3 box (marked with dotted lines.)  aim
-- [x0xwsud0hq](https://sudokupad.app/x0xwsud0hq) `sxsm` **Fibreglass Acoustic Diffusers** - ...have the same sum.  parity line: each pair of adjacent digits on the red 'a' must contain one odd and one even digit.  german whisper line: 
-- [xag582l3t0](https://sudokupad.app/xag582l3t0) `sxsm` **Bits & Nibbles** - ...sudoku rules apply. parity counter lines: the two digits at the ends of each line indicate the number of odd and even digits in that line, i
-- [y23lun2exp](https://sudokupad.app/y23lun2exp) `sxsm` **Parity Snakes** - parity snakes normal sudoku rules apply. digits separated by a white dot must be consecutive (not all dots are given). a
-- [y697kc2umn](https://sudokupad.app/y697kc2umn) `sxsm` **Dovetail** - ...odular lines (mod), parity lines (par), german whispers (gw), double arrows (da), ten lines (ten), region sum lines (rsl), and entropic line
+- _... 12 more (use `--n`)_
 
 ## zipper  (`ZIPPER_CUE_RE` vs tag `zipper`)
 recall 96.9%  -  64 tagged, 62 hit, 2 missed, 7 false-positive
@@ -282,8 +246,40 @@ recall 96.9%  -  64 tagged, 62 hit, 2 missed, 7 false-positive
 - [yiaonocy5d](https://sudokupad.app/yiaonocy5d) `sxsm` **...What?** - ...s are given. - grey lines are palindromes, i.e. digits equidistant from a grey line's center are always the same. - those are all the rules.
 - [zqpxetdz7a](https://sudokupad.app/zqpxetdz7a) `sxsm` **Hungry Rabbit in the Fog** - ...he tip.  region sum line: within each box, the total value of all cells along the blue region sum line must be equal.  palindrome: along a g
 
+## palindrome  (`PALINDROME_CUE_RE` vs tag `palindrome`)
+recall 100.0%  -  132 tagged, 132 hit, 0 missed, 5 false-positive
+
+### MISSED (tagged, cue silent)
+
+_none_
+
+### FALSE POSITIVE (cue fired, no tag)
+
+- [2lins9ixrk](https://sudokupad.app/2lins9ixrk) `fpuz` **The Box** - ...x is a quasi-thermo-palindrome, increasing in both directions from an unknown bulb.
+- [4pd5gy143h](https://sudokupad.app/4pd5gy143h) `sxsm` **Goalie** - ...igits along a green line must differ by at least 5. digits along a grey line must read the same way backwards and forwards. the digit in the
+- [6nqzhupznu](https://sudokupad.app/6nqzhupznu) `sxsm` **Cantor's Blue!** - ...digits along a grey line read the same forwards and backwards.
+- [ayk7228tr8](https://sudokupad.app/ayk7228tr8) `sxsm` **One Of The Two** - ... 15  one of the red lines contains a set of distinct consecutive digits in any order, while adjacent digits on the other line must differ by
+- [j22idv1qhe](https://sudokupad.app/j22idv1qhe) `sxsm` **Sudokulike (Dynamic Fog Edition)** - ...ses (you start with palindrome): 1->2 : palindrome: digits on a palindrome path read the same forwards and backwards. 1->2->3: german whispe
+
+## same difference  (`SAMEDIFF_CUE_RE` vs tag `same_difference`)
+recall 86.1%  -  36 tagged, 31 hit, 5 missed, 3 false-positive
+
+### MISSED (tagged, cue silent)
+
+- [v5fyfcm6yj](https://sudokupad.app/v5fyfcm6yj) `fpuz` **Dot.Com Sudoku** - ... of digits have the same sum. a minus sign indicates that those both pairs have the same difference. not all pluses or minuses are given.
+- [jeu4qiw80c](https://sudokupad.app/jeu4qiw80c) `fpuz` **Disco floor** - ...u rules apply. each line has a unique non-negative number associated with it. this number indicates the difference between adjacent digits a
+- [F28G66PTLg](https://sudokupad.app/F28G66PTLg) `other` **Fare thee well, Miss Carousel** - ...e diagonal have the same difference as the two digits in its negative diagonal. this difference is not necessarily the same for different 2x
+- [H3MfbFJ83R](https://sudokupad.app/H3MfbFJ83R) `other` **Manatee Meadow** - ...e dot differ by the same value, to be determined. not all such dots are given.
+- [uojuxaw1qw](https://sudokupad.app/uojuxaw1qw?setting-nogrid=1) `sxsm` **Space Invaders** - ...a 𐌔 always have the same difference.  turrets - strategically place 3 turrets into cells in the bottom row. each turret has as many missiles
+
+### FALSE POSITIVE (cue fired, no tag)
+
+- [k4g3ubb8qe](https://sudokupad.app/k4g3ubb8qe) `sxsm` **Yin-Yang-Yong** - ...consecutive (or the same.)  • entropic (orange): any group of 3 adjacent cells on an orange line must contain one low digit (1, 2 or 3), one
+- [philip-newman/2026-03-18-easy-as-17-42-67-v2](https://sudokupad.app/philip-newman/2026-03-18-easy-as-17-42-67-v2) `sxsm` **2026-03-18: Easy As 17-42-67** - ...acent digits on the same line differ by the same amount. for example, a sequence line could be 1-2-3-4 (difference of 1), 1-5-9 (difference 
+- [philip-newman/20260530-that-feeling-won](https://sudokupad.app/philip-newman/20260530-that-feeling-won) `sxsm` **2026-05-30: That Feeling Won** - ...acent digits on the same line differ by the same amount. for example, a sequence line could be 1-2-3-4 (difference of 1), 1-5-9 (difference 
+
 ## entropic  (`ENTROPIC_CUE_RE` vs tag `entropic_line`)
-recall 88.9%  -  72 tagged, 64 hit, 8 missed, 17 false-positive
+recall 90.3%  -  72 tagged, 65 hit, 7 missed, 17 false-positive
 
 ### MISSED (tagged, cue silent)
 
@@ -292,7 +288,6 @@ recall 88.9%  -  72 tagged, 64 hit, 8 missed, 17 false-positive
 - [qss44f03sx](https://sudokupad.app/qss44f03sx) `fpuz` **Year of the Snake** - ...as both modular and entropic properties.
 - [26rwya5ujt](https://sudokupad.app/26rwya5ujt) `other` **June 7, 2025: Four Years** - ...ly. along each gray line, every digit is either higher than all of the digits it is directly connected to, or lower than all of the digits i
 - [pTPD72D9qP](https://sudokupad.app/pTPD72D9qP) `other` **Everything in its Right Place** - ...same. one snake is “entropic”; along it, any group of 3 adjacent cells must contain one low digit (1, 2 or 3), one medium digit (4, 5 or 6) 
-- [1cwnilmrp0](https://sudokupad.app/1cwnilmrp0) `sxsm` **Two Out of Three Ain't Bad** - ...tly two of modular, entropic, or parity. - modular lines: any set of three adjacent digits along a modular line has three different remainde
 - [74j61weh89](https://sudokupad.app/74j61weh89) `sxsm` **The Heat Is On** - ...lumn, or box.  anti-entropy: no pair of orthogonally adjacent cells can contain digits from the same entropic set. the entropic sets are low
 - [8jf1461dp3](https://sudokupad.app/8jf1461dp3) `sxsm` **Dippin' Dots** - ... and from different entropic sets (123/456/789). digits in killer cages do not repeat and must sum to the number in the top left of the cage
 
@@ -374,23 +369,36 @@ recall 94.4%  -  444 tagged, 419 hit, 25 missed, 45 false-positive
 - [xc7i2ozu0f](https://sudokupad.app/xc7i2ozu0f) `other` **Cheese, Wine & Bread** - ...ku rules apply. all thermometers are slow thermos. digits must increase or stay the same on each step from the bulb to the tip.
 - [3nkifpknc6](https://sudokupad.app/3nkifpknc6) `sxsm` **Lief, the Univeres, and Everythign** - ...t wrogn.  ambiguous thermos: digits along a gray line must strictly increase from one end to the other.  ascending starters: a clue outside 
 - [d5s2c3o5j3](https://sudokupad.app/d5s2c3o5j3) `sxsm` **Lost and Found** - ...ttached bulb.  slow thermometers: digits along a thermometer must not decrease from the bulb end to the tip.  german whispers line: two cell
-- [el9sus7p0o](https://sudokupad.app/el9sus7p0o) `sxsm` **Pseudo Cluedo** - ...e same (like a slow thermometer). you must never move from a higher value to a lower value.  pseudo cells: • every row, column and room has 
-- [foesxbaf60](https://sudokupad.app/foesxbaf60) `sxsm` **Let's Get Kraken** - ...ips, digits along a thermometer must either increase or stay the same. adjacent digits along the green line have a difference of at least fi
-- [iutvqv1ht8](https://sudokupad.app/iutvqv1ht8) `sxsm` **My First Soduko** - ...long the light grey thermomometer must increase as you move away from the end with the blub.  ditgits on a light blue arrow sum to whats in 
-- [james-sinclair/halfway-there](https://sudokupad.app/james-sinclair/halfway-there) `sxsm` **Halfway There** - ...e connected circle. thermometers: values on thermometers strictly increase from the bulb. values in cells separated by a v sum to 5. values 
-- [jfyralmfoe](https://sudokupad.app/jfyralmfoe) `sxsm` **Breadcrumbs** - ...  e) digits along a thermometer increase from bulb to tip;  f) a cell with arrows pointing inward must be smaller than all other cells that 
-- [jl4sby2gl2](https://sudokupad.app/jl4sby2gl2) `sxsm` **The one and only sum** - ...order. along a gray thermometer, digits must strictly increase from the bulb end. each set of three consecutive cells along a peach entropic
-- [llm83vvquh](https://sudokupad.app/llm83vvquh) `sxsm` **cento mani e cento occhi** - ...gits along the slow thermometer line increase or stay the same starting from its only bulb end. the position of the single bulb end is to be
-- [n8gezvtat5](https://sudokupad.app/n8gezvtat5) `sxsm` **The Archer's Dozen** - ...sper line or a slow thermometer, starting from the arrow tip. the applicable rule may vary between arrows and must be deduced by the solver.
-- [philip-newman/20260312-good-grief](https://sudokupad.app/philip-newman/20260312-good-grief) `sxsm` **2026-03-12: Good Grief** - ...u rules apply. slow thermo: digits along slow thermometers must increase or stay the same moving from bulb to tip.  view gas on gmpuzzles: h
-- [philip-newman/20260418-slow-ride](https://sudokupad.app/philip-newman/20260418-slow-ride) `sxsm` **2026-04-18: Slow Ride** - ...u rules apply. slow thermo: digits along slow thermometers must increase or stay the same moving from bulb to tip.  view gas on gmpuzzles: h
-- [pnyv6sn7qm](https://sudokupad.app/pnyv6sn7qm) `sxsm` **Déjà Vu Part 1: Doublers** - ...ne, renban, nabner, thermo, kropki, xv, and quadruple rules apply, with respect to cell values.  region sum line: box borders divide the blu
-- [qcccbe8xug](https://sudokupad.app/qcccbe8xug) `sxsm` **5's live in Foggy Flats** - .... digits along each thermometer must increase starting from the bulb end. the grid is partially covered with fog. correctly placed digits wi
-- [qes8ggvsi4](https://sudokupad.app/qes8ggvsi4) `sxsm` **The Hare and the Tortoise** - ...ise’s line, a ‘slow thermo’ by name, the digits can increase or just stay the same. hare’s line is a ‘fast thermo’: digits still climb, but 
-- [r411ysr073](https://sudokupad.app/r411ysr073) `sxsm` **Foggy Fireworks** - ...consecutive digits. thermometer: along a grey line, digits strictly increase from bulb to tip. kropki dots: a white dot connects two consecu
-- [sr3ev8r4sd](https://sudokupad.app/sr3ev8r4sd) `sxsm` **Up Up and Away** - ... rules apply.  slow thermo: digits on the slow thermo may not decrease starting at the bulb.  running start: outside clues on the slow therm
-- [vcncpwgckm](https://sudokupad.app/vcncpwgckm) `sxsm` **RAT RUN 14: Thermoregulation** - rat run 14: thermoregulation normal sudoku rules apply.  aim of experiment: finkz the rat must reach the cupcake by finding a path t
-- [vnxrlvh04f](https://sudokupad.app/vnxrlvh04f) `sxsm` **Anti-knight Singularis Alchemis** - ... digit. digits on a thermometer must not decrease from the bulb end. connected digits on a green line must differ by at least 5. digits in a
-- [vriogscu49](https://sudokupad.app/vriogscu49) `sxsm` **Red Light, Green Light** - ...ne are distinct. furthermore, any three (not necessarily adjacent!) distinct digits {x,y,z} on a red line satisfy the triangle inequality, i
-- [vw1q7megqm](https://sudokupad.app/vw1q7megqm) `sxsm` **The Slowest Snake** - ... and acts as a slow thermometer i.e. reading from one end to the other, digits on the snake increase or stay the same (the direction must be
-- [z7oxi1ve8x](https://sudokupad.app/z7oxi1ve8x) `sxsm` **Thermohaline Circulation** - thermohaline circulation standard sudoku rules apply.  loop: shade some cells to form a 1-cell-wide orthogonally connect
+- _... 20 more (use `--n`)_
+
+## double arrow  (`DOUBLEARROW_CUE_RE` vs tag `double_arrow`)
+recall 92.6%  -  27 tagged, 25 hit, 2 missed, 6 false-positive
+
+### MISSED (tagged, cue silent)
+
+- [0m0zb2b86m](https://sudokupad.app/0m0zb2b86m) `sxsm` **Spread** - spread double arrows, product squares   -normal sudoku rules apply.  -the sum of digits along a line between two circles is equ
+- [ur11o44tv3](https://sudokupad.app/ur11o44tv3) `sxsm` **Weird Arrows** - weird arrows normal sudoku rules apply.  bulbous arrows - the sum of the digits in white bulb equals the sum of the digi
+
+### FALSE POSITIVE (cue fired, no tag)
+
+- [5k5lcjymlk](https://sudokupad.app/5k5lcjymlk) `fpuz` **Rod of Eternal Coherence** - ...digits where one is double the other, while two digits connected by a white dot have difference of 1. not all black dots and white dots are 
+- [hrDLhB43b8](https://sudokupad.app/hrDLhB43b8) `other` **Prison Break** - ...ed to the line. all double arrows in the grid are straight lines (ie. they do not turn at intersections).
+- [4ctb5mbrk8](https://sudokupad.app/4ctb5mbrk8) `sxsm` **Twirled mermaid goes forklift** - ...t of a teal modular line contains one digit from the groups 147, 258 and 369. the sum of the digits on a thin gray line equals the sum of th
+- [7fapjms0yv](https://sudokupad.app/7fapjms0yv) `sxsm` **Dovetail** - ... cannot repeat on a line. digits along a grey line can be broken into non-overlapping segments whose digits sum to ten. eg 71246 is a valid 
+- [olig7yj3gj](https://sudokupad.app/olig7yj3gj) `sxsm` **Double Arrow Melt** - double arrow melt normal sudoku rules apply. doublers: there are 18 doubler cells in the grid - 2 in each row, column an
+- [1hw0n0t5gt](https://sudokupad.app/1hw0n0t5gt) `sxsm` **Double Nickels On The Dime** - double nickels on the dime normal sudoku rules apply. digits along a grey line must have the same sum as the digits in t
+
+## lockout  (`LOCKOUT_CUE_RE` vs tag `lockout_line`)
+recall 100.0%  -  2 tagged, 2 hit, 0 missed, 5 false-positive
+
+### MISSED (tagged, cue silent)
+
+_none_
+
+### FALSE POSITIVE (cue fired, no tag)
+
+- [u2361pezfa](https://sudokupad.app/u2361pezfa) `fpuz` **Dec 27, 2021: Lockout Lines** - dec 27, 2021: lockout lines normal sudoku rules apply.  the grid also contains some cells that are marked with diamonds. if two diamon
+- [5t5cagkrax](https://sudokupad.app/5t5cagkrax) `fpuz` **Aug 12, 2022: Lockout Lines** - aug 12, 2022: lockout lines normal sudoku rules apply. if two diamonds are directly connected by a line, then the numbers in the diamo
+- [f9a2chdekr](https://sudokupad.app/f9a2chdekr) `fpuz` **Mar 17, 2022: Lockout Lines** - mar 17, 2022: lockout lines normal sudoku rules apply. two connected diamonds must contain numbers with a difference of at least 4, an
+- [uyol9lzyp5](https://sudokupad.app/uyol9lzyp5) `other` **March 25, 2024: Lockout Lines** - march 25, 2024: lockout lines normal sudoku rules apply. there are some lines in the grid with diamonds at each end. for each line, the 
+- [k18i652bjj](https://sudokupad.app/k18i652bjj) `sxsm` **Within and without** - ...n, and box  between lines: digits on a thin grey line must be between the digits in the circles  locked-out lines: digits on a thick blue li

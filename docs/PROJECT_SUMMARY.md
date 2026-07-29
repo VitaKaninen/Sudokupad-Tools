@@ -531,14 +531,28 @@ way so it stays low-maintenance.
   drawn may fail on an untouched grid and that report is wanted, but reasoning backwards from it to
   "the rules must mean something else here, so switch off" is the solver's job (the reverted v3.165
   `LINE_MORPH_RE` guard; see VALIDATORS.md).
-  **Shared circle/bulb reader (v3.120): `getCellCenteredCircles`** — every
-  cell-centred round marker in `#overlay`/`#underlay` (SudokuPad draws them as rounded `<rect>`s,
-  rx ≈ w/2, never `<svg:circle>`); read by the sum-arrow bulb detector, the between-line endpoint
-  circles *and* the eyeball's geometry-matched rings, so add new circle consumers here rather than
-  re-deriving the geometry. Between lines derive their clues by **walking the drawn-step graph**
-  between circles (`betweenSegments` / `lineStepGraph` / `walkBetweenSegment`, v3.121) instead of
-  trusting stroke order — a stroke threading N circles is N−1 clues, and a line continues *straight*
-  through a crossing even where the stored polyline turns there. Its button, menu and toasts live in the right-hand column — see "The right-hand
+  **Lockout lines (v3.167): `classifyLockoutLines` / `computeLockoutRemovals` /
+  `lockoutSegmentSupport` / `lockoutOutside` / `lockoutMinGap`** — the between line's mirror, drawn
+  diamond-to-diamond: the two diamonds differ by ≥4 (the gap is READ from a diamond/endpoint sentence,
+  not hardcoded) and every interior digit sits strictly OUTSIDE the range they span. Support is
+  computed whole — every feasible diamond pair, keeping only those whose interiors fit outside the
+  range *simultaneously* — so a per-cell interval test's blind spot can't reach it. f-puzzles declares
+  it (`lockout`/`lockoutline`); the payload veto is narrower than between's (`hasNativeLineConstraints`,
+  because `u2361pezfa` is an fpuz lockout puzzle drawn entirely in cosmetics).
+  **Shared endpoint-marker readers (v3.120 / v3.167): `getCellCenteredCircles` +
+  `getCellCenteredDiamonds`** — every cell-centred round marker in `#overlay`/`#underlay` (SudokuPad
+  draws them as rounded `<rect>`s, rx ≈ w/2, never `<svg:circle>`) and its diamond twin (a square rect
+  carrying `rotate(45)`, *or* a closed four-point path drawn inside one cell). Circles are read by the
+  sum-arrow bulb detector, the between-line endpoints *and* the eyeball's geometry-matched rings;
+  diamonds by the lockout validator and its eyeball. Add new marker consumers here rather than
+  re-deriving the geometry. Both clue types derive their clues by **walking the drawn-step graph**
+  between markers (`markerSegments` / `lineStepGraph` / `walkBetweenSegment`, v3.121, made
+  marker-agnostic in v3.167 — `betweenSegments` = circles/minLen 3, `lockoutSegments` =
+  diamonds/minLen 2) instead of
+  trusting stroke order — a stroke threading N markers is N−1 clues, and a line continues *straight*
+  through a crossing even where the stored polyline turns there. The interior-seating search
+  `interiorsFeasible` is shared the same way (between = inside the interval, lockout = outside it).
+  Its button, menu and toasts live in the right-hand column — see "The right-hand
   column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).

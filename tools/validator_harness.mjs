@@ -76,6 +76,7 @@ const NAMES = [
   'SAMEDIFF_ADJDIFF_RE', 'SAMEDIFF_BOUNDED_RE', 'SAMEDIFF_PERLINE_RE',
   'SAMEDIFF_THATNUM_RE', 'hasPerLineConstDiffCue',
   'BETWEEN_CUE_RE', 'BETWEEN_CLAUSE_RE', 'BETWEEN_LOCKOUT_RE',
+  'LOCKOUT_CUE_RE', 'LOCKOUT_CLAUSE_RE', 'LOCKOUT_GAP_RE',
   'DOUBLEARROW_NAME_RE', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE',
   'DOUBLEARROW_CLAUSE_RE', 'doubleArrowCueFires',
   'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'ENTROPIC_SET_RE',
@@ -83,9 +84,11 @@ const NAMES = [
   'MODULAR_CUE_RE', 'MODULAR_SET_RE', 'MODULAR_CLAUSE_RE', 'hasModularCue',
   // line-type labels ("…double arrows (DA)…" + a sticker on the line)
   'LABEL_DEF_RE', 'labelDefPhrases',
-  // between-line interval maths + bulb pruning + circle segmentation
-  'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
+  // between-line interval maths + bulb pruning + marker segmentation
+  'interiorsFeasible', 'betweenDigitAllowed', 'betweenInteriorsFeasible', 'betweenBulbDigitAllowed',
   'lineStepGraph', 'reflectCellKey', 'walkBetweenSegment',
+  // lockout-line support (the between line's mirror)
+  'lockoutOutside', 'lockoutSegmentSupport',
   // zipper stroke-joining + fold centre
   'mergeLineStrokes', 'lineClueChains', 'zipperChains', 'zipperFoldCenter',
   // cage maths
@@ -535,6 +538,124 @@ checkTrue('dutch lockout guard: the word lockout (u0cs9m2qmx)',
 // …and a genuine Dutch whisper must NOT be demoted by it.
 checkFalse('dutch lockout guard: a real Dutch whisper is untouched',
   F.DUTCH_LOCKOUT_RE.test('dutch whisper line: digits along an orange line differ by at least 4'));
+
+// ── LOCKOUT LINES (v3.167) ──────────────────────────────────────────────────
+// The cue, against the rules blob of each catalogued lockout puzzle (blobs are
+// title+rules, lowercased — six of the seven carry "lockout" in the title).
+const lockoutBlobs = {
+  u2361pezfa: 'dec 27, 2021: lockout lines the grid also contains some cells that are marked with diamonds. if two diamonds are joined by a line, then the digits in the diamonds differ by at least 4',
+  '5t5cagkrax': 'aug 12, 2022: lockout lines if two diamonds are directly connected by a line, then the numbers in the diamonds must differ by at least 4, and the numbers on the line must not be between the numbers in the diamonds',
+  f9a2chdekr: 'mar 17, 2022: lockout lines two connected diamonds must contain numbers with a difference of at least 4, and all digits on the line connecting them must lie strictly outside the range defined by those two numbers',
+  FLqFBMpTJB: 'four lockout lines digits on the diamond endpoints of a purple line must have a difference of at least 4 and the remaining digits on the line cannot be between or equal to the digits on the endpoints',
+  u0cs9m2qmx: 'lockout lines turn 4 lockout lines: digits on blue lines can not be between or equal to the digits in the diamonds at the ends of the line',
+  uyol9lzyp5: 'march 25, 2024: lockout lines there are some lines in the grid with diamonds at each end. for each line, the digits in the two diamonds must have a difference of 4 or more',
+};
+Object.keys(lockoutBlobs).forEach((id) =>
+  checkTrue(`lockout cue: fires on ${id}`, F.LOCKOUT_CUE_RE.test(lockoutBlobs[id])));
+// The one puzzle that never says "lockout" OR "diamond" — it is caught only by the
+// outside/endpoints branch, which is why that branch exists.
+const trickling = "trickling down digits on a line must fall 'outside' the range of their yellow endpoints. each endpoint value must differ by at least 4 from other directly connected endpoints";
+checkTrue('lockout cue: rGF3gpgnmM has neither "lockout" nor "diamond"',
+  !/lock-?out|diamond/.test(trickling));
+checkTrue('lockout cue: …and the outside/endpoints branch still catches it',
+  F.LOCKOUT_CUE_RE.test(trickling));
+// The near-misses the cue must NOT claim: a plain BETWEEN line states the opposite
+// rule with the same nouns, and "block out" must not read as "lock out".
+checkFalse('lockout cue: a plain between line is not a lockout line',
+  F.LOCKOUT_CUE_RE.test('digits along a line must lie strictly between the digits in the attached circles'));
+checkFalse('lockout cue: "block out" does not read as lockout',
+  F.LOCKOUT_CUE_RE.test('the shaded cells block out part of the grid'));
+// The name branch must name the CLUE TYPE. `s64txn1v6l` "RAT RUN 35: Locked Out" is a
+// maze puzzle with a punning title and no lockout line anywhere — a bare /lock-?out/
+// claimed its cosmetics.
+checkFalse('lockout cue: a punning title is not a clue type (s64txn1v6l)',
+  F.LOCKOUT_CUE_RE.test('rat run 35: locked out normal sudoku rules apply. finkz and phinx must both reach different cupcakes'));
+// …while a puzzle that spells the type out with a hyphen still fires (k18i652bjj).
+checkTrue('lockout cue: "locked-out lines:" (k18i652bjj)',
+  F.LOCKOUT_CUE_RE.test('locked-out lines: digits on a thick blue line must not be between the digits in the diamonds'));
+// The CLAUSE must read every colour-naming clause its cue fires on (the standing
+// clause/cue rule — a cue its clause can't read is a guaranteed AMBIGUOUS).
+checkTrue('lockout clause: "…diamond endpoints of a purple line…" (FLqFBMpTJB)',
+  F.LOCKOUT_CLAUSE_RE.test('digits on the diamond endpoints of a purple line must have a difference of at least 4'));
+checkTrue('lockout clause: "…blue lines … digits in the diamonds…" (u0cs9m2qmx)',
+  F.LOCKOUT_CLAUSE_RE.test('digits on blue lines can not be between or equal to the digits in the diamonds at the ends of the line'));
+checkTrue("lockout clause: \"…'outside' the range of their yellow endpoints\" (rGF3gpgnmM)",
+  F.LOCKOUT_CLAUSE_RE.test("digits on a line must fall 'outside' the range of their yellow endpoints"));
+// Bare "endpoints" is deliberately absent: BETWEEN_CLAUSE_RE owns that word, and the
+// first matching clause wins — claiming a between clause would apply the OPPOSITE rule.
+checkFalse('lockout clause: a bare between clause is left to the between validator',
+  F.LOCKOUT_CLAUSE_RE.test('cells along gray lines between two filled circles'));
+
+// The gap: every catalogued puzzle states 4, in one of two phrasings.
+check('lockout gap: "differ by at least 4"',
+  +(F.LOCKOUT_GAP_RE.exec('the numbers in the diamonds must differ by at least 4') || [])[1], 4);
+check('lockout gap: "a difference of 4 or more"',
+  +(F.LOCKOUT_GAP_RE.exec('the digits in the two diamonds must have a difference of 4 or more') || [])[2], 4);
+
+// ── lockout support maths ───────────────────────────────────────────────────
+// The rule's own worked example (f9a2chdekr): "on a line whose diamonds contain 2
+// and 7, the only permissible numbers are 1, 8 and 9."
+check('lockout: diamonds 2 & 7 permit only 1,8,9',
+  [1,2,3,4,5,6,7,8,9].filter((d) => F.lockoutOutside(2, 7, d)), [1,8,9]);
+// u2361pezfa's example: diamonds 1 & 6 → 7,8,9 only.
+check('lockout: diamonds 1 & 6 permit only 7,8,9',
+  [1,2,3,4,5,6,7,8,9].filter((d) => F.lockoutOutside(1, 6, d)), [7,8,9]);
+
+const all9 = [1,2,3,4,5,6,7,8,9];
+const noConflict = () => false;
+const allDiffer = () => true;
+const supp = (a, b, inner, differs, gap) =>
+  F.lockoutSegmentSupport(a, b, inner, differs, gap === undefined ? 4 : gap);
+const asArr = (s) => Array.from(s).sort((x, y) => x - y);
+
+// A solved pair 2/7 with one free interior: the interior keeps exactly the outside
+// digits, and the diamonds keep themselves.
+let s = supp([2], [7], [all9], noConflict);
+check('lockout support: interior of a solved 2–7 line keeps 1,8,9', asArr(s.inner[0]), [1,8,9]);
+check('lockout support: that pair is feasible', s.pairs, 1);
+// THE GAP IS A REAL ELIMINATION IN ITS OWN RIGHT — a 2-cell segment has no interior,
+// but a diamond of 3 against an opposite diamond of {1..9} still loses 1,2,3,4,5,6.
+s = supp(all9, [3], [], noConflict);
+check('lockout support: gap 4 against a solved 3 leaves 7,8,9 (and nothing below)',
+  asArr(s.a), [7,8,9]);
+// A stated gap larger than 4 narrows it further; a smaller one widens it.
+check('lockout support: gap 6 against a solved 3 leaves only 9',
+  asArr(supp(all9, [3], [], noConflict, 6).a), [9]);
+check('lockout support: gap 2 against a solved 3 leaves 1,5..9',
+  asArr(supp(all9, [3], [], noConflict, 2).a), [1,5,6,7,8,9]);
+
+// SIMULTANEITY IS LOAD-BEARING, exactly as it is for between's bulbs. Four interior
+// cells that must all differ, each pencilled {1,2,3,4}: the pair 4/8 forbids 4..8, so
+// the four cells need four distinct digits from {1,2,3,9} ∩ {1,2,3,4} = {1,2,3} —
+// impossible. A per-cell test would have accepted it (each cell alone can take 1).
+const four1234 = [[1,2,3,4],[1,2,3,4],[1,2,3,4],[1,2,3,4]];
+check('lockout support: 4/8 cannot seat four distinct cells of {1,2,3,4}',
+  supp([4], [8], four1234, allDiffer).pairs, 0);
+checkTrue('lockout support: …but it can when they may repeat (why differs() matters)',
+  supp([4], [8], four1234, noConflict).pairs === 1);
+// Three such cells DO fit under 4/8 (1,2,3 distinct), which is what makes the case
+// above a real deduction rather than an artifact of the search.
+check('lockout support: three distinct {1,2,3,4} cells fit under 4/8',
+  supp([4], [8], four1234.slice(0, 3), allDiffer).pairs, 1);
+
+// STRUCTURAL IMPOSSIBILITY (v3.157) is this same engine run mark-free. The widest
+// outside region a gap-4 pair leaves over 1-9 is four digits (1/5 → {6,7,8,9}), so a
+// lockout line with FIVE mutually-conflicting interior cells can never be filled —
+// and the validator must report that, not wipe the cells.
+const fullInner = (n) => Array.from({ length: n }, () => all9);
+check('lockout structural: 4 mutually-differing interior cells are fillable',
+  supp(all9, all9, fullInner(4), allDiffer).pairs > 0, true);
+check('lockout structural: 5 are not (the impossible-clue report)',
+  supp(all9, all9, fullInner(5), allDiffer).pairs, 0);
+// Repeats are legal along a lockout line, so length alone never makes one impossible.
+check('lockout structural: ten interior cells are fine when they may repeat',
+  supp(all9, all9, fullInner(10), noConflict).pairs > 0, true);
+
+// Segmentation: a diamond terminates a line segment (u0cs9m2qmx says so), and unlike
+// between, a 2-cell diamond-to-diamond run IS a clue — hence minLen 2.
+check('lockout walk: adjacent diamonds still yield a segment (between refuses this)',
+  segOf(F.walkBetweenSegment(F.lineStepGraph([['0,0', '1,0']]), { '0,0': 1, '1,0': 1 }, '0,0', '1,0', 2)),
+  '0,0 1,0');
 // Entropic (v3.85 ANTI traps + v3.88 described-set gated on a line-ish noun)
 checkTrue('entropic cue: named', F.hasEntropicCue('entropic lines: every run of three cells contains a low, a medium and a high digit'));
 // The ANTI guard is applied in classifyEntropicLines, ONE LAYER ABOVE the cue —

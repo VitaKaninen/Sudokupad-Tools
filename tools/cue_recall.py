@@ -52,6 +52,7 @@ VALIDATORS = [
     # recall printed here is a LOWER BOUND (one puzzle short: 0m0zb2b86m, titled
     # "Double Arrows, Product Squares").
     ('double arrow', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE', 'double_arrow', None),
+    ('lockout', 'LOCKOUT_CUE_RE', None, 'lockout_line', None),
 ]
 
 # tag -> clause const, for the clause-blindness check below. Whisper's layer 3 uses
@@ -68,6 +69,7 @@ CLAUSES = {
     'entropic_line': 'ENTROPIC_CLAUSE_RE',
     'thermo': 'THERMO_CLAUSE_RE',
     'double_arrow': 'DOUBLEARROW_CLAUSE_RE',
+    'lockout_line': 'LOCKOUT_CLAUSE_RE',
 }
 
 # enough of the script's COLOR_WORD_ALL to answer "does this clause name a colour?"

@@ -17,7 +17,7 @@ UNREADABLE at 0).*
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
 modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153; same-difference lines
-v3.159; palindromes v3.164):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+v3.159; palindromes v3.164; lockout lines v3.167):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -515,6 +515,7 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Region sum** | no S in every segment's `n-smallest … n-largest` range | **new**; segments are one region → distinct digits |
 | **Same difference** | no difference `d` fills the line over the FULL digit set (`sameDiffLineSupport` with `st.fullSet` in every cell) | v3.159; the test is the validator's own engine run mark-free — e.g. a 3-cell closed loop of mutually-conflicting cells has no `d` at all |
 | **Palindrome** | a fold pair (cell `i`, cell `L−1−i`) that `makeMustDiffer` forces to DIFFER | **new** v3.164; the pair must be EQUAL, so a shared row/column/region/uniqueness-cage makes the whole line unfillable. Mark-independent, and conservative because `makeMustDiffer` only asserts units the puzzle guarantees |
+| **Lockout** | no diamond pair survives `lockoutSegmentSupport` with the FULL digit set in every cell (`pairs === 0`) | **new** v3.167; the validator's own engine run mark-free, like same-difference. The widest outside region a gap-4 pair leaves over 1-9 is four digits (1/5 → {6,7,8,9}), so e.g. **five** mutually-conflicting interior cells can never be filled. Conservative by construction: any legal fill has a diamond pair, which the full-set run necessarily sees. NOT length-checked — digits may repeat, so a ten-cell interior with no internal conflicts is fine |
 
 **Every one of these tests is provably conservative — a satisfiable clue can never be flagged.** If a
 legal fill exists, its sum/length necessarily lies inside the loose bound the test checks (e.g. for
@@ -541,19 +542,21 @@ pencilmarks and real conflict matrices against a 60M-node reference:**
 | **Ten line** (`lineSupport`) | every complete fill, digits REPEAT | **11 open cells** | **was broken** → `tenLineTilingSupport` fallback (v3.155). |
 | **Region sum** (`enumSegment`) | every distinct-cell ordering | **7-cell segment** | **was broken** → `regionSumSegmentSupport`, subsets + matching (v3.156). |
 | **Same difference** (`sameDiffExactFills`, 200k) | every fill at one difference `d`; branches ≤2 per cell (`prev±d`) | not reached on any real line — only runs when the line has internal conflicts or is a loop, stops as soon as every arc-consistent value is witnessed | **safe by CONSTRUCTION** (v3.159) — a bail falls back to the arc-consistent domains, which are a sound over-approximation, so it keeps every elimination the chain relation alone proves. A cap whose bail still removes is a different animal from one that gives up on the clue. |
+| **Between + Lockout** (`interiorsFeasible`, 20k) | ONE seating of the interiors, not all of them | not reached on any real line — interiors are ≤ ~15 cells over ≤ 9 digits and repeats are legal unless conflicting, so a solution is found greedily | **safe by SHAPE** (v3.120, shared v3.167) — it seeks a single witness and answers FEASIBLE on overrun, i.e. under-remove. Lockout's memo keys on `(lo, hi)` plus the one forced cell, and an infeasible base interval short-circuits before any forced search runs, so the exhaustive-failure case is bounded by the distinct-interval count (≤ ~15), not by pairs × cells × digits. |
 
 The pattern: a cap is fine when the **pruning strength tracks the constraint strength** (both
 sum-target searches), and fatal when it doesn't (ten lines repeat digits, so fills are exponential
 regardless of the target; region-sum segments enumerated orderings when only the *subset* mattered).
-`betweenInteriorsFeasible`'s 20k budget is a third, safe shape: it seeks **one** solution, not all
-of them, and answers FEASIBLE on overrun (under-remove). `sameDiffExactFills` is a fourth: **its
+`interiorsFeasible`'s 20k budget (between since v3.120, lockout since v3.167) is a third, safe shape:
+it seeks **one** solution, not all of them, and answers FEASIBLE on overrun (under-remove).
+`sameDiffExactFills` is a fourth: **its
 bail degrades to a weaker but sound answer instead of to nothing** — the arc-consistent domains it
 falls back on are already a correct over-approximation of the support, so a cap hit costs only the
 extra eliminations the conflict matrix would have added. When designing a new search, prefer that
 shape; better still, look for the one that needs no cap at all (a chain CSP is solved exactly by arc
 consistency, which is why same-difference searches only when conflicts or a loop break the chain).
 Every other validator (kropki, cage, thermo,
-whisper, Dutch, XV, between, renban, nabner, parity, zipper, entropic, modular, **palindrome**) is
+whisper, Dutch, XV, renban, nabner, parity, zipper, entropic, modular, **palindrome**) is
 pairwise, per-cell, bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial,
 no cap, nothing to audit. Palindrome is the cheapest of them all: **no search at all**, one set
 intersection per fold pair.
@@ -1569,9 +1572,157 @@ subtracted. **Test puzzles:** native `ltvk2kk8b0`, `kh1drhrx40` (+killer cages),
 renban); non-native scl `2ad4183iyn` (**the segmentation case** — 11 chains → 57 segments),
 `xm3e3npmmk`, `swtm07rplk`.
 
+## Lockout-line validator
+
+**Lockout-line validator (v3.167).** A lockout line runs **diamond to diamond** and states two rules
+at once:
+
+1. the two diamond digits **differ by at least 4** (the gap — read, not hardcoded; see below);
+2. every digit between them on the line lies **strictly outside the closed range the diamonds span** —
+   below the smaller or above the larger. Digits **may repeat** along the line where ordinary Sudoku
+   allows it.
+
+It is the between line's mirror image drawn with the mirror-image marker, and the two are each
+other's classic mis-detection — which is why `BETWEEN_LOCKOUT_RE` and `DUTCH_LOCKOUT_RE` have guarded
+against it since v3.120, and why this validator lands as a near-clone of the between machinery rather
+than as new subsystems.
+
+**One rule, not two readings.** The catalogued phrasings split into "must not be between **or equal
+to** the diamonds" (`u0cs9m2qmx`, `uyol9lzyp5`, `FLqFBMpTJB`), "higher than the larger / lower than
+the smaller" (`u2361pezfa`) and "lie strictly outside the range" (`f9a2chdekr`, `rGF3gpgnmM`). Those
+are the same predicate, so `lockoutOutside(a,b,d)` is one line and there is nothing to choose between.
+
+### The diamond reader (`getCellCenteredDiamonds`)
+
+The diamond twin of `getCellCenteredCircles`, shared by the segmentation walk, the compute and the
+menu eyeball. SudokuPad draws a diamond **two** ways, both confirmed in the live DOM:
+
+| rendering | source | seen on |
+|---|---|---|
+| near-square `<rect>` in `#overlay`/`#underlay` with `rotate(45)` in its `transform` | f-puzzles `rectangle {angle:±45}`, scl `o:{angle:45}` | `f9a2chdekr` (w=0.53cs), `u0cs9m2qmx` (0.57), `uyol9lzyp5` (0.61), `u2361pezfa` (0.50) |
+| a **closed four-segment `<path>` inside one cell** in `#arrows` | scl `l:` — the setter drew the glyph as a tiny polyline | `FLqFBMpTJB` (`M224 12.8 L204.8 32 L224 51.2 L243.2 32 L224 12.8`) |
+
+The second costs nothing elsewhere: a chain that expands to a single cell is already dropped by
+`getCosmeticLines`, so those glyphs never reach any validator's line pool. The size gate is much
+looser than the circle reader's (0.3–1.05 cs) because the observed widths span 0.50–0.61 cs, and
+`rx ≈ 0` plus a 45° rotation is what separates a diamond from a circle and from a plain square.
+
+**Deliberately NOT read: an unrotated SQUARE endpoint** (`rGF3gpgnmM`'s yellow boxes). A square is the
+commonest cosmetic in the corpus and claiming it would over-fire on puzzles with nothing to do with
+lockout. That puzzle instead falls through `markerSegments`' "no markers anywhere" path, where each
+drawn chain's own ends are its endpoints — which is the right answer there anyway.
+
+### Segmentation — `betweenSegments` generalised to `markerSegments`
+
+`u0cs9m2qmx`'s rules state the model outright: *"A diamond terminates a line segment."* That is
+exactly the circle-splits-the-line rule the between validator has applied since v3.120, so the walk is
+now **marker-agnostic**: `markerSegments(lines, markerSet, minLen)` carries the whole v3.121 body
+(straight-through at crossings, follow a lone bend, refuse a genuine junction, global fallback) and
+the two callers are one line each — `betweenSegments` = circles at `minLen` 3, `lockoutSegments` =
+diamonds at `minLen` **2**. The differing minimum is a real judgement, not a tidy-up: two adjacent
+circles have no interior and nothing to constrain, but two adjacent **diamonds** still carry rule 1,
+so a 2-cell lockout segment is a live clue. `unitFilter` ("validate selection only") applies to the
+**segments**.
+
+### Algorithm — `lockoutSegmentSupport`, complete support in one pass
+
+Per the elimination contract, a digit survives only when some full legal fill of the whole clue uses
+it. `lockoutSegmentSupport(aSet, bSet, innerSets, differs, gap)` enumerates every diamond pair
+`(a,b)` with `|a−b| ≥ gap`, keeps the pair only when the interiors can sit outside `[min,max]`
+**simultaneously**, and unions the surviving digits per cell. It returns a Set per cell plus
+`pairs` = how many diamond pairs proved feasible.
+
+**Simultaneity is load-bearing**, exactly as it is for between's bulbs, and a per-cell interval test
+cannot see it: four interior cells that must all differ, each pencilled `{1,2,3,4}`, cannot be seated
+under the pair 4/8 — that pair forbids 4–8, so the four cells need four distinct digits out of
+`{1,2,3}`. Each cell *alone* can take 1, so a per-cell check would have accepted it. Three such cells
+do fit, which is what makes the case a real deduction rather than a search artifact.
+
+The feasibility search is **`interiorsFeasible(sets, differs, allow)`** — v3.120's
+`betweenInteriorsFeasible` with its interval predicate lifted into a parameter. Between passes "inside
+the open interval", lockout "outside the closed one"; `betweenInteriorsFeasible` is now a one-line
+wrapper, so every existing between case still tests the shipped code. Feasibility depends only on
+`(lo, hi)` plus the single cell being forced, so it is memoised on exactly that key — which is what
+keeps the pairs × cells × digits loop cheap. Iterated to a **fixpoint** (both ends and the interior
+constrain each other, and segments sharing a diamond propagate through it).
+
+**The gap is read, not hardcoded** (`lockoutMinGap` / `LOCKOUT_GAP_RE`). Every catalogued puzzle says
+4, which is also the constraint's textbook definition, so 4 is the default. It is parsed because a
+puzzle stating a different number means it — and parsed **only from a sentence that also mentions
+diamonds / endpoints / lockout**, because on a mixed puzzle a German whisper clause ("differ by at
+least 5") would otherwise raise the lockout gap, which is an over-removal.
+
+### Detection (`classifyLockoutLines`)
+
+1. **`nativeLinesFor('lockout')`** — f-puzzles declares it first-class (`lockout` / `lockoutline`,
+   both mapped to `'lockout'` in `FPUZ_LINE_CONSTRAINTS`), which is the clean discriminator from
+   `betweenline`. Confident, no guessing.
+2. **`hasNativeLineConstraints()` → `none`.** This veto is deliberately **narrower than between's**.
+   The between classifier refuses on bare `hasNativePayload()` — "constraint keys are exhaustive, so
+   no key means no clue" — but that premise only holds for a payload that declares *some* line
+   constraint. `u2361pezfa` (clover, Dec 2021) is an f-puzzles lockout puzzle drawn entirely in
+   cosmetics (`line` + `rectangle {angle:-45}`, no `lockout` key, because the constraint type did not
+   exist yet), and the blunt veto would silently refuse a puzzle whose rules *and* diamonds both say
+   lockout. Between is left alone: its cue is far broader, so the blunt veto is carrying more weight
+   there.
+3. **`classifyCueLines(LOCKOUT_CUE_RE, LOCKOUT_CLAUSE_RE, null, 'lockout')`** — the ordinary cue
+   ladder, including the LINE-TYPE LABEL layer (`'lockout'` is registered in `LINE_LABEL_TYPES`).
+
+**Cue, catalog-measured 2026-07-29** (`cue_recall` over all 4,825 puzzles with rules text): recall
+**100%**, UNREADABLE **0**, and all 5 false positives triaged to genuine lockout puzzles the catalog
+left untagged. Two branches, both load-bearing — 6 of the 7 real puzzles name the type, and
+`rGF3gpgnmM` "Trickling Down" says neither "lockout" nor "diamond", so only the outside/endpoints
+branch catches it.
+
+Two narrowings, each forced by a measured over-fire — the direction the contract forbids:
+
+- **No "diamond … differ by N" branch.** It is the obvious way to read rule 1 and it is wrong here: in
+  this corpus a "diamond" is far more often a **Kropki-style border dot** than a line endpoint —
+  `6t37oxiusy` / `L8t8jQ7Ljn` ("if there's a diamond between two horizontally adjacent cells, the
+  difference is…"), `v5feh338qh` ("adjacent digits separated by a diamond differ by x"), `ln1b4nlbu8`
+  ("a white diamond between two cages…"), `ctzp03sqig` (XY diamonds beside blue **region-sum** lines).
+  On any of those the single-colour layer would have handed lockout somebody else's lines. Cutting the
+  branch took false positives 14 → 5 and costs nothing real: the gap alone is not the lockout rule,
+  and every catalogued puzzle also states the outside half.
+- **The name branch must name the clue TYPE** (`lockout line(s)`, `locked-out lines`), not just the
+  word. Bare `/lock-?out/` also fires on `s64txn1v6l` "RAT RUN 35: **Locked Out**" — a Marty Sears maze
+  whose title is a pun and which draws no lockout line at all.
+
+**Deliberately unmatched:** *"higher than the larger diamond value, or lower than the smaller"*
+(`u2361pezfa`) — a correct restatement of rule 2 that shares no token with it. That puzzle is caught
+by its title instead; a puzzle using only that phrasing **and** never naming the type would be missed.
+Under-detect, never mis-apply — widening to bare "higher than … lower than" would fire on half the
+inequality puzzles in the corpus.
+
+`LOCKOUT_CLAUSE_RE` covers every phrasing the cue does, minus bare `endpoints?` — `BETWEEN_CLAUSE_RE`
+already owns that word and `clauseColorWord` takes the **first** matching clause, so claiming a
+between clause would hand lockout the between lines' colour and apply the opposite rule. An endpoint
+therefore only counts alongside lockout language.
+
+### Verified against published solutions
+
+Both rule halves were scored cell-for-cell against the puzzles' own solutions, the same way the
+between segmentation was settled in v3.121:
+
+| puzzle | path | result |
+|---|---|---|
+| `f9a2chdekr` (fpuz, native `lockout`) | 5 declared chains | all 5 satisfy gap ≥ 4 and **0** interior violations |
+| `u0cs9m2qmx` (scl, DOM lines + rotated-rect diamonds) | 8 diamonds → 4 segments off the walk | all 4 satisfy gap ≥ 4 and **0** interior violations |
+| `FLqFBMpTJB` (scl, **polyline** diamonds) | 8 diamonds read from `#arrows` glyphs | exactly the endpoints of the 4 purple lines; the glyphs stay out of the line pool |
+
+**Test puzzles:** native `f9a2chdekr`, `5t5cagkrax`; cosmetic-only fpuz `u2361pezfa` (the narrow-veto
+case); scl `u0cs9m2qmx` (**the segmentation case**), `uyol9lzyp5`, `FLqFBMpTJB` (**the polyline-diamond
+case**, multi-colour → named-colour layer), `rGF3gpgnmM` (**the no-diamond case** — square endpoints,
+falls through to whole-chain segments), `k18i652bjj` (lockout **and** between in one puzzle).
+
+The menu **eyeball** previews the segments as a polyline with a **diamond** on each endpoint
+(`{type:'lockout',keys}` → `diamondCell`, matching the drawn marker's real centre and radius). A ring
+there would have drawn the rival clue type.
+
 ### Lockout lines vs the Dutch whisper (v3.120)
 
-No lockout validator yet, but lockout lines had to be taught to the **Dutch whisper** classifier: a
+Predating the validator, and still load-bearing: lockout lines had to be taught to the **Dutch
+whisper** classifier: a
 lockout rule states the gap between its two **diamonds**, not between neighbours along the line —
 `f9a2chdekr` ("Lockout Lines"): *"two connected diamonds must contain numbers with a difference of at
 least 4, and all digits on the line … must lie strictly outside the range"* — and that phrasing trips
@@ -1591,5 +1742,5 @@ line and applied the ≥4 neighbour rule, a different constraint entirely. Two g
 **Catalog-measured (2026-07-22):** of 118 puzzles matching `DUTCH_CUE_RE`, only **2** also match the
 lockout phrasing and **both are pure lockout puzzles** (`f9a2chdekr`, `u0cs9m2qmx`) — no real Dutch
 whisper is lost. Note `u0cs9m2qmx`'s rules confirm the segmentation model independently: *"A diamond
-terminates a line segment."* — the same circle-splits-the-line rule the between validator now applies,
-so a future lockout validator should reuse `betweenSegments`' graph walk against a **diamond** reader.
+terminates a line segment."* — the same circle-splits-the-line rule the between validator applies, and
+v3.167's lockout validator duly reuses that graph walk against a **diamond** reader (`markerSegments`).

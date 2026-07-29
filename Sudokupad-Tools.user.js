@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.166.0
+// @version      3.167.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.166.0';
+  var SCRIPT_VERSION = '3.167.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4882,7 +4882,8 @@
     // 'diag',keys} (polyline through cell centres), {type:'thermo',edges,root} (a
     // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb ring +
     // polyline + an arrowhead chevron at the tip), {type:'between',keys} (polyline + a
-    // ring on BOTH endpoint circles), {type:'zipper',keys} (polyline + a disc at the
+    // ring on BOTH endpoint circles), {type:'lockout',keys} (polyline + a DIAMOND on
+    // both endpoints — a ring there would draw the rival clue type), {type:'zipper',keys} (polyline + a disc at the
     // fold centre), {type:'cage',keys} (merged perimeter of the cell
     // set). Rings on 'arrow'/'between' MATCH the drawn circle's real centre + radius
     // when one is there (see ringCell), so the highlight lands on the clue.
@@ -4980,6 +4981,21 @@
         if (c) marker(S(c.cx, c.cy), c.r * scale + 2);
         else marker(centre(key), fallbackRPx);
       }
+      // The same idea for a LOCKOUT endpoint, whose marker is a diamond — a ring
+      // there would read as "there is a circle here", which is the rival clue type.
+      // Four segments through the drawn diamond's own points (+2px clearance), or a
+      // fixed-size diamond on the cell centre when no marker is found.
+      var diamondAt = {};
+      try { getCellCenteredDiamonds(cs).forEach(function (d) { diamondAt[d.key] = d; }); } catch (e) {}
+      function diamondCell(key, fallbackRPx) {
+        var d = diamondAt[key];
+        var pt = d ? S(d.cx, d.cy) : centre(key);
+        if (!pt) return;
+        var r = d ? d.r * scale + 2 : fallbackRPx;
+        var n = { x: pt.x, y: pt.y - r }, e = { x: pt.x + r, y: pt.y };
+        var s = { x: pt.x, y: pt.y + r }, w = { x: pt.x - r, y: pt.y };
+        seg(n, e); seg(e, s); seg(s, w); seg(w, n);
+      }
       // Chevron at p2 pointing away from p1 — the arrowhead the shaft polyline alone
       // never showed, so a sum arrow reads as an arrow and its direction is visible.
       // `spread` is the HALF-angle off the shaft, so the angle BETWEEN the two legs
@@ -5002,6 +5018,7 @@
           if (ak.length > 1) arrowHead(centre(ak[ak.length - 2]), centre(ak[ak.length - 1]), cellPx * 0.30);
         }
         else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { ringCell(bk[0], cellPx * 0.34); ringCell(bk[bk.length - 1], cellPx * 0.34); } }
+        else if (o.type === 'lockout') { var lk = o.keys || []; polyline(lk); if (lk.length > 1) { diamondCell(lk[0], cellPx * 0.34); diamondCell(lk[lk.length - 1], cellPx * 0.34); } }
         // Zipper: the FOLD CENTRE is what the clue turns on, so mark it. Position
         // comes from zipperFoldCenter — the same function the injected cosmetic dot
         // and the validator's own pairing use — and the disc is sized by the same
@@ -8456,11 +8473,12 @@
     return m ? (+m[2] - 1) + ',' + (+m[1] - 1) : null;
   }
   // f-puzzles constraint key → our internal line type.
-  // `lockout`/`lockoutline` is read NOT to validate lockout lines (no validator yet)
-  // but as NEGATIVE evidence: a lockout line renders like a between line and its
-  // rules text ("the diamonds must differ by at least 4") trips the DUTCH WHISPER
-  // cue, so knowing which chains the puzzle DECLARES as lockout is what keeps them
-  // out of both. f-puzzles has used both spellings; map each to one type.
+  // `lockout`/`lockoutline` does double duty. It is what classifyLockoutLines reads
+  // to claim its lines outright (v3.167), AND it is NEGATIVE evidence for the two
+  // validators lockout is forever mistaken for: a lockout line renders like a between
+  // line and its rules text ("the diamonds must differ by at least 4") trips the DUTCH
+  // WHISPER cue, so knowing which chains the puzzle DECLARES as lockout keeps them out
+  // of both. f-puzzles has used both spellings; map each to one type.
   var FPUZ_LINE_CONSTRAINTS = {
     whispers: 'whisper', regionsumline: 'regionsum', entropicline: 'entropic',
     renbanline: 'renban', thermometer: 'thermo', betweenline: 'between',
@@ -9085,6 +9103,81 @@
     return res;
   }
 
+  // ── Lockout lines (v3.167) ──────────────────────────────────────────────────
+  // The between line's mirror: diamond endpoints that must differ by at least 4, and
+  // interior digits that must lie STRICTLY OUTSIDE the range they span. f-puzzles
+  // declares it first-class (`lockout` / `lockoutline`, both mapped to type 'lockout'
+  // in FPUZ_LINE_CONSTRAINTS), which is the clean discriminator from `betweenline`.
+  //
+  // THE PAYLOAD VETO IS NARROWER HERE THAN FOR BETWEEN, and deliberately. The between
+  // classifier refuses outright on hasNativePayload() — "constraint keys are
+  // exhaustive, so no key means no clue". That premise only holds for a payload that
+  // declares SOME line constraint. `u2361pezfa` (clover, Dec 2021) is an f-puzzles
+  // lockout puzzle drawn entirely in cosmetics — `line` + `rectangle {angle:-45}`, no
+  // `lockout` key, because the constraint type did not exist yet — and the blunt veto
+  // would silently refuse a puzzle whose rules and diamonds both say lockout. So the
+  // veto here fires only against a payload that demonstrably speaks the constraint
+  // language. (Between is left alone: its cue is far broader, so the blunt veto is
+  // carrying more weight there.)
+  //
+  // Catalog-measured 2026-07-29 (cue_recall over all 4,825 puzzles with rules text):
+  // recall 100% on the tag, UNREADABLE 0, and every false positive triaged to a
+  // genuine lockout puzzle the catalog left untagged. Two branches, both load-bearing
+  // — 6 of the 7 real lockout puzzles carry the name in the title, and `rGF3gpgnmM`
+  // "Trickling Down" says neither "lockout" nor "diamond", so only the OUTSIDE branch
+  // catches it ("digits on a line must fall 'outside' the range of their yellow
+  // endpoints").
+  //
+  // THE NAME BRANCH MUST NAME THE CLUE TYPE, not just the word. Bare /lock-?out/ also
+  // fires on `s64txn1v6l` "RAT RUN 35: Locked Out" — a Marty Sears maze whose title is
+  // a pun and which draws no lockout line at all, so the single-colour layer would
+  // have claimed its cosmetics. Requiring "lockout LINE(S)" costs nothing: all seven
+  // real puzzles write it that way, including `k18i652bjj`'s "Locked-out Lines:".
+  //
+  // A "DIAMOND … DIFFER BY N" BRANCH WAS TRIED AND REMOVED — it is the obvious way to
+  // read the gap half of the rule and it over-fires badly, which is the one direction
+  // the contract forbids. In this corpus a "diamond" is far more often a KROPKI-STYLE
+  // BORDER DOT than a line endpoint: `6t37oxiusy` / `L8t8jQ7Ljn` ("if there's a diamond
+  // between two horizontally adjacent cells, the difference is…"), `v5feh338qh`
+  // ("adjacent digits separated by a diamond differ by x"), `ln1b4nlbu8` ("a white
+  // diamond between two cages means the difference between their cage totals…"),
+  // `ctzp03sqig` (XY diamonds beside blue REGION-SUM lines). On any of those a
+  // single-colour layer would have handed lockout somebody else's lines. It costs
+  // nothing real: the gap alone is not the lockout rule, and every catalogued puzzle
+  // also states the outside half. Cutting it took the false positives 14 → 5, all 5
+  // of them genuine lockout puzzles the catalog simply left untagged.
+  //
+  // DELIBERATELY UNMATCHED: "higher than the larger diamond value, or lower than the
+  // smaller" (`u2361pezfa`) — a correct restatement of the rule that shares no token
+  // with it. That puzzle is caught by its title instead; a puzzle using only that
+  // phrasing AND never saying "lockout" would be missed. Under-detect, never
+  // mis-apply — widening to bare "higher than … lower than" would fire on half the
+  // inequality puzzles in the corpus.
+  var LOCKOUT_CUE_RE = /\block(?:ed)?[- ]?out[- ]lines?\b|\b(?:outside|not\s+be\s+between|not\s+have\s+values\s+between|be\s+between\s+or\s+equal|not\s+between)\b[^.]{0,90}\b(?:diamonds?|endpoints?)\b|\b(?:diamonds?|endpoints?)\b[^.]{0,90}\b(?:strictly\s+outside|outside\s+the\s+range|not\s+be\s+between)\b/;
+  // Named-colour clause trigger for the multi-colour legend layer. Bare "endpoints"
+  // is deliberately NOT in it: BETWEEN_CLAUSE_RE already claims that word, and on a
+  // puzzle carrying both clue types the first matching clause wins — handing the
+  // lockout validator the between lines' colour would apply the OPPOSITE rule. So an
+  // endpoint only counts alongside lockout language. Covers every phrasing the cue
+  // does (the standing clause/cue rule): "…diamond endpoints of a PURPLE line…"
+  // (`FLqFBMpTJB`), "digits on BLUE lines can not be between or equal to the digits
+  // in the diamonds…" (`u0cs9m2qmx`), "…'outside' the range of their YELLOW
+  // endpoints" (`rGF3gpgnmM`).
+  var LOCKOUT_CLAUSE_RE = /lock-?out|diamonds?|(?:outside|not\s+be\s+between|between\s+or\s+equal)[^.]{0,90}endpoints?|endpoints?[^.]{0,90}(?:differ|difference|outside)/;
+  // Does the payload declare ANY line constraint? See the veto note above.
+  function hasNativeLineConstraints() {
+    var n = getNativeLineClues();
+    if (!n) return false;
+    return Object.keys(n).some(function (t) { return n[t] && n[t].length; });
+  }
+  function classifyLockoutLines() {
+    var nat = nativeLinesFor('lockout');
+    var cos = getCosmeticLines();
+    if (nat) return { mode: 'confident', lines: nat, allLines: cos };
+    if (hasNativeLineConstraints()) return { mode: 'none', lines: [], allLines: cos };
+    return classifyCueLines(LOCKOUT_CUE_RE, LOCKOUT_CLAUSE_RE, null, 'lockout');
+  }
+
   // ── Double-arrow lines ──────────────────────────────────────────────────────
   // A double arrow is a line with a CIRCLE AT EACH END: the digits BETWEEN the
   // circles sum to the SUM OF THE TWO CIRCLE digits (a 5-6-7 line → the circles
@@ -9172,6 +9265,82 @@
   function getCellCircleKeySet() {
     var set = {};
     getCellCenteredCircles(getGridCellSize()).forEach(function (c) { set[c.key] = 1; });
+    return set;
+  }
+
+  // ── Cell-centred DIAMOND markers (lockout endpoints, v3.167) ────────────────
+  // A lockout line is bounded by DIAMONDS the way a between line is bounded by
+  // circles, so this is the diamond twin of getCellCenteredCircles — read by the
+  // segmentation walk, the compute and the menu eyeball alike. SudokuPad draws a
+  // diamond TWO ways, both confirmed in the DOM against the catalogued lockout
+  // puzzles:
+  //   A. a near-square <rect> in #overlay/#underlay carrying a rotate(45) in its
+  //      `transform` — f-puzzles `rectangle {angle:±45}` and scl `o:{angle:45}`
+  //      both import to this. Widths seen: 0.53cs (`f9a2chdekr`), 0.57cs
+  //      (`u0cs9m2qmx`), 0.61cs (`uyol9lzyp5`), 0.5cs (`u2361pezfa`) — hence the
+  //      much looser size gate than the circle reader's.
+  //   B. a tiny CLOSED four-segment <path> in #arrows drawn inside ONE cell —
+  //      `FLqFBMpTJB` draws each diamond as "M224 12.8 L204.8 32 L224 51.2
+  //      L243.2 32 L224 12.8". Reading these costs nothing elsewhere: a chain that
+  //      expands to a single cell is already dropped by getCosmeticLines, so these
+  //      glyphs never reach any validator's line pool.
+  // DELIBERATELY NOT READ: a plain UNROTATED square endpoint (`rGF3gpgnmM`'s yellow
+  // boxes). A square is the commonest cosmetic in the corpus and claiming it as a
+  // lockout marker would over-fire on puzzles that have nothing to do with lockout.
+  // That puzzle instead falls through markerSegments' "no markers anywhere" path,
+  // where each drawn chain's own ends are its endpoints — which is right there.
+  // Returns [{ cx, cy, r, key }] in SVG pixel space; `r` is the half-DIAGONAL, i.e.
+  // the distance from the centre to a diamond point.
+  function getCellCenteredDiamonds(cs) {
+    var out = [], seen = {};
+    if (!cs) return out;
+    var N = detectGridSize();
+    function add(cx, cy, r) {
+      var col = Math.round(cx / cs - 0.5), row = Math.round(cy / cs - 0.5);
+      if (col < 0 || col >= N || row < 0 || row >= N) return;
+      if (Math.abs(cx - (col + 0.5) * cs) > cs * 0.2 ||
+          Math.abs(cy - (row + 0.5) * cs) > cs * 0.2) return;   // centred on a cell
+      var key = col + ',' + row;
+      if (seen[key]) return;                                    // one marker per cell
+      seen[key] = 1;
+      out.push({ cx: cx, cy: cy, r: r, key: key });
+    }
+    // A. a square rect turned 45°.
+    document.querySelectorAll('#overlay rect, #underlay rect').forEach(function (el) {
+      var w = parseFloat(el.getAttribute('width') || 0), h = parseFloat(el.getAttribute('height') || 0);
+      if (w < cs * 0.3 || w > cs * 1.05 || Math.abs(w - h) > cs * 0.1) return;    // near-square, cell-ish
+      if (parseFloat(el.getAttribute('rx') || 0) > w * 0.15) return;              // rounded → a circle
+      var m = /rotate\(\s*(-?[\d.]+)/.exec(el.getAttribute('transform') || '');
+      if (!m) return;                                                            // axis-aligned → a square
+      if (Math.abs((((+m[1] % 90) + 90) % 90) - 45) > 8) return;                  // 45° off-square = a diamond
+      add(parseFloat(el.getAttribute('x') || 0) + w / 2,
+          parseFloat(el.getAttribute('y') || 0) + h / 2, w * Math.SQRT2 / 2);
+    });
+    // B. a closed four-point diamond path confined to one cell.
+    document.querySelectorAll('#arrows path').forEach(function (el) {
+      var nums = (el.getAttribute('d') || '').match(/-?[\d.]+/g);
+      if (!nums || nums.length !== 10) return;                                   // exactly 5 points
+      var pts = [];
+      for (var i = 0; i < 10; i += 2) pts.push([+nums[i], +nums[i + 1]]);
+      if (Math.abs(pts[0][0] - pts[4][0]) > 0.5 || Math.abs(pts[0][1] - pts[4][1]) > 0.5) return;   // must close
+      var xs = [pts[0][0], pts[1][0], pts[2][0], pts[3][0]];
+      var ys = [pts[0][1], pts[1][1], pts[2][1], pts[3][1]];
+      var x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+      var y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+      var w = x1 - x0, h = y1 - y0, cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      if (w < cs * 0.15 || w > cs * 0.95 || Math.abs(w - h) > cs * 0.1) return;   // inside ONE cell, square bbox
+      // Every corner on an axis through the centre — that is what makes it a
+      // diamond rather than a square, a bowtie or a stray in-cell zigzag.
+      for (var p = 0; p < 4; p++)
+        if (Math.abs(pts[p][0] - cx) > w * 0.12 && Math.abs(pts[p][1] - cy) > h * 0.12) return;
+      add(cx, cy, w / 2);
+    });
+    return out;
+  }
+  // The same diamonds as a { "col,row": 1 } set.
+  function getCellDiamondKeySet() {
+    var set = {};
+    getCellCenteredDiamonds(getGridCellSize()).forEach(function (d) { set[d.key] = 1; });
     return set;
   }
 
@@ -9457,13 +9626,17 @@
     var c = String(cur).split(','), p = String(prev).split(',');
     return (2 * +c[0] - +p[0]) + ',' + (2 * +c[1] - +p[1]);
   }
-  // One between line, walked from circle `start` outwards through `next`. Returns the
-  // cell chain (circle … circle) or null when the walk hits an ambiguous junction, a
-  // revisit, or lands on an adjacent circle (no interior → nothing to constrain).
-  function walkBetweenSegment(adj, circleSet, start, next) {
+  // One marker-to-marker line, walked from `start` outwards through `next`. Returns
+  // the cell chain (marker … marker) or null when the walk hits an ambiguous
+  // junction, a revisit, or comes out shorter than `minLen`.
+  // `minLen` is the caller's judgement about what its rule needs (default 3, the
+  // between-line answer: two adjacent circles have no interior, so there is nothing
+  // to constrain). LOCKOUT passes 2 — its diamonds carry a rule of their own
+  // (|a−b| ≥ gap), so a 2-cell segment is still a real, checkable clue.
+  function walkBetweenSegment(adj, markerSet, start, next, minLen) {
     var seg = [start], on = {}, prev = start, cur = next, guard = 0;
     on[start] = 1;
-    while (!circleSet[cur]) {
+    while (!markerSet[cur]) {
       if (on[cur] || ++guard > 400) return null;         // revisit / runaway → refuse
       seg.push(cur); on[cur] = 1;
       var nb = adj[cur] || {}, keys = Object.keys(nb);
@@ -9474,7 +9647,7 @@
       prev = cur; cur = nx;
     }
     seg.push(cur);
-    return seg.length >= 3 ? seg : null;
+    return seg.length >= (minLen || 3) ? seg : null;
   }
   // The between-line SEGMENTS a validator acts on. Shared by the compute and the menu
   // eyeball, so the preview can't drift from what runs.
@@ -9492,12 +9665,17 @@
   //     behaviour, so a puzzle whose markers we can't read is never made worse);
   //   • otherwise walk, then emit unchanged any chain the walks never touched (a
   //     chain with no circle anywhere near it still gets its old treatment).
-  function betweenSegments(lines) {
-    var circleSet = getCellCircleKeySet();
+  //
+  // MARKER-AGNOSTIC since v3.167: between lines are bounded by circles and lockout
+  // lines by diamonds, but the picture problem — and its solution — are identical
+  // (`u0cs9m2qmx`'s rules even spell the model out: "A diamond terminates a line
+  // segment."). So the walk takes the marker set and a minimum length; the two
+  // callers below are one line each.
+  function markerSegments(lines, markerSet, minLen) {
     var chains = (lines || []).filter(function (k) { return k && k.length >= 2; });
     var out = [], seen = {};
     function emit(seg) {
-      if (!seg || seg.length < 3 || seg[0] === seg[seg.length - 1]) return;
+      if (!seg || seg.length < minLen || seg[0] === seg[seg.length - 1]) return;
       var sig = seg.join(' ');
       if (seen[sig]) return;
       seen[sig] = 1;
@@ -9505,13 +9683,13 @@
       out.push(seg);
     }
     var adj = lineStepGraph(chains);
-    var anyCircle = Object.keys(adj).some(function (k) { return circleSet[k]; });
-    if (!anyCircle) { chains.forEach(emit); return out; }
+    var anyMarker = Object.keys(adj).some(function (k) { return markerSet[k]; });
+    if (!anyMarker) { chains.forEach(emit); return out; }
     var touched = {};
     Object.keys(adj).forEach(function (start) {
-      if (!circleSet[start]) return;
+      if (!markerSet[start]) return;
       Object.keys(adj[start]).forEach(function (next) {
-        var seg = walkBetweenSegment(adj, circleSet, start, next);
+        var seg = walkBetweenSegment(adj, markerSet, start, next, minLen);
         if (!seg) return;
         seg.forEach(function (k) { touched[k] = 1; });
         emit(seg);
@@ -9522,6 +9700,10 @@
     });
     return out;
   }
+  // Between lines: circle to circle, and a 2-cell run has no interior to constrain.
+  function betweenSegments(lines) { return markerSegments(lines, getCellCircleKeySet(), 3); }
+  // Lockout lines: diamond to diamond, and a 2-cell run still carries the gap rule.
+  function lockoutSegments(lines) { return markerSegments(lines, getCellDiamondKeySet(), 2); }
 
   // Entropic lines: every run of THREE consecutive cells on the line holds one LOW,
   // one MID and one HIGH digit — equal thirds of the digit set.
@@ -9896,6 +10078,7 @@
     { key: 'entropic',    re: ENTROPIC_CLAUSE_RE },
     { key: 'modular',     re: MODULAR_CLAUSE_RE },
     { key: 'between',     re: BETWEEN_CLAUSE_RE },
+    { key: 'lockout',     re: LOCKOUT_CLAUSE_RE },
     { key: 'doublearrow', re: DOUBLEARROW_CLAUSE_RE },
     { key: 'samediff',    re: SAMEDIFF_CLAUSE_RE }
   ];
@@ -12253,11 +12436,11 @@
     var lo2 = Math.min(maxA, minB), hi2 = Math.max(maxA, minB);
     return (d > lo1 && d < hi1) || (d > lo2 && d < hi2);
   }
-  // Can the interior cells hold digits inside the OPEN interval (lo,hi) ALL AT ONCE?
-  // `sets` = one ascending candidate array per interior cell, `differs(i,j)` = true
-  // when ordinary Sudoku forbids interior cells i and j sharing a digit. A plain
-  // fewest-options-first backtrack — a between line's interior is short (≤ 7 cells
-  // over ≤ 9 digits), so this is exact and costs nothing.
+  // Can the interior cells ALL AT ONCE hold a digit their own set offers and the
+  // `allow(v)` predicate permits? `sets` = one ascending candidate array per interior
+  // cell, `differs(i,j)` = true when ordinary Sudoku forbids interior cells i and j
+  // sharing a digit. A plain fewest-options-first backtrack — a marker-bounded line's
+  // interior is short (≤ ~8 cells over ≤ 9 digits), so this is exact and costs nothing.
   //
   // THE DISTINCTNESS IS THE WHOLE POINT, and it is what a min/max interval test can
   // never see. Interiors {5,7} and {5,7} in one row against the interval (1,6): each
@@ -12265,10 +12448,12 @@
   // be 5, so the interval is actually impossible, which is what rules 6 out of the
   // bulb that produced it. Pure (no board reads) so the harness can test it.
   // On a node-budget overrun it answers FEASIBLE — under-remove, never mis-apply.
-  function betweenInteriorsFeasible(sets, differs, lo, hi) {
-    var opts = sets.map(function (s) {
-      return s.filter(function (v) { return v > lo && v < hi; });
-    });
+  //
+  // SHARED BY THE TWO MARKER-BOUNDED RULES (v3.167): a between line wants the digits
+  // INSIDE the open interval, a lockout line wants them OUTSIDE the closed one. Same
+  // search, opposite predicate — so the predicate is the parameter.
+  function interiorsFeasible(sets, differs, allow) {
+    var opts = sets.map(function (s) { return s.filter(allow); });
     for (var i = 0; i < opts.length; i++) if (opts[i].length === 0) return false;
     var order = opts.map(function (_, n) { return n; })
                     .sort(function (a, b) { return opts[a].length - opts[b].length; });
@@ -12290,6 +12475,10 @@
       return false;
     }
     return place(0);
+  }
+  // Between: the interiors must sit INSIDE the open interval (lo,hi).
+  function betweenInteriorsFeasible(sets, differs, lo, hi) {
+    return interiorsFeasible(sets, differs, function (v) { return v > lo && v < hi; });
   }
   // Is digit `d` still possible in ONE bulb (circle) of a between line? Only if some
   // value of the OPPOSITE bulb brackets an interval the interiors can all satisfy at
@@ -12387,6 +12576,182 @@
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
 
     return { removals: removals, betweenCount: lines.length, emptiedCells: emptied };
+  }
+
+  // ── LOCKOUT LINES (v3.167) ──────────────────────────────────────────────────
+  // A lockout line runs DIAMOND to DIAMOND and states two things at once:
+  //   1. the two diamond digits differ by at least 4 (the gap; see lockoutMinGap);
+  //   2. every digit BETWEEN them on the line lies strictly OUTSIDE the closed range
+  //      the diamonds span — below the smaller or above the larger.
+  // It is the between line's mirror image, drawn with the mirror-image marker, and
+  // the two are one another's classic mis-detection (hence BETWEEN_LOCKOUT_RE and
+  // DUTCH_LOCKOUT_RE, which have guarded against exactly this since v3.120).
+  // Digits MAY repeat along the line where ordinary Sudoku allows it.
+  //
+  // Every catalogued phrasing states rule 2 one of two ways — "must not be between
+  // OR EQUAL TO the diamonds" (`u0cs9m2qmx`, `uyol9lzyp5`, `FLqFBMpTJB`) and "higher
+  // than the larger / lower than the smaller" (`u2361pezfa`) / "strictly outside the
+  // range" (`f9a2chdekr`, `rGF3gpgnmM`). Those are the SAME rule, so there is one
+  // predicate, not two readings to choose between.
+  function lockoutOutside(a, b, d) { return d < Math.min(a, b) || d > Math.max(a, b); }
+  // Complete support for ONE lockout segment, per the elimination contract: a digit
+  // survives only when SOME full legal fill of the whole clue uses it. `aSet`/`bSet`
+  // are the two diamonds' ascending candidate arrays, `innerSets` one array per
+  // interior cell, `differs(i,j)` the interior conflict matrix, `gap` the required
+  // |a−b|. Returns { a, b, inner, pairs } — a Set of surviving digits per cell, plus
+  // how many diamond pairs proved feasible. `pairs === 0` means the clue cannot be
+  // filled AT ALL from these sets, which is the caller's contradiction signal.
+  //
+  // The interior test is not per-cell: fixing a diamond pair fixes the forbidden
+  // range, and the interiors must then fit outside it SIMULTANEOUSLY under `differs`
+  // — the same simultaneity that makes between's bulb pruning work. Feasibility only
+  // ever depends on (lo, hi) plus the one cell being forced, so it is memoised on
+  // exactly that key; the search itself is interiorsFeasible. Pure, harness-testable.
+  function lockoutSegmentSupport(aSet, bSet, innerSets, differs, gap) {
+    var keepA = new Set(), keepB = new Set(), pairs = 0, memo = {};
+    var keepIn = innerSets.map(function () { return new Set(); });
+    function fits(lo, hi, idx, val) {
+      var ck = lo + ':' + hi + (idx == null ? '' : ':' + idx + ':' + val);
+      if (memo[ck] !== undefined) return memo[ck];
+      var sets = innerSets;
+      if (idx != null) { sets = innerSets.slice(); sets[idx] = [val]; }
+      return (memo[ck] = interiorsFeasible(sets, differs, function (v) { return v < lo || v > hi; }));
+    }
+    for (var i = 0; i < aSet.length; i++) {
+      for (var j = 0; j < bSet.length; j++) {
+        var a = aSet[i], b = bSet[j];
+        if (Math.abs(a - b) < gap) continue;
+        var lo = Math.min(a, b), hi = Math.max(a, b);
+        if (!fits(lo, hi, null, null)) continue;
+        pairs++;
+        keepA.add(a); keepB.add(b);
+        for (var c = 0; c < innerSets.length; c++) {
+          for (var k = 0; k < innerSets[c].length; k++) {
+            var d = innerSets[c][k];
+            if (keepIn[c].has(d) || !lockoutOutside(a, b, d)) continue;
+            if (fits(lo, hi, c, d)) keepIn[c].add(d);
+          }
+        }
+      }
+    }
+    return { a: keepA, b: keepB, inner: keepIn, pairs: pairs };
+  }
+  // The gap the two diamonds must span. Every catalogued lockout puzzle states 4
+  // ("differ by at least 4", "a difference of 4 or more"), which is also the
+  // constraint's textbook definition — so 4 is the default rather than a guess. It is
+  // READ rather than hardcoded because a puzzle stating a different number means it,
+  // and it is read ONLY from a sentence that also talks about diamonds / endpoints /
+  // lockout: on a mixed puzzle a German whisper clause ("differ by at least 5") must
+  // never raise the lockout gap, which would be an over-removal.
+  var LOCKOUT_GAP_RE = /\b(?:differ|difference)\b[^.]{0,60}?\b(?:at least|minimum of|no less than)\s+(\d)\b|\b(?:differ|difference)\b[^.]{0,60}?\b(\d)\s+or\s+(?:more|greater|higher)\b/;
+  function lockoutMinGap() {
+    var sents = String(getPuzzleRulesBlob() || '').split(/[.\n]/);
+    for (var i = 0; i < sents.length; i++) {
+      if (!/lock-?out|diamond|endpoint/.test(sents[i])) continue;
+      var m = LOCKOUT_GAP_RE.exec(sents[i]);
+      if (!m) continue;
+      var g = +(m[1] || m[2]);
+      if (g >= 1 && g <= 9) return g;
+    }
+    return 4;
+  }
+  // Independent of every other validator, and ITERATED TO A FIXPOINT for the same
+  // reason the between validator is: both ends and the interior constrain each other,
+  // and segments that share a diamond propagate through it.
+  function computeLockoutRemovals(unitFilter) {
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };
+    var cls = classifyLockoutLines();
+    if (cls.mode === 'none') return { noLockout: true };
+    // unitFilter is applied to the SEGMENTS, not the drawn chains — a diamond
+    // terminates a line segment, so a segment IS the clue (`u0cs9m2qmx` says so in
+    // as many words) and "validate selection only" must judge each one on its own.
+    var resolved = resolveCueValidatorLines(cls, null);
+    if (resolved.needSelection) return { noLockout: true, needSelection: true };
+    var lines = lockoutSegments(resolved.lines);
+    if (unitFilter) lines = lines.filter(function (keys) { return unitFilter(keys); });
+    if (lines.length === 0) return { noLockout: true };
+    var masked = resolved.masked, selection = resolved.selection;
+    var isFogged = getFogTester();
+    var mustDiffer = makeMustDiffer();
+    var gap = lockoutMinGap();
+
+    var values = st.values, fullSet = st.fullSet;
+    var work = {};
+    Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
+    function asc(s) { return Array.from(s).sort(function (a, b) { return a - b; }); }
+    // A cell's READABLE candidates — a fogged cell reads as the full set (hidden marks
+    // must never force a removal), else its value / working marks / full set.
+    function cellSet(key) {
+      if (isFogged && isFogged(key)) return fullSet;
+      if (values[key] != null) return new Set([values[key]]);
+      if (work[key]) return work[key];
+      return fullSet;                                    // empty cell → unconstrained
+    }
+    // May we DELETE candidates from cell C? Never from a fogged cell; when masked
+    // (ambiguous hand-selection), only from cells inside the selection.
+    function mayRemove(C) {
+      if (isFogged && isFogged(C)) return false;
+      if (masked && !selection.has(C)) return false;
+      return true;
+    }
+    function differsFor(inner) {
+      return function (i, j) { return mustDiffer(inner[i], inner[j]); };
+    }
+
+    // STRUCTURAL PASS — mark-independent, so it runs ONCE, before the fixpoint. Every
+    // cell reads as the FULL digit set: if not even that admits a diamond pair, no
+    // arrangement of digits could ever satisfy the clue as drawn. Per v3.157 that is
+    // OUR misread, not the puzzle's error — drop the clue (the marks are innocent),
+    // count it, and let the toast report it. The test is the validator's own engine
+    // run mark-free, so it cannot drift from what the fixpoint below enforces, and it
+    // is conservative by construction: a clue any fill satisfies has that fill's
+    // diamond pair, which the full-set run necessarily sees.
+    var full = asc(fullSet), invalid = 0;
+    lines = lines.filter(function (keys) {
+      var inner = keys.slice(1, -1);
+      var sup = lockoutSegmentSupport(full, full, inner.map(function () { return full; }),
+                                      differsFor(inner), gap);
+      if (sup.pairs > 0) return true;
+      invalid++;
+      return false;
+    });
+    if (lines.length === 0) return { noLockout: true, invalid: invalid };
+
+    var removals = [], seen = {}, changed = true, guard = 0;
+    function drop(key, d) {
+      work[key].delete(d);
+      var sk = key + '/' + d;
+      if (!seen[sk]) { seen[sk] = 1; removals.push({ cellKey: key, digit: String(d) }); }
+      changed = true;
+    }
+    while (changed && guard++ < 1000) {
+      changed = false;
+      lines.forEach(function (keys) {
+        var aKey = keys[0], bKey = keys[keys.length - 1];
+        var inner = keys.slice(1, -1);
+        var aSet = asc(cellSet(aKey)), bSet = asc(cellSet(bKey));
+        var innerSets = inner.map(function (k) { return asc(cellSet(k)); });
+        if (!aSet.length || !bSet.length) return;
+        if (innerSets.some(function (s) { return !s.length; })) return;
+        var sup = lockoutSegmentSupport(aSet, bSet, innerSets, differsFor(inner), gap);
+        // pairs === 0 here is a MARK contradiction, not a structural one (the
+        // structural pass already cleared this clue over the full digit set), so it
+        // goes down the normal wipe-and-report path: every candidate is unsupported.
+        [aKey, bKey].concat(inner).forEach(function (key, n) {
+          if (values[key] != null || !work[key] || !mayRemove(key)) return;   // solved / empty / protected
+          var keep = n === 0 ? sup.a : n === 1 ? sup.b : sup.inner[n - 2];
+          Array.from(work[key]).forEach(function (d) {       // snapshot: the set mutates below
+            if (!keep.has(d)) drop(key, d);
+          });
+        });
+      });
+    }
+
+    var emptied = 0;
+    Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
+
+    return { removals: removals, lockoutCount: lines.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // Worker: remove a specific list of centre candidates via SudokuPad's own
@@ -12637,6 +13002,8 @@
         compute: computeArrowRemovals, countKey: 'arrowCount', noneKey: 'noArrows' },
       { name: 'between', unitNoun: 'between line', menuLabel: 'Between lines',
         classify: classifyBetweenLines, compute: computeBetweenLineRemovals, countKey: 'betweenCount', noneKey: 'noBetween' },
+      { name: 'lockout', unitNoun: 'lockout line', menuLabel: 'Lockout lines',
+        classify: classifyLockoutLines, compute: computeLockoutRemovals, countKey: 'lockoutCount', noneKey: 'noLockout' },
       { name: 'renban', unitNoun: 'renban line', menuLabel: 'Renban lines',
         classify: classifyRenbanLines, compute: computeRenbanRemovals, countKey: 'renbanCount', noneKey: 'noRenban' },
       { name: 'nabner', unitNoun: 'nabner line', menuLabel: 'Nabner lines',
@@ -12728,6 +13095,15 @@
         var bcls = validatorClassify(def);
         if (bcls && bcls.mode === 'confident')
           betweenSegments(bcls.lines).forEach(function (seg) { out.push({ type: 'between', keys: seg }); });
+        break;
+      // Lockout is the same story with the other marker: the clue is the segment
+      // between two DIAMONDS, and the diamonds are part of what the run alters, so
+      // the preview draws them rather than a bare polyline. Same lockoutSegments()
+      // the compute reads.
+      case 'lockout':
+        var lcls = validatorClassify(def);
+        if (lcls && lcls.mode === 'confident')
+          lockoutSegments(lcls.lines).forEach(function (seg) { out.push({ type: 'lockout', keys: seg }); });
         break;
       // Zipper gets its own case so the preview shows the FOLD CENTRE (a bare
       // polyline hides the one thing the clue is about). Same classify() the
