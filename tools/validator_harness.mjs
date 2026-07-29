@@ -703,6 +703,23 @@ check('chain: adjacent duplicates collapse',
 check('chain: closed loop keeps the repeated endpoint (dedupe is the VALIDATOR\'s job, v3.85)',
   F.expandLineChain([[0.5, 0.5], [1.5, 0.5], [1.5, 1.5], [0.5, 1.5], [0.5, 0.5]]),
   ['0,0', '1,0', '1,1', '0,1', '0,0']);
+// ── SHORTENED ENDS: two clues can share both endpoints (v3.160, s7221r2i0r) ──
+// "Abstract Art" draws its two top-left same-difference lines with ~0.4-cell stubs
+// instead of running to the endpoint centres, so the eye can see they are two
+// clues where they overlap. Each stub still crosses the cell border, so rounding
+// picks up the right end cell — the two L's must stay TWO 3-cell chains, never one
+// 4-cell ring (a ring would be a different rule AND one shared difference).
+// Waypoints below are the rendered path data ÷ the 64px cell size.
+{
+  const A = F.expandLineChain([[2.1, 0.5], [1.5, 0.5], [1.5, 1.1]]);
+  const B = F.expandLineChain([[1.9, 1.5], [2.5, 1.5], [2.5, 0.9]]);
+  check('chain: stub-ended L keeps its far end cell (r1c3→r1c2→r2c2)', A, ['2,0', '1,0', '1,1']);
+  check('chain: the crossing partner is its own chain (r2c2→r2c3→r1c3)', B, ['1,1', '2,1', '2,0']);
+  checkFalse('chain: sharing BOTH endpoints does not make them one closed ring',
+    A[0] === A[A.length - 1] || B[0] === B[B.length - 1]);
+  checkTrue('chain: the two clues share exactly their two endpoints',
+    A[0] === B[B.length - 1] && A[A.length - 1] === B[0]);
+}
 // ── region-sum segmentation (loop-aware, v3.144) ─────────────────────────────
 // Regular 3x3 boxes over a 9x9, keyed "col,row" like the validators.
 const box9 = k => { const [c, r] = k.split(',').map(Number); return `${Math.floor(r / 3)}:${Math.floor(c / 3)}`; };

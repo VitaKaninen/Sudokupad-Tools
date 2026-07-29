@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.159.0
+// @version      3.160.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.159.0';
+  var SCRIPT_VERSION = '3.160.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -4925,6 +4925,35 @@
         osvg.appendChild(c);
       }
       function polyline(keys) { for (var i = 1; i < keys.length; i++) seg(centre(keys[i - 1]), centre(keys[i])); }
+      // TWO CLUES THAT SHARE THEIR ENDPOINTS DRAW AS ONE SHAPE (v3.160). On
+      // `s7221r2i0r` "Abstract Art" the two same-difference lines in the top-left are
+      // r1c3→r1c2→r2c2 and r2c2→r2c3→r1c3 — separate clues, each with its own
+      // difference, that between them trace the four sides of one 2x2 square. Drawn
+      // centre-to-centre they came out as a single closed ring, which reads as one
+      // clue (and as a LOOP, which is a different rule again).
+      // Fix: pull each open polyline's two ENDS back short of the endpoint centre,
+      // exactly the convention the setter used in the puzzle's own artwork — the
+      // shared corner then shows a visible break and the two L's separate. Interior
+      // cells are untouched, so the highlight still covers the clue's cells.
+      // A CLOSED LOOP IS NOT INSET: it has no ends, and a gap would invent one.
+      function polylineInset(keys, insetPx) {
+        if (!keys || keys.length < 2) return;
+        if (keys[0] === keys[keys.length - 1]) { polyline(keys); return; }   // ring: no ends to trim
+        var last = keys.length - 1;
+        for (var i = 1; i <= last; i++) {
+          var p1 = centre(keys[i - 1]), p2 = centre(keys[i]);
+          if (!p1 || !p2) continue;
+          var dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.sqrt(dx * dx + dy * dy);
+          if (len > 0) {
+            // Never eat more than 40% of a segment: a 2-cell clue is trimmed at both
+            // ends and must still read as a line.
+            var cut = Math.min(insetPx, len * 0.4);
+            if (i === 1) { p1 = { x: p1.x + dx / len * cut, y: p1.y + dy / len * cut }; }
+            if (i === last) { p2 = { x: p2.x - dx / len * cut, y: p2.y - dy / len * cut }; }
+          }
+          seg(p1, p2);
+        }
+      }
       function cagePerimeter(keys) {
         var set = {}; keys.forEach(function (k) { set[k] = 1; });
         keys.forEach(function (k) {
@@ -4964,7 +4993,7 @@
       }
       (objs || []).forEach(function (o) {
         if (!o) return;
-        if (o.type === 'line' || o.type === 'diag') polyline(o.keys || []);
+        if (o.type === 'line' || o.type === 'diag') polylineInset(o.keys || [], cellPx * 0.20);
         else if (o.type === 'cage') cagePerimeter(o.keys || []);
         else if (o.type === 'dot') { var a = centre(o.a), b = centre(o.b); if (a && b) marker({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, cellPx * 0.16); }
         else if (o.type === 'arrow') {

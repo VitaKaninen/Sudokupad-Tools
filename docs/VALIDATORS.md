@@ -1128,6 +1128,33 @@ the one failure mode the contract forbids. `SAMEDIFF_ANTI_RE` drops `r3xtlrd6qv`
 Differences", where "each sum of adjacent segments … has the same difference" is a rule about
 **segment sums**, not adjacent digits.
 
+### Two clues can share BOTH endpoints — and the overlay drew them as one (v3.160)
+
+`s7221r2i0r` "Abstract Art" (Marty Sears) draws two same-difference lines in the top-left corner:
+**r1c3 → r1c2 → r2c2** and **r2c2 → r2c3 → r1c3**. Separate clues, each with its own difference —
+but between them they trace the four sides of one 2×2 square, and the eyeball drew them
+centre-to-centre as **a single closed ring**. That reads as one clue, and worse, as a *loop*, which
+is a different rule again.
+
+- **Detection was never wrong.** Verified end-to-end: this puzzle's runtime `cp.lines` is **empty**
+  (SudokuPad 0.611 drops them for this scl puzzle), so `getCosmeticLines` falls to the DOM path;
+  `scanLineLayer` pushes one entry per `<path>` and `expandLineChain` returns two open 3-cell
+  chains. `classifyCueLines` → `resolveCueValidatorLines` → `computeSameDiffRemovals` carry them as
+  two `lineData` entries, each enumerating its own `d`. Nothing merges chains anywhere in the cue
+  stack. Pinned in the harness with the real path geometry.
+- **The setter had already solved the picture problem** — both lines are drawn with ~0.4-cell
+  **stubs** instead of running to the endpoint centres, so a human sees two L's. Each stub still
+  crosses the cell border (0.6 of a cell from the previous centre), so the rounding in
+  `expandLineChain` picks up the right end cell.
+- **Fix: `polylineInset`** pulls each open clue polyline's two ends back `0.20 × cellPx`, the same
+  convention. The shared corners then show a visible break. **A closed loop is never inset** — it
+  has no ends, and a gap would invent one. Interior cells are untouched, and the trim is capped at
+  40% of a segment so a 2-cell clue still reads as a line. Applies to the plain `line`/`diag`
+  descriptors; `between`/`arrow`/`zipper` already mark their endpoints with a ring or a head.
+- **The general lesson:** an overlay that draws N clues as N polylines on one layer is only
+  unambiguous while the clues stay apart. Whenever clues of the same type can share cells, the
+  preview needs a per-clue visual boundary, not just per-clue geometry.
+
 **A clause collision can silently disable the LINE-TYPE LABEL layer for two validators at once.**
 `WHISPERISH_RE` is `whisper|\bdiffer(s|ence)?\b`, so a legend phrase "same difference (SD)" reads as
 whisper language too — and the layer's "a phrase matching two types claims nothing" rule would then
