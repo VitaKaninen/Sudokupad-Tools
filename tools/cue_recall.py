@@ -53,6 +53,13 @@ VALIDATORS = [
     # "Double Arrows, Product Squares").
     ('double arrow', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE', 'double_arrow', None),
     ('lockout', 'LOCKOUT_CUE_RE', None, 'lockout_line', None),
+    # NOT HERE: counting circles. This table's model is "one cue regex, optionally
+    # minus one anti regex", and that cue's precision comes from an ANCHORED
+    # self-reference test (the counted noun must be the trigger's immediate object,
+    # which is what keeps the three "counts the CELLS a circle SEES" puzzles out).
+    # Flattening it to a single regex would score something that is not what ships.
+    # It has its own scorer, which extracts the real functions the way
+    # validator_harness.mjs does:  node tools/counting_circle_recall.mjs --guarded
 ]
 
 # tag -> clause const, for the clause-blindness check below. Whisper's layer 3 uses

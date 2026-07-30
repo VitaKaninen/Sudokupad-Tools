@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.176.0
+// @version      3.177.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.176.0';
+  var SCRIPT_VERSION = '3.177.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -5132,6 +5132,8 @@
           polyline(ak); ringCell(o.circle, cellPx * 0.34);
           if (ak.length > 1) arrowHead(centre(ak[ak.length - 2]), centre(ak[ak.length - 1]), cellPx * 0.30);
         }
+        // A lone counting circle: just the ring, matched to the drawn marker.
+        else if (o.type === 'circle') ringCell(o.key, cellPx * 0.34);
         else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { ringCell(bk[0], cellPx * 0.34); ringCell(bk[bk.length - 1], cellPx * 0.34); } }
         else if (o.type === 'lockout') { var lk = o.keys || []; polyline(lk); if (lk.length > 1) { diamondCell(lk[0], cellPx * 0.34); diamondCell(lk[lk.length - 1], cellPx * 0.34); } }
         // Zipper: the FOLD CENTRE is what the clue turns on, so mark it. Position
@@ -8052,6 +8054,395 @@
     return { removals: removals, diffDotCount: dots.length, emptiedCells: emptied, invalid: invalid };
   }
 
+  // ── Counting-circle validator (v3.177) ─────────────────────────────────────
+  // "A digit in a circle indicates exactly how many circles contain that digit."
+  //
+  // THE RULE IS A WHOLE-PUZZLE EQUATION, not a per-clue one. If every circle holding
+  // d requires k_d = d, then for each digit either k_d = d or k_d = 0, so the digits
+  // used in circles form a SUBSET S of the digit set with Σ S = n (the circle count),
+  // each d ∈ S appearing exactly d times. Verified against the published solutions of
+  // every readable test puzzle: `i9wx9vdy41` 1+2+…+8 = 36, `dGL3DgJgJd`
+  // 7+6+5+4+3+1 = 26, `xgmmht4odf` 9+8+6+4+2 = 29, `y6ivkzi761` 5+4+3+2+1 = 15,
+  // `gjyydhf4pm` 6+4+3+2+1 = 16, `swtm07rplk` 7+4+2+1 = 14,
+  // `blobz/hippo-birdie` 7+4+3 = 14, `blobz/offset-circles` 4+3+2 = 9,
+  // `miv6k9rwi0` 6 = 6.
+  //
+  // Consequences worth naming: 0 can NEVER sit in a circle (a 0 there would assert
+  // "zero circles contain 0" while being one itself) — a real elimination on
+  // `blobz/hippo-birdie`, whose digit set is 0-8; and the whole circle set is ONE
+  // unit, so both unitFilter ("validate selection only") and the fog gate are asked
+  // about every circle at once. A partially revealed or partially selected set is
+  // skipped outright, never counted short.
+  //
+  // See docs/COUNTING_CIRCLES_DESIGN.md for the full catalog measurement.
+
+  // The container nouns. `circle` is 55 of the catalog's 60 fires; the rest are themed
+  // synonyms for the identical picture (balloon `blobz/hippo-birdie`, football
+  // `gjyydhf4pm`, bubble, ring, disc) plus `diamond` (`df7B2RJ4gB`), which has its own
+  // reader. DELIBERATELY ABSENT: nouns we have no reader for — mushroom
+  // (`blobz/centipede`), tent (`nmhixakego`, which the player DRAWS), card suit
+  // (`pbz4ij1joh`). Adding one without a reader would list a validator that can never
+  // find its clue; leaving it out means the row simply never appears.
+  var COUNTCIRCLE_NOUN_SRC = '(?:circle[ds]?|balloons?|footballs?|bubbles?|rings?|discs?|diamonds?)';
+  // Written-out singulars, deliberately NOT a suffix-stripping rule: "diamond" ends in
+  // a `d`, so the obvious /(?:es|s|d)$/ strip turns it into "diamon" and the
+  // self-reference test can never match its own noun again.
+  var COUNTCIRCLE_STEMS = { circle: 'circle', circles: 'circle', circled: 'circle', balloon: 'balloon', balloons: 'balloon', football: 'football', footballs: 'football', bubble: 'bubble', bubbles: 'bubble', ring: 'ring', rings: 'ring', disc: 'disc', discs: 'disc', diamond: 'diamond', diamonds: 'diamond' };
+  // "a digit in a <adjectives> <noun>" — group 1 = the adjective run (what SCOPES the
+  // circle set), group 2 = the noun itself (needed verbatim: the self-reference test
+  // has to look for THIS puzzle's word, so `blobz/hippo-birdie`'s "number of BALLOONS
+  // containing that digit" is matched by "balloon", not by "circle").
+  var COUNTCIRCLE_CONTAINER_RE = new RegExp('(?:digits?|numbers?|values?)\\b[^.;:\\n]{0,40}?\\b(?:in|on|inside|within)\\s+(?:a|an|the|each|every|any|some)?\\s*((?:[a-z]+[- ]){0,3})(' + COUNTCIRCLE_NOUN_SRC + ')\\b', 'i');
+  // The adjective-first phrasing, which is just as common: "a circled digit indicates
+  // exactly how many circles contain that digit" (`dqNLp6qJHR`, `qg411d1jf2`,
+  // `9Lbt638t9N`, `z14kvlwqlh`), "a circled GIVEN digit" (`j6e5jfpw08`).
+  var COUNTCIRCLE_ADJFIRST_RE = new RegExp('\\b(' + COUNTCIRCLE_NOUN_SRC + ')\\s+(?:given\\s+)?(?:digits?|numbers?|values?)\\b', 'i');
+  // The counting verb. "times" is deliberately NOT consumed — the self-reference test
+  // below keys off it to tell "how many CIRCLES contain…" from "how many TIMES that
+  // digit appears in circles", which are the two phrasing families.
+  var COUNTCIRCLE_TRIGGER_RE = /\b(?:how many|how often|the (?:total )?(?:number|count) of|that many|exactly\s+(?:N|X|that many))\b/i;
+  // A digit in a circle counts circles that DON'T hold it — same picture, opposite
+  // answer. `4mtPGFb6dm` "Circular Unreasoning".
+  var COUNTCIRCLE_NEG_RE = /\bdo(?:es)?\s+not\b|\bnot\s+contain|\bdon'?t\s+contain|\bother\s+than\b|\bfewer\b/i;
+  // Each COLOUR of circle counts independently, so there is no single set to count.
+  // Seven catalog puzzles; `ah1c5p6zcr` "Ten Ring Circus" has the player CHOOSE the
+  // colouring, so it is unvalidatable in principle rather than merely unimplemented.
+  // (A later extension could partition by drawn fill/stroke for the other six.)
+  var COUNTCIRCLE_COLOR_RE = /\bcolou?r(?:s|ed|ing)?\b/i;
+  // WHICH circles are in the set is itself the solver's job: only the ones on a loop
+  // (`2vyqqhy6ky`), only the *revealed* ones (`belm8cdujp`, `tc5dhvo13g`), only the
+  // ones in a region (`laj1tzweyh`), shaded/unshaded.
+  var COUNTCIRCLE_DEFERRED_RE = /\bon\s+the\s+loop\b|\bin(?:side)?\s+the\s+loop\b|\b(?:un)?shaded\b|\bwithin\s+its\s+region\b|\bin\s+its\s+region\b|\brevealed\b|\billuminat/i;
+  // Rules that count something else entirely and would otherwise trip the cue: three
+  // catalog puzzles count the CELLS a circle SEES (`sotpbtg8o1`, `m73tnQmbbd`,
+  // `vgbfcjxvav`). The anchored self-reference test already rejects all three; this is
+  // the second gate, because a wrong claim here is an over-removal.
+  var COUNTCIRCLE_ANTI_RE = /\bsees?\b|\bseen\b|\bvision\b|\bobstruct|concatenat/i;
+  // SEMICIRCLES break the count arithmetic outright: `j27rj7frco` "Half Circles" pairs
+  // two semicircles into one circle, and it is DRAWN as 56 whole circles with 40
+  // half-cell white masking rects laid over them — so any reader sees 56 where the
+  // puzzle means 16 full + 40 halves. Tested against the WHOLE BLOB, not one clause:
+  // a puzzle that draws semicircles anywhere cannot be counted, whichever sentence
+  // says so.
+  var COUNTCIRCLE_SEMI_RE = /\bsemi[-\s]?circles?\b|\bhalf[-\s]?circles?\b/i;
+
+  // Does the text after the trigger say "…<NOUN>s CONTAINING THAT DIGIT"? That
+  // self-reference IS the clue type, and the match is ANCHORED at the trigger's end,
+  // which is what rejects the rival readings for free: `sotpbtg8o1`'s "counts the
+  // number of CELLS that the circle sees" puts `cells`, not `circle`, immediately
+  // after the trigger. Two attested shapes:
+  //   1. "how many CIRCLES contain / hold / with that digit"  (also "…in the puzzle
+  //      that contain…", `v1l5ri9ew3`, hence the short filler)
+  //   2. "how many TIMES that digit appears IN CIRCLES"
+  function countingCircleSelfRef(rest, stem) {
+    var S = '(?:[a-z]+[- ]){0,3}' + stem + '(?:s|es|d)?';
+    // `with\b` — the trailing boundary matters. Without it "gold rings WITHIN its
+    // region" (`laj1tzweyh`, which counts rings per region, not rings holding the
+    // digit) reads as a containment phrase and the cue fires on a rival rule.
+    var shape1 = new RegExp('^\\s*' + S + '\\b[^.;:\\n]{0,30}?\\b(?:contain|hold|have|with\\b|includ)', 'i');
+    var shape2 = new RegExp('^\\s*(?:of\\s+)?times?\\b[^.;:\\n]{0,60}?\\b(?:in|on|among)\\s+' + S + '\\b', 'i');
+    return shape1.test(rest) || shape2.test(rest);
+  }
+  // → { clause, word, stem, scoped } for the first clause stating the rule, else null.
+  // Clause-scoped (split on . \n ; :) so an unrelated sentence can't lend it a noun.
+  // `word` is the puzzle's own singular noun (what the self-reference test looks for);
+  // `stem` is the normalised READER key — 'diamond' goes to getCellCenteredDiamonds,
+  // every round synonym to getCellCenteredCircles. `scoped` = the rule named an
+  // adjective for the circles it means ("BLUE circles", "SMALL WHITE circle",
+  // "BLACK-OUTLINED counting circle"), which is what tells a puzzle that deliberately
+  // has several circle types from one that means all of them — see the incomplete-set
+  // guard.
+  function countingCircleClause(blob) {
+    var clauses = String(blob || '').split(/[.\n;:]/);
+    for (var i = 0; i < clauses.length; i++) {
+      var c = clauses[i];
+      if (COUNTCIRCLE_ANTI_RE.test(c)) continue;
+      var m = COUNTCIRCLE_CONTAINER_RE.exec(c), adj = '', from = -1, noun = '';
+      if (m) { adj = m[1] || ''; noun = m[2]; from = m.index + m[0].length; }
+      else {
+        var a = COUNTCIRCLE_ADJFIRST_RE.exec(c);
+        if (!a) continue;
+        noun = a[1]; from = a.index + a[0].length;
+      }
+      var word = COUNTCIRCLE_STEMS[noun.toLowerCase()];
+      if (!word) continue;
+      var t = COUNTCIRCLE_TRIGGER_RE.exec(c.slice(from));
+      if (!t) continue;
+      var rest = c.slice(from + t.index + t[0].length);
+      if (!countingCircleSelfRef(rest, word)) continue;
+      // Articles are not adjectives — only a real qualifier scopes the set.
+      var scoped = adj.replace(/\b(?:a|an|the|each|every|any|some|its|that|this)\b/gi, '').trim().length > 0;
+      return { clause: c, word: word, stem: word === 'diamond' ? 'diamond' : 'circle', scoped: scoped };
+    }
+    return null;
+  }
+  function hasCountingCircleCue(blob) { return countingCircleClause(blob) !== null; }
+
+  // Cells carrying a thermo/arrow BULB — the markers a counting circle must not be
+  // confused with. Both getters are the ones the thermo and arrow validators
+  // themselves read, so this can't drift from what those claim.
+  function countingCircleBulbCells() {
+    var out = {};
+    try { getThermos().forEach(function (t) { out[t.root] = 1; }); } catch (e) { /* model not ready */ }
+    try { getSumArrows().forEach(function (a) { out[a.circle] = 1; }); } catch (e) { /* ditto */ }
+    return out;
+  }
+
+  // The counting set as 0-indexed "col,row" keys, DE-DUPLICATED BY CELL (a cell with
+  // two markers on it is one circle).
+  //
+  // A BARE BULB IS NOT A CIRCLE, A STROKED ONE IS — the whole `y6ivkzi761` vs
+  // `dGL3DgJgJd` question, settled by measuring both readings against those puzzles'
+  // own solutions. `y6ivkzi761` draws 6 thermo bulbs `stroke:none` on cells no
+  // counting circle occupies: counting all 21 markers scores {1:3, 2:5, 3:4, 4:4,
+  // 5:5} — invalid — while the 15 stroked ones score 1:1 2:2 3:3 4:4 5:5 = 15.
+  // `dGL3DgJgJd` draws its 4 bulbs the same bare way and then puts a black-stroked
+  // circle on 4 of those same cells, which is how a setter says "this bulb counts
+  // too" (its rules say so out loud), giving 26. So: drop a bulb cell only when
+  // NOTHING stroked is drawn on it.
+  //
+  // An ARROW bulb is never dropped on that test — `zdmnz4qx5m` states "Arrow circles
+  // count as circles for this rule" and draws its 9 arrow circles pixel-identically
+  // to its 15 plain ones (`0.80 ROUND #FFFFFF s=#555`), so geometry cannot separate
+  // them and must not try. `df7B2RJ4gB` is the puzzle whose arrow circles DON'T count,
+  // and there the rules' noun is `diamond`, which sends us to the other reader.
+  function countingCircleClues(stem) {
+    var cs = getGridCellSize();
+    if (!cs) return [];
+    var marks;
+    try { marks = stem === 'diamond' ? getCellCenteredDiamonds(cs) : getCellCenteredCircles(cs); }
+    catch (e) { return []; }
+    var perCell = {};
+    (marks || []).forEach(function (m) { (perCell[m.key] = perCell[m.key] || []).push(m); });
+    var bulbs = countingCircleBulbCells();
+    var keys = [];
+    Object.keys(perCell).forEach(function (k) {
+      if (bulbs[k] && !perCell[k].some(function (m) { return m.stroked; })) return;
+      keys.push(k);
+    });
+    return keys.sort();
+  }
+
+  // { mode:'confident'|'ambiguous'|'none', keys, allKeys, why } — the shape every
+  // classifier returns, so detectedValidators()/the menu greying/the eyeball work
+  // unchanged. AMBIGUOUS here means "this variant of the rule is not one we can
+  // check", and unlike the line validators it is NOT rescuable by selecting cells —
+  // the clue is the whole circle set, so a subset is a wrong answer, not a partial
+  // one. Hence `noSelectionRescue` on the registry entry.
+  function classifyCountingCircles() {
+    var blob = getPuzzleRulesBlob();
+    var cue = countingCircleClause(blob);
+    if (!cue) return { mode: 'none', keys: [], allKeys: [] };
+    var keys = countingCircleClues(cue.stem);
+    // Fewer than two circles is no constraint worth offering (and zero is the
+    // player-draws-them case: `NbqQ2HhP4P`, `nmhixakego`, `hqa07qdm2h`'s
+    // outside-the-grid circles). Nothing to grey out — the row just isn't listed.
+    if (keys.length < 2) return { mode: 'none', keys: [], allKeys: keys };
+    function refuse(why) { return { mode: 'ambiguous', keys: [], allKeys: keys, why: why }; }
+    if (COUNTCIRCLE_SEMI_RE.test(blob))
+      return refuse('this puzzle counts semicircles as half a circle, which we can’t read');
+    if (COUNTCIRCLE_NEG_RE.test(cue.clause))
+      return refuse('here a digit counts the circles that DON’T contain it');
+    if (COUNTCIRCLE_COLOR_RE.test(cue.clause))
+      return refuse('here each colour of circle is counted separately');
+    if (COUNTCIRCLE_DEFERRED_RE.test(cue.clause))
+      return refuse('which circles belong to the count is part of the puzzle');
+    // INCOMPLETE SET. An unscoped rule ("a digit in a circle") counts EVERY circle, so
+    // a round marker we can't pin to a cell means our count is short — and a short
+    // count is a WRONG answer, not a weak one. `gfr7xipywo` "Mods, Quads & Odds" is
+    // the case: 9 readable cell-centred odd-circles plus 7 quad circles on grid
+    // CORNERS, both counting. Reading only the 9 scores {5:2, 7:3, 9:4} against its
+    // solution — invalid. Scoping is checked FIRST because `blobz/offset-circles` also
+    // has off-centre round markers, but says "BLUE circles", which makes the others
+    // none of our business (and it then scores 4+3+2 = 9 exactly).
+    if (!cue.scoped && cue.stem === 'circle') {
+      var stray = 0;
+      try { stray = getOffCellRoundMarkers(getGridCellSize()).length; } catch (e) {}
+      if (stray > 0)
+        return refuse('the puzzle draws ' + stray + ' more circle' + (stray === 1 ? '' : 's')
+                    + ' that don’t sit in a cell, so they can’t be counted');
+    }
+    return { mode: 'confident', keys: keys, allKeys: keys };
+  }
+
+  // Every subset of `digits` summing to n, as sorted arrays. n ≤ Σ digits, and the
+  // digit set is ≤ 10 long, so this is a handful of results (at most ~30 over 1-9)
+  // and needs no cap.
+  // 0 IS FILTERED OUT HERE, not just by the caller: a 0 in a circle would assert
+  // "zero circles contain 0" while being one of them, so it can never be a member —
+  // and because it adds nothing to the sum, leaving it in would emit each subset twice
+  // (with and without it) and make every "does 0 survive" answer wrong.
+  function countingCircleSums(digits, n) {
+    var out = [], sorted = digits.filter(function (d) { return d > 0; }).sort(function (a, b) { return a - b; });
+    function rec(i, rem, acc) {
+      if (rem === 0) { out.push(acc.slice()); return; }
+      for (var j = i; j < sorted.length && sorted[j] <= rem; j++) {
+        acc.push(sorted[j]);
+        rec(j + 1, rem - sorted[j], acc);
+        acc.pop();
+      }
+    }
+    rec(0, n, []);
+    return out;
+  }
+
+  // Seat the circles for ONE candidate digit set S: every d ∈ S used exactly d times,
+  // each cell taking a digit from its own domain, and no two cells that must differ
+  // under ordinary Sudoku sharing a digit. `pin` (nullable) forces cells[pinIdx] = d.
+  // Returns a WITNESS array of digits parallel to `cells`, or null.
+  //
+  // Fewest-options-first over the cells, which is what keeps it cheap: n is the circle
+  // count (≤ ~40 in the corpus) and |S| is tiny (Σ S = n with distinct parts, so ≤ 9).
+  // `budget` is a shared node counter — on overrun we throw to the caller, which falls
+  // back to the subset-union answer (a sound over-approximation), per the node-cap
+  // rule: a bail must degrade, never silently do nothing.
+  function countingCircleFill(cells, doms, S, mustDiffer, pinIdx, pinDigit, budget) {
+    var need = {}, i;
+    for (i = 0; i < S.length; i++) need[S[i]] = S[i];
+    var inS = {}; S.forEach(function (d) { inS[d] = 1; });
+    var assign = new Array(cells.length).fill(0);
+    var opts = cells.map(function (k, idx) {
+      if (idx === pinIdx) return inS[pinDigit] && doms[idx].has(pinDigit) ? [pinDigit] : [];
+      var o = [];
+      S.forEach(function (d) { if (doms[idx].has(d)) o.push(d); });
+      return o;
+    });
+    for (i = 0; i < opts.length; i++) if (opts[i].length === 0) return null;
+    function ok(idx, d) {
+      if (!need[d]) return false;
+      for (var j = 0; j < cells.length; j++)
+        if (assign[j] === d && mustDiffer(cells[idx], cells[j])) return false;
+      return true;
+    }
+    function rec(placed) {
+      if (budget.n-- <= 0) throw new Error('countingCircleBudget');
+      if (placed === cells.length) return true;
+      var best = -1, bestOpts = null;
+      for (var idx = 0; idx < cells.length; idx++) {
+        if (assign[idx]) continue;
+        var av = opts[idx].filter(function (d) { return ok(idx, d); });
+        if (av.length === 0) return false;
+        if (!bestOpts || av.length < bestOpts.length) { best = idx; bestOpts = av; }
+        if (av.length === 1) break;
+      }
+      for (var q = 0; q < bestOpts.length; q++) {
+        var d = bestOpts[q];
+        assign[best] = d; need[d]--;
+        if (rec(placed + 1)) return true;
+        need[d]++; assign[best] = 0;
+      }
+      return false;
+    }
+    return rec(0) ? assign.slice() : null;
+  }
+
+  // The complete-support answer: per circle cell, the set of digits that some legal
+  // whole-set seating puts there. Witness-reuse — one found seating supports EVERY
+  // cell/digit pair it contains, so only pairs still unwitnessed need a targeted
+  // search (the `sameDiffExactFills` shape).
+  // Returns { sup:[Set…], feasible:<count of seatable subsets>, bailed:<bool> }.
+  function countingCircleSupport(cells, doms, subsets, mustDiffer, budget) {
+    var sup = cells.map(function () { return new Set(); }), feasible = 0, bailed = false;
+    var live = [];
+    try {
+      subsets.forEach(function (S) {
+        var w = countingCircleFill(cells, doms, S, mustDiffer, -1, 0, budget);
+        if (!w) return;
+        feasible++; live.push(S);
+        for (var i = 0; i < cells.length; i++) sup[i].add(w[i]);
+      });
+      live.forEach(function (S) {
+        var inS = {}; S.forEach(function (d) { inS[d] = 1; });
+        for (var i = 0; i < cells.length; i++) {
+          var ds = Array.from(doms[i]);
+          for (var j = 0; j < ds.length; j++) {
+            var d = ds[j];
+            if (!inS[d] || sup[i].has(d)) continue;
+            var w = countingCircleFill(cells, doms, S, mustDiffer, i, d, budget);
+            if (w) for (var m = 0; m < cells.length; m++) sup[m].add(w[m]);
+          }
+        }
+      });
+    } catch (e) {
+      // Budget overrun → degrade to the SUBSET UNION, which is a sound
+      // over-approximation (it keeps every digit any seatable subset uses), so the
+      // pass still removes what the sum equation alone proves.
+      bailed = true;
+      var allowed = {};
+      (live.length ? live : subsets).forEach(function (S) { S.forEach(function (d) { allowed[d] = 1; }); });
+      for (var i = 0; i < cells.length; i++) {
+        sup[i] = new Set();
+        doms[i].forEach(function (d) { if (allowed[d]) sup[i].add(d); });
+      }
+      if (!feasible) feasible = subsets.length;
+    }
+    return { sup: sup, feasible: feasible, bailed: bailed };
+  }
+
+  function computeCountingCircleRemovals(unitFilter) {
+    var cls = classifyCountingCircles();
+    if (cls.mode === 'none') return { noCountingCircles: true };
+    // The whole circle set is ONE clue, so an unreadable variant cannot be rescued by
+    // selecting part of it (see classifyCountingCircles) — refuse whatever the
+    // selection is, and say why.
+    if (cls.mode === 'ambiguous') return { noCountingCircles: true, wholeClue: cls.why || true };
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };   // letters / empty digit set → no counting
+
+    var keys = cls.keys;
+    // ONE UNIT: the filter (selection-only ANDed with the fog gate) is asked about
+    // every circle at once. A partially selected or partially revealed set is skipped
+    // outright — counting a subset would be a wrong answer.
+    if (unitFilter && !unitFilter(keys)) return { noCountingCircles: true };
+
+    var n = keys.length;
+    // 0 can never sit in a circle, so only POSITIVE digits can be members of S. (The
+    // subset machinery would exclude 0 anyway — it contributes nothing to the sum
+    // while requiring a cell — but being explicit keeps the intent readable.)
+    var pos = Array.from(st.fullSet).filter(function (d) { return d > 0; });
+    var subsets = countingCircleSums(pos, n);
+
+    var mustDiffer = makeMustDiffer();
+    var full = keys.map(function () { return st.fullSet; });
+
+    // STRUCTURAL, i.e. MARK-INDEPENDENT (v3.157 contract): can this many circles be
+    // seated AT ALL, with every cell free? Over 1-9 the sum is unreachable past 45,
+    // and a reachable total can still be unseatable — n = 45 needs nine mutually
+    // non-conflicting circles holding 9. Either way it means WE claimed the wrong
+    // circle set, not that the puzzle is broken: drop it, count it, report it, and
+    // never wipe the marks over it.
+    var structural = countingCircleSupport(keys, full, subsets, mustDiffer, { n: 400000 });
+    if (!structural.feasible) return { noCountingCircles: true, invalid: 1 };
+
+    var values = st.values, centre = st.centre;
+    var removals = [], seen = {}, bailed = false;
+    var changed = true, guard = 0;
+    while (changed && guard++ < 200) {
+      var doms = keys.map(function (k) {
+        if (values[k] != null) return new Set([values[k]]);
+        if (centre[k]) return centre[k];
+        return st.fullSet;                       // empty cell → unconstrained, never modified
+      });
+      var res = countingCircleSupport(keys, doms, subsets, mustDiffer, { n: 400000 });
+      if (res.bailed) bailed = true;
+      var before = removals.length;
+      keys.forEach(function (k, i) {
+        if (values[k] != null || !centre[k]) return;
+        Array.from(centre[k]).forEach(function (d) {
+          if (res.sup[i].has(d)) return;
+          centre[k].delete(d);
+          var kk = k + '/' + d;
+          if (!seen[kk]) { seen[kk] = 1; removals.push({ cellKey: k, digit: String(d) }); }
+        });
+      });
+      changed = removals.length > before;
+    }
+
+    var emptied = 0;
+    Object.keys(centre).forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
+    return { removals: removals, circleCount: n, emptiedCells: emptied, bailed: bailed };
+  }
+
   // ── Cage validator ────────────────────────────────────────────────────────
   // Standard killer cages (a small total in a corner, no repeated digit). For
   // each cage we generate every distinct-digit combination matching its size and
@@ -9704,7 +10095,16 @@
   // diamonds (rotated rects, rx = 0) fail the circularity gate.
   // DOM, not the model: cosmetic model arrays can be stored TRANSPOSED relative to
   // what is rendered (the v3.83 lesson), and the DOM shares the lines' coordinate
-  // space. Returns [{ cx, cy, r, key }] in SVG pixel space.
+  // space. Returns [{ cx, cy, r, key, stroked }] in SVG pixel space.
+  //
+  // `stroked` (v3.177) = the rect carries a real stroke attribute. It is what tells a
+  // COUNTING circle from a bare thermo/arrow bulb: `y6ivkzi761` draws its 6 bulbs
+  // `#CFCFCF` with `stroke:none` and its 15 counting circles white with stroke
+  // `#000000`, while `dGL3DgJgJd` draws bare bulbs AND then puts a black-stroked
+  // circle on 4 of those same cells — which is exactly how a setter says "this bulb
+  // counts too". See countingCircleClues; nothing else reads the field, and it must
+  // NOT become a general filter (genuine unstroked clue circles exist —
+  // `gfr7xipywo`'s grey odd-circles).
   function getCellCenteredCircles(cs) {
     var out = [];
     if (!cs) return out;
@@ -9720,7 +10120,35 @@
       if (col < 0 || col >= N || row < 0 || row >= N) return;
       if (Math.abs(cx - (col + 0.5) * cs) > cs * 0.2 ||
           Math.abs(cy - (row + 0.5) * cs) > cs * 0.2) return;   // centred on a cell (not a quadruple)
-      out.push({ cx: cx, cy: cy, r: w / 2, key: col + ',' + row });
+      var sk = (r.getAttribute('stroke') || '').trim().toLowerCase();
+      out.push({ cx: cx, cy: cy, r: w / 2, key: col + ',' + row,
+                 stroked: !!sk && sk !== 'none' && sk !== 'transparent' });
+    });
+    return out;
+  }
+  // Round in-grid markers of roughly clue size that the reader above REJECTED for
+  // sitting off a cell centre — quadruple circles on a grid corner (`gfr7xipywo`),
+  // deliberately offset circles (`blobz/offset-circles`). Counting circles need this
+  // because an unscoped "a digit in a circle" rule counts EVERY circle: if some of
+  // them aren't attributable to a cell, our count is short and the answer is wrong
+  // rather than weak. Kropki-sized dots (< 0.4 cs) are excluded — they are never
+  // what such a rule means. See classifyCountingCircles' incomplete-set guard.
+  function getOffCellRoundMarkers(cs) {
+    var out = [];
+    if (!cs) return out;
+    var N = detectGridSize();
+    document.querySelectorAll('#overlay rect, #underlay rect').forEach(function (r) {
+      var w = parseFloat(r.getAttribute('width') || 0), h = parseFloat(r.getAttribute('height') || 0);
+      var rx = parseFloat(r.getAttribute('rx') || 0);
+      if (w < cs * 0.4 || w > cs * 1.6 || Math.abs(w - h) > cs * 0.1) return;
+      if (Math.abs(rx - w / 2) > w * 0.15) return;
+      var cx = parseFloat(r.getAttribute('x') || 0) + w / 2;
+      var cy = parseFloat(r.getAttribute('y') || 0) + h / 2;
+      var col = Math.round(cx / cs - 0.5), row = Math.round(cy / cs - 0.5);
+      if (col < 0 || col >= N || row < 0 || row >= N) return;
+      if (Math.abs(cx - (col + 0.5) * cs) <= cs * 0.2 &&
+          Math.abs(cy - (row + 0.5) * cs) <= cs * 0.2) return;   // cell-centred → the reader has it
+      out.push({ cx: cx, cy: cy, r: w / 2 });
     });
     return out;
   }
@@ -13471,6 +13899,22 @@
   //      + classify OR detect per above). `menuLabel` may be a FUNCTION when the
   //      wording depends on what the puzzle holds — read it via validatorLabel(def),
   //      never `def.menuLabel` directly.
+  //   3a. IS YOUR CLUE ONE UNIT OR MANY? (v3.177) Every validator before counting
+  //      circles had MANY units (dots, cages, lines), which is what makes the
+  //      selection-only override and the per-clue fog gate meaningful. A WHOLE-PUZZLE
+  //      clue has exactly ONE unit covering every cell it touches, and three things
+  //      change: pass the entire key list to unitFilter in one call (so a partial
+  //      selection or any fogged cell skips it — counting a subset is a WRONG answer,
+  //      not a partial one); return ONE group from validatorClueCellGroups (or the
+  //      missing-candidates warning reports N clues about a single constraint); and
+  //      set `noSelectionRescue: true` so an AMBIGUOUS row stays disabled even with
+  //      "Validate selection only" ticked, since selecting cells cannot make an
+  //      unreadable whole-grid rule readable. Pair it with `ambiguousTip` (string or
+  //      fn(cls)) — the default greyed-row tooltip says "which lines are the …s isn't
+  //      stated", which is simply untrue for a clue that has no lines. A compute that
+  //      declines this way returns `wholeClue: <why>` alongside its noneKey, and both
+  //      toast paths render it via wholeClueMsg. Both fields are OPT-IN: omitting
+  //      them leaves the pre-v3.177 behaviour exactly as it was.
   //   4. THE HOVER EYEBALL (v3.91) — every menu row gets a 👁 via makeValidatorEye:
   //        • LINE validators get it free via `classify` (the default branch of
   //          validatorClueObjects draws the confident lines from def.cls).
@@ -13548,6 +13992,26 @@
       // Difference dots use `classify` (not `detect`) purely to inherit the menu's
       // ambiguity greying + ⚠ note — they are dots, not lines, so validatorClueObjects
       // has its own case for them.
+      // Counting circles are ONE clue (the whole circle set), which is why they carry
+      // `noSelectionRescue`: an AMBIGUOUS reading here means "we can't read this
+      // variant of the rule", and letting the player select a subset would validate a
+      // count the puzzle never posed. `ambiguousTip` carries cls.why so the greyed row
+      // says which variant it is, instead of the generic which-line-is-which wording.
+      // The label names the marker the puzzle actually draws — "Counting diamonds" on
+      // `df7B2RJ4gB`, whose rule counts diamonds, not its arrow circles.
+      { name: 'counting circle', unitNoun: 'counting circle',
+        menuLabel: function () {
+          var cue = null;
+          try { cue = countingCircleClause(getPuzzleRulesBlob()); } catch (e) {}
+          return cue && cue.stem === 'diamond' ? 'Counting diamonds' : 'Counting circles';
+        },
+        noSelectionRescue: true,
+        ambiguousTip: function (cls) {
+          return 'Disabled — ' + ((cls && cls.why) || 'this puzzle’s counting rule isn’t one we can check')
+               + '. Counting circles is a whole-puzzle count, so it can’t be checked on part of the grid.';
+        },
+        classify: classifyCountingCircles, compute: computeCountingCircleRemovals,
+        countKey: 'circleCount', noneKey: 'noCountingCircles' },
       { name: 'difference dot', unitNoun: 'difference dot',
         menuLabel: function () {
           var ds = collectDifferenceDots(), seen = {}, vals = [];
@@ -13654,6 +14118,13 @@
         var ddcls = validatorClassify(def) || { dots: [] };
         (ddcls.dots || []).forEach(function (d) { out.push({ type: 'dot', a: d.a, b: d.b }); });
         break;
+      // Counting circles: a ring on each circle, drawn at the marker's own centre and
+      // radius by ringCell. An AMBIGUOUS puzzle auto-validates nothing, so cls.keys is
+      // empty and makeValidatorEye's shared tooltip path explains why.
+      case 'counting circle':
+        var cccls = validatorClassify(def) || { keys: [] };
+        (cccls.keys || []).forEach(function (k) { out.push({ type: 'circle', key: k }); });
+        break;
       case 'cage':          getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;
       case 'little killer': getLittleKillers().forEach(function (lk) { out.push({ type: 'diag', keys: lk.keys }); }); break;
       case 'thermo':        getThermos().forEach(function (t) { out.push({ type: 'thermo', edges: t.edges, root: t.root, keys: t.keys }); }); break;
@@ -13713,6 +14184,15 @@
   function validatorClueCellGroups(def) {
     var objs = []; try { objs = validatorClueObjects(def) || []; } catch (e) { return []; }
     var out = [];
+    // Counting circles are ONE clue, however many circles are drawn — the eyeball gets
+    // them as separate objects so it can ring each, but the missing-candidates count
+    // (and any unitFilter test) must see a single group, or it would report "12 of 26
+    // clues have a blank cell" about what is really one constraint.
+    if (def.name === 'counting circle') {
+      var all = [];
+      objs.forEach(function (o) { if (o && o.key) all.push(o.key); });
+      return all.length ? [all] : [];
+    }
     objs.forEach(function (o) {
       if (!o) return;
       var keys = o.keys;
@@ -14087,6 +14567,15 @@
            (n === 1 ? 'it' : 'them') + ' (likely mis-identified as the wrong clue type). ' +
            'Not checked, nothing changed.';
   }
+  // A WHOLE-PUZZLE clue whose variant we can't read (v3.177). Distinct from
+  // needSelection: there is nothing to select that would make it checkable, because
+  // the constraint IS the whole set — counting a subset of the circles would pose a
+  // count the puzzle never did. `why` is the classifier's own sentence.
+  function wholeClueMsg(def, why) {
+    return '⚠ ' + pluralUnit(def.unitNoun, 2).replace(/^./, function (c) { return c.toUpperCase(); })
+         + ' not checked — ' + (typeof why === 'string' ? why : 'this variant of the rule isn\'t one we can check')
+         + '. It counts the whole grid at once, so there is no part of it we could check instead.';
+  }
   // Compose the invalid-clue error with whatever the run would otherwise have said.
   function withInvalid(res, def, msg) {
     if (!res.invalid) return null;
@@ -14448,6 +14937,7 @@
     if (comp.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
     if (comp[def.noneKey]) {
       if (comp.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + label + '" again.', 'warning'); return; }
+      if (comp.wholeClue) { showRemoveInvalidToast(wholeClueMsg(def, comp.wholeClue), 'warning'); return; }
       showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), note ? 'warning' : 'success');
       return;
     }
@@ -14505,7 +14995,10 @@
     // Structurally impossible clues (see invalidClueMsg): dropped, never validated,
     // and carried on EVERY outcome so they can't vanish behind an all-clear.
     var invalid = comp.invalid || 0;
-    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, note: note, invalid: invalid };
+    // comp.wholeClue = this clue is a WHOLE-PUZZLE count whose variant we can't read
+    // (counting circles), so unlike needSelection there is nothing the player can
+    // select to enable it — the string says which variant it is.
+    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, wholeClue: comp.wholeClue || null, note: note, invalid: invalid };
     var count = comp[def.countKey] || 0;
     var removals = comp.removals || [];
     if (removals.length === 0) return { present: true, removed: 0, count: count, note: note, invalid: invalid };
@@ -14534,6 +15027,7 @@
       if (res.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
       if (!res.present) {
         if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + (validatorLabel(def)) + '" again.', 'warning'); return; }
+        if (res.wholeClue) { showRemoveInvalidToast(wholeClueMsg(def, res.wholeClue), 'warning'); return; }
         // Every clue was impossible as read → that IS the result, not "none found".
         var noneInv = withInvalid(res, def, null);
         if (noneInv) { showRemoveInvalidToast(withNote(noneInv), 'error'); return; }
@@ -14975,8 +15469,17 @@
         // (def.cls) — no re-classification here.
         var amb = !!(def.cls && def.cls.mode === 'ambiguous');
         var noun = def.unitNoun || def.name;
+        // `noSelectionRescue` (v3.177): for most validators AMBIGUOUS means "we can't
+        // tell WHICH lines carry the clue", and letting the player select them is the
+        // right answer. For a WHOLE-PUZZLE clue (counting circles) it means "we can't
+        // read this variant of the rule", and validating a selected subset would pose
+        // a constraint the puzzle never did — so the row stays disabled either way and
+        // `ambiguousTip` explains what it actually is.
+        var rescuable = amb && !def.noSelectionRescue;
         var tip = '';
-        if (amb && !selOnly)
+        if (amb && def.ambiguousTip)
+          tip = typeof def.ambiguousTip === 'function' ? def.ambiguousTip(def.cls) : def.ambiguousTip;
+        else if (amb && !selOnly)
           tip = 'Disabled — which lines are the ' + noun + 's isn\'t stated unambiguously. '
               + 'Tick "Validate selection only", then select the line\'s cells.';
         else if (amb)
@@ -14984,7 +15487,7 @@
         else if (hiMode)
           tip = 'Highlight this constraint\'s invalid candidates in orange. Runs once — the ↻ on the right keeps it updated as you solve.';
         addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
-                { disabled: amb && !selOnly, title: tip, eyeDef: def });
+                { disabled: amb && !(selOnly && rescuable), title: tip, eyeDef: def });
       });
     }
     addSep();

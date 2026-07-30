@@ -565,6 +565,24 @@ way so it stays low-maintenance.
   dots you mean) / none; 15 confident + 2 ambiguous catalog-wide. Black circles are ratio clues and
   Roman labels are XV clues, so `r9rLrppHpT` splits its own dots between the two validators by label.
   Full detail + the anti-cue rationale in [VALIDATORS.md](VALIDATORS.md).
+  **Counting circles (v3.177): `classifyCountingCircles` / `computeCountingCircleRemovals` /
+  `countingCircleClause` / `countingCircleClues` / `countingCircleSums` / `countingCircleFill` /
+  `countingCircleSupport`** — *a digit in a circle indicates how many circles contain that digit*.
+  **The first WHOLE-PUZZLE clue**: the whole circle set is ONE unit, so `unitFilter` (selection-only
+  ANDed with the fog gate) is asked about every circle at once and a partial selection or one fogged
+  circle skips the run — counting a subset would pose a constraint the puzzle never did. That is why
+  the registry entry carries `noSelectionRescue` + `ambiguousTip` (new opt-in def fields, checklist
+  step 3a) and the compute returns `wholeClue` rather than `needSelection`. The rule reduces to a
+  single equation — the digits used form a subset `S` of the digit set with `Σ S = n` — which
+  deduces with no pencilmarks at all (3 circles ⇒ only 1,2,3 survive anywhere) and rules 0 out of
+  circles entirely. **A bare thermo/arrow bulb is `stroke:none`; a counting circle is stroked** —
+  `getCellCenteredCircles` gained a `stroked` field for that one test and nothing else reads it
+  (`y6ivkzi761` 21→15, `dGL3DgJgJd` keeps 26 because its bulb cells carry a second stroked circle).
+  Cue = an ANCHORED self-reference, which rejects the "counts the CELLS a circle SEES" rivals for
+  free; five guards (semicircle / inverted / per-colour / deferred set / incomplete set) grey the row
+  with an explanation. Catalog: 60 fires, 50 clean, 0 false positives
+  (`node tools/counting_circle_recall.mjs`). Full detail in [VALIDATORS.md](VALIDATORS.md) +
+  [COUNTING_CIRCLES_DESIGN.md](COUNTING_CIRCLES_DESIGN.md).
   **XV = any Roman numeral (v3.171): `romanValue` / `romanString` / `ROMAN_UNITS`** — the border
   numeral's own value is the sum target (`VI`→6, `XI`→11, `XIII`→13, `XV`→15, not just X/V), parsed
   **canonical-form-only** over I/V/X so decorative letter runs and the title strings `XVX`/`VXX` can
@@ -584,8 +602,11 @@ way so it stays low-maintenance.
   `getCellCenteredDiamonds`** — every cell-centred round marker in `#overlay`/`#underlay` (SudokuPad
   draws them as rounded `<rect>`s, rx ≈ w/2, never `<svg:circle>`) and its diamond twin (a square rect
   carrying `rotate(45)`, *or* a closed four-point path drawn inside one cell). Circles are read by the
-  sum-arrow bulb detector, the between-line endpoints *and* the eyeball's geometry-matched rings;
-  diamonds by the lockout validator and its eyeball. Add new marker consumers here rather than
+  sum-arrow bulb detector, the between-line endpoints, the counting-circle validator *and* the
+  eyeball's geometry-matched rings; diamonds by the lockout validator, counting circles (when the
+  rules' noun is "diamond") and its eyeball. `getOffCellRoundMarkers` (v3.177) is the deliberate
+  complement — round in-grid markers the reader REJECTED for sitting off a cell centre, which is how
+  counting circles notices that an unscoped rule's set is incomplete. Add new marker consumers here rather than
   re-deriving the geometry. Both clue types derive their clues by **walking the drawn-step graph**
   between markers (`markerSegments` / `lineStepGraph` / `walkBetweenSegment`, v3.121, made
   marker-agnostic in v3.167 — `betweenSegments` = circles/minLen 3, `lockoutSegments` =

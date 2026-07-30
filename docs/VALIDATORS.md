@@ -6,15 +6,11 @@ file. Same role: current state + architecture. Hard-won do/don't knowledge stays
 `constraintValidators()` is the authoritative extension checklist — update it and this file
 together.*
 
-*Designed but NOT built: **counting circles** — see
-[`COUNTING_CIRCLES_DESIGN.md`](COUNTING_CIRCLES_DESIGN.md) for the cue (catalog-measured: 60 fires /
-6,260), the five guards, the bulb-vs-circle geometry rule and the subset-sum algorithm. Read it
-before starting that validator; don't re-derive it.*
-
 *Verification tooling: `node tools/validator_harness.mjs` (pure-logic regression cases extracted
 from the live userscript — run green before committing validator changes) and `python
 tools/cue_recall.py` (catalog-wide cue recall + clause blindness — run on every cue change; keep
-UNREADABLE at 0).*
+UNREADABLE at 0). **`node tools/counting_circle_recall.mjs --guarded`** scores the counting-circle
+cue, which `cue_recall.py` structurally cannot (see the note in its `VALIDATORS` table).*
 
 ## Feature overview — button, registry, runners
 
@@ -23,7 +19,7 @@ v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; s
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
 modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153; same-difference lines
 v3.159; palindromes v3.164; lockout lines v3.167; XV widened to any Roman numeral
-v3.171; difference dots v3.172):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+v3.171; difference dots v3.172; counting circles v3.177):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -328,6 +324,135 @@ bulb marker, arrow = bulb marker + polyline, cage = merged cell-set perimeter. `
 pointer-events, and `addItem` dims only the **label** (not the row), so the eye stays fully lit and
 usable on a greyed (ambiguous) row.
 
+## Counting circles (v3.177) — the first WHOLE-PUZZLE clue
+
+*A digit in a circle indicates exactly how many circles contain that digit.* Design work and the
+full catalog measurement are in [`COUNTING_CIRCLES_DESIGN.md`](COUNTING_CIRCLES_DESIGN.md); this is
+what shipped.
+
+**The rule is one equation over the whole grid.** If every circle holding `d` requires `k_d = d`,
+then for each digit either `k_d = d` or `k_d = 0` — so the digits used in circles form a subset `S`
+of the digit set with **`Σ S = n`** (the circle count), each `d ∈ S` appearing exactly `d` times.
+Verified against nine puzzles' published solutions (`i9wx9vdy41` 1+2+…+8 = 36, `dGL3DgJgJd`
+7+6+5+4+3+1 = 26, `xgmmht4odf` 9+8+6+4+2 = 29, `y6ivkzi761` 5+4+3+2+1 = 15, `gjyydhf4pm` 16,
+`swtm07rplk` 14, `blobz/hippo-birdie` 14, `blobz/offset-circles` 9, `miv6k9rwi0` 6).
+
+It is strong enough to deduce with no pencilmarks at all: three circles admit only `{3}` and
+`{1,2}`, so **4-9 die in every circle on sight**. And `0` can never sit in a circle (it would assert
+"zero circles contain 0" while being one), which `countingCircleSums` enforces by filtering 0 out —
+a free elimination on `blobz/hippo-birdie`, whose digit set is 0-8.
+
+**ONE CLUE, ONE UNIT — the thing that makes this validator structurally different.** Every earlier
+validator has many units, which is what makes selection-only and the per-clue fog gate meaningful.
+Here the whole circle set is a single unit, so `computeCountingCircleRemovals` passes *every* circle
+key to `unitFilter` in one call: a partial selection, or one fogged circle, skips the run entirely.
+Counting a subset would pose a constraint the puzzle never did. Three consequences, all now written
+into the ADDING A VALIDATOR checklist as step 3a:
+
+- `validatorClueCellGroups` returns **one** group (the eyeball still gets one object per circle so
+  it can ring each);
+- the registry entry sets **`noSelectionRescue: true`** — an AMBIGUOUS row stays disabled even with
+  "Validate selection only" ticked, because selecting cells cannot make an unreadable whole-grid
+  rule readable;
+- **`ambiguousTip`** replaces the default greyed-row tooltip, which says "which lines are the …s
+  isn't stated" — untrue for a clue with no lines. The compute returns `wholeClue: <why>` and both
+  toast paths render it via `wholeClueMsg`.
+
+Both fields are opt-in; omitting them is exactly the pre-v3.177 behaviour.
+
+### A BARE BULB IS NOT A CIRCLE, A STROKED ONE IS
+
+`countingCircleClues` de-duplicates markers **by cell**, then drops a cell only when it is a
+thermo/arrow bulb root **and nothing stroked is drawn on it**. That single rule settles the two
+puzzles that look contradictory:
+
+| puzzle | bulbs | counting circles | naive all-cell-centred | shipped |
+|---|---|---|---|---|
+| `y6ivkzi761` | 6 × `#underlay` 0.85cs `#CFCFCF` **stroke:none** | 15 × `#overlay` 0.93cs white, stroke `#000000` | **21 → invalid** (1:3, 2:5, 3:4, 4:4, 5:5) | **15 ✓** |
+| `dGL3DgJgJd` | 4 × `#underlay` 0.85cs `#CFCFCF` **stroke:none** | 26 × `#underlay` 0.85cs `#CFCFCF`, stroke `#000000` | 26 (bulb cells carry BOTH rects) | **26 ✓** |
+
+Drawing an extra ring on a bulb is how a setter says *"this bulb counts too"* — `dGL3DgJgJd`'s rules
+say it out loud. `getCellCenteredCircles` gained a `stroked` field for this and **nothing else reads
+it**; it must never become a general filter, because genuine unstroked clue circles exist
+(`gfr7xipywo`'s grey odd-circles, which a stroke-gated reader returns zero of).
+
+**The subtraction depends on `getThermos()` claiming cosmetic bulbs, and it does** —
+`getThermoBulbCentres` scans `#underlay` for 0.55–1.05cs circular rects, rejecting white and black
+fills, so `y6ivkzi761`'s six `#CFCFCF` bulbs are candidates while its white `#overlay` counting
+circles are not even considered. On `dGL3DgJgJd` the counting circles ARE `#CFCFCF` `#underlay`
+look-alikes, so they all become bulb candidates — harmless either way: if a shaft then has a bulb at
+both ends the chain is rejected and nothing is subtracted (26 ✓), and if it isn't, the claimed root
+carries a stroked circle and is kept (26 ✓).
+
+**Arrow bulbs are never subtracted on the stroke test.** `zdmnz4qx5m` states *"Arrow circles count
+as circles for this rule"* and draws its 9 arrow circles pixel-identically to its 15 plain ones
+(`0.80 ROUND #FFFFFF s=#555`) — geometry cannot separate them and must not try. `df7B2RJ4gB` is the
+puzzle whose arrow circles *don't* count, and there the rules' noun is `diamond`, which
+noun-dispatches to `getCellCenteredDiamonds` and never looks at a circle.
+
+### Detection — the cue is the SELF-REFERENCE, and it is anchored
+
+`countingCircleClause` is clause-scoped and returns `{ clause, word, stem, scoped }`. `word` is the
+puzzle's own singular noun (what the self-reference looks for — `blobz/hippo-birdie` counts
+*balloons*, not circles); `stem` is the reader key. `COUNTCIRCLE_STEMS` is a written-out singular
+map on purpose: **"diamond" ends in a `d`**, so the obvious `/(?:es|s|d)$/` strip yields "diamon"
+and the noun can never match itself again.
+
+Three parts, all required: a **container** (`digit … in a <adj> <noun>`, or the equally common
+adjective-first `a circled digit`), a **count trigger**, and the counted thing being the *same
+noun, containing that digit* — matched **anchored at the trigger's end** in two attested shapes
+(`how many CIRCLES contain…`, `how many TIMES that digit appears IN CIRCLES`).
+
+The anchoring is what does the work. It rejects the three rival rules for free, because what follows
+their trigger is `cells`, not `circle`: `sotpbtg8o1` ("the number of **cells** that the circle
+sees"), `m73tnQmbbd`, `vgbfcjxvav`. Two further catalog rivals count *markers* rather than
+markers-holding-the-digit and are rejected the same way: `laj1tzweyh`, `q3b8weqj5f`. **`with\b`
+needs its trailing boundary** — without it "gold rings **with**in its region" reads as a containment
+phrase and `laj1tzweyh` fires (caught by the harness, not by eye).
+
+**Nouns with no reader are deliberately absent** from `COUNTCIRCLE_NOUN_SRC`: mushroom
+(`blobz/centipede`), tent (`nmhixakego`, which the player draws), card suit (`pbz4ij1joh`). A listed
+validator that can never find its clue is worse than an absent row.
+
+**Catalog-measured (`node tools/counting_circle_recall.mjs --guarded`, 4,824 puzzles with rules):
+60 fires, 50 clean, 10 guarded, and ZERO false positives** — all 7 clean fires the catalog left
+untagged are textbook counting circles. Nouns: circle 57, balloon 1, diamond 1, football 1. The
+`counting_circle` tag itself is keyword-derived and noisy (it fires on the word "counting"), so
+recall against it is not the headline number.
+
+### The five guards
+
+| guard | signal | puzzles |
+|---|---|---|
+| **SEMI** (blob-scoped) | `semi-/half-circle` | `j27rj7frco` — drawn as 56 whole circles + **40 half-cell white masking rects**; the true count is 16 full + 40 halves |
+| **NEG** | `do(es) not / not contain / other than` | `4mtPGFb6dm` "Circular Unreasoning" — counts circles that DON'T hold it |
+| **COLOUR** | `colou?r(s|ed|ing)` | 7 puzzles; `ah1c5p6zcr` has the player *choose* the colouring. A later extension could partition by drawn fill/stroke for the other six |
+| **DEFERRED** | on the loop / (un)shaded / revealed / within its region | `2vyqqhy6ky`, `belm8cdujp`, `tc5dhvo13g` — which circles are in the set is the solver's job |
+| **INCOMPLETE SET** | rule **unscoped** AND `getOffCellRoundMarkers` non-empty | `gfr7xipywo` — 9 readable cell-centred odd-circles plus **7 quad circles on grid corners**, both counting. Reading only the 9 scores {5:2, 7:3, 9:4} against its solution: a wrong answer, not a weak one |
+
+The last guard checks **scoping first**, and that ordering is load-bearing: `blobz/offset-circles`
+also has off-centre round markers (9 offset black circles, 4 big pink renban rings, 4 Kropki dots),
+but its rule says "**blue** circles", which makes the rest none of our business — and it then scores
+4+3+2 = 9 exactly. `getOffCellRoundMarkers` ignores anything under 0.4 cs so Kropki-sized dots never
+trip it (which is also why `df7B2RJ4gB`'s 5 black dots are irrelevant there).
+
+**Everything else is greyed for free** because the reader returns nothing: `NbqQ2HhP4P` and
+`nmhixakego` (player draws the markers), `hqa07qdm2h` (all circles outside the grid), `n4FR3FtL4D`
+(letters), `pbz4ij1joh` (card suits). `< 2` circles → `none`, so the row is simply not listed.
+
+### Algorithm
+
+`countingCircleSums` enumerates every positive-digit subset summing to `n` (at most ~30 over 1-9 —
+no cap needed). `countingCircleFill` seats one subset by fewest-options-first backtracking under
+`makeMustDiffer`, returning a **witness**. `countingCircleSupport` reuses witnesses: one seating
+supports every `(cell, digit)` pair it contains, so only unwitnessed pairs need a targeted search —
+the `sameDiffExactFills` shape. Iterated to a fixpoint, since a removal can kill a subset outright.
+
+**Structural test runs first, mark-free** (`st.fullSet` in every cell): if no subset is seatable at
+all, the clue is dropped and reported as `invalid` — our misread, not the puzzle's error. A set that
+is seatable in principle but not under the current marks is a real contradiction and goes down the
+normal emptied-cells red-error path.
+
 ## Menu behaviour (v3.66 rework: toggle popup, detection-gated items, selection-only, fog gate)
 
 **Menu rework (v3.66):** the button **TOGGLES** the popup (`#sp-validate-menu`) — it stays open
@@ -627,6 +752,7 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Same difference** | no difference `d` fills the line over the FULL digit set (`sameDiffLineSupport` with `st.fullSet` in every cell) | v3.159; the test is the validator's own engine run mark-free — e.g. a 3-cell closed loop of mutually-conflicting cells has no `d` at all |
 | **Difference dot** | the labeled difference is not `|a−b|` for any two **distinct** digit-set digits (over 1-9: 0, or anything ≥9) | **new** v3.172; same reasoning as XV — the two cells are orthogonally adjacent so they must differ, making a 0 gap impossible and 9+ off the scale. `24zhxatww7` actually draws two dots labeled 9, so this fires on real data if the cue is ever loosened |
 | **XV / Roman numeral** | the numeral's total is not the sum of any two **distinct** digit-set digits (over 1-9: anything outside 3…17) | **new** v3.171; the clue's two cells are orthogonally adjacent, so they share a row or column and MUST differ — a total needing a repeat (2 = 1+1, 18 = 9+9) or lying off the scale is unsatisfiable however the grid is filled. Mark-independent, and conservative because any legal fill exhibits such a pair. This is also what makes the widened numeral set safe: "II" or "XVIII" is dropped + reported, never propagated |
+| **Counting circle** | no positive-digit subset summing to `n` can be SEATED with every cell free (`countingCircleSupport` run mark-free) | **new** v3.177; two ways to fail — `n` past `Σ(digits)` (46 over 1-9, 37 over 0-8) makes the sum itself unreachable, and a reachable total can still be unseatable (`n = 45` needs nine mutually non-conflicting circles holding 9). Conservative: any legal grid exhibits such a seating, so this only fires when the circle set we read is wrong |
 | **Palindrome** | a fold pair (cell `i`, cell `L−1−i`) that `makeMustDiffer` forces to DIFFER | **new** v3.164; the pair must be EQUAL, so a shared row/column/region/uniqueness-cage makes the whole line unfillable. Mark-independent, and conservative because `makeMustDiffer` only asserts units the puzzle guarantees |
 | **Lockout** | no diamond pair survives `lockoutSegmentSupport` with the FULL digit set in every cell (`pairs === 0`) | **new** v3.167; the validator's own engine run mark-free, like same-difference. The widest outside region a gap-4 pair leaves over 1-9 is four digits (1/5 → {6,7,8,9}), so e.g. **five** mutually-conflicting interior cells can never be filled. Conservative by construction: any legal fill has a diamond pair, which the full-set run necessarily sees. NOT length-checked — digits may repeat, so a ten-cell interior with no internal conflicts is fine |
 
@@ -655,6 +781,7 @@ pencilmarks and real conflict matrices against a 60M-node reference:**
 | **Ten line** (`lineSupport`) | every complete fill, digits REPEAT | **11 open cells** | **was broken** → `tenLineTilingSupport` fallback (v3.155). |
 | **Region sum** (`enumSegment`) | every distinct-cell ordering | **7-cell segment** | **was broken** → `regionSumSegmentSupport`, subsets + matching (v3.156). |
 | **Same difference** (`sameDiffExactFills`, 200k) | every fill at one difference `d`; branches ≤2 per cell (`prev±d`) | not reached on any real line — only runs when the line has internal conflicts or is a loop, stops as soon as every arc-consistent value is witnessed | **safe by CONSTRUCTION** (v3.159) — a bail falls back to the arc-consistent domains, which are a sound over-approximation, so it keeps every elimination the chain relation alone proves. A cap whose bail still removes is a different animal from one that gives up on the clue. |
+| **Counting circle** (`countingCircleFill`, 400k shared across the whole support pass) | one seating of the WHOLE circle set per candidate subset | not reached on any catalog puzzle — the largest circle set measured is 36 (`i9wx9vdy41`), subsets are ≤ 9 distinct digits, and fewest-options-first plus exact per-digit counts prune hard | **safe by DEGRADATION** (v3.177) — a bail falls back to the union of the digits any seatable subset uses, which is the sum equation's own answer and a sound over-approximation, so the pass still removes what `Σ S = n` alone proves. Same shape as `sameDiffExactFills`: the cap costs the extra eliminations the conflict matrix would have added, never the whole clue |
 | **Between + Lockout** (`interiorsFeasible`, 20k) | ONE seating of the interiors, not all of them | not reached on any real line — interiors are ≤ ~15 cells over ≤ 9 digits and repeats are legal unless conflicting, so a solution is found greedily | **safe by SHAPE** (v3.120, shared v3.167) — it seeks a single witness and answers FEASIBLE on overrun, i.e. under-remove. Lockout's memo keys on `(lo, hi)` plus the one forced cell, and an infeasible base interval short-circuits before any forced search runs, so the exhaustive-failure case is bounded by the distinct-interval count (≤ ~15), not by pairs × cells × digits. |
 
 The pattern: a cap is fine when the **pruning strength tracks the constraint strength** (both

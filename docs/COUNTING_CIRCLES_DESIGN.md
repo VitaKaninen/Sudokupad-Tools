@@ -1,9 +1,20 @@
-# Counting circles — design note (investigated 2026-07-30, NOT BUILT)
+# Counting circles — design note (investigated 2026-07-30, **BUILT in v3.177**)
 
 *A digit in a circle indicates how many circles contain that digit.* Investigated against 25
 puzzles the user named plus a catalog-wide cue sweep. **Verdict: buildable, and the payoff is
-unusually high — but only for `circle`-shaped markers, behind five guards.** Nothing is implemented
-yet; this file is the design + the measured evidence, so a later session doesn't re-derive it.
+unusually high — but only for `circle`-shaped markers, behind five guards.**
+
+> **STATUS: shipped in v3.177**, as designed here. What actually ships — including the three
+> structural consequences of it being a WHOLE-PUZZLE clue, and the two `with\b` / "diamond ends in a
+> d" traps found while building — is documented in
+> [`VALIDATORS.md` → "Counting circles"](VALIDATORS.md). **This file is the evidence and the
+> reasoning; that one is the current state.** Read this when you need to know *why* a rule is the way
+> it is, or before extending to the colour-partition family.
+>
+> Two things changed from the plan below. **Diamonds are in** (noun-dispatch made it nearly free).
+> And the guards resolve to **AMBIGUOUS with an explanation**, not to `none` — a greyed row naming
+> the variant beats a silently absent one, which is why `noSelectionRescue` had to be invented (the
+> usual "tick selection-only to override" rescue is unsound for a whole-grid count).
 
 ## Why this validator is worth building — the constraint is far stronger than it looks
 

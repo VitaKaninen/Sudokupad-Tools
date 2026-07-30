@@ -97,6 +97,13 @@ const NAMES = [
   'DIFFDOT_DIFF_RE', 'DIFFDOT_MARKER_RE', 'DIFFDOT_LINEISH_RE', 'DIFFDOT_ADJACENT_RE',
   'DIFFDOT_OUTSIDE_RE', 'DIFFDOT_KROPKI1_RE', 'DIFFDOT_DEFERRED_RE', 'DIFFDOT_RIVAL_RE',
   'differenceDotClause', 'hasDifferenceDotCue',
+  // counting circles (a digit in a circle counts the circles holding it)
+  'COUNTCIRCLE_NOUN_SRC', 'COUNTCIRCLE_STEMS',
+  'COUNTCIRCLE_CONTAINER_RE', 'COUNTCIRCLE_ADJFIRST_RE',
+  'COUNTCIRCLE_TRIGGER_RE', 'COUNTCIRCLE_NEG_RE', 'COUNTCIRCLE_COLOR_RE',
+  'COUNTCIRCLE_DEFERRED_RE', 'COUNTCIRCLE_ANTI_RE', 'COUNTCIRCLE_SEMI_RE',
+  'countingCircleSelfRef', 'countingCircleClause', 'hasCountingCircleCue',
+  'countingCircleSums', 'countingCircleFill', 'countingCircleSupport',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -1239,6 +1246,162 @@ check('zipper: an even STRAIGHT chain folds on the shared edge',
   F.zipperFoldCenter(['0,0','1,0','2,0','3,0']), { cx: 2, cy: 0.5 });
 check('zipper: an even DIAGONAL step folds on the grid corner',
   F.zipperFoldCenter(['0,0','1,1']), { cx: 1, cy: 1 });
+
+// ── counting circles (v3.177) ────────────────────────────────────────────────
+// Every string below is real rules text from the puzzle named beside it. The cue's
+// job is to fire on the self-referential count and NOT on the rules that count
+// something else with the same words — see docs/COUNTING_CIRCLES_DESIGN.md.
+const cc = (s) => F.countingCircleClause(s);
+const ccFires = (s) => cc(s) !== null;
+const ccStem = (s) => { const r = cc(s); return r && r.stem; };
+const ccScoped = (s) => { const r = cc(s); return r && r.scoped; };
+
+// The two phrasing families, both attested many times over.
+checkTrue('cc: "how many circles contain that digit" (dGL3DgJgJd)',
+  ccFires('a digit in a circle indicates exactly how many circles contain that digit'));
+checkTrue('cc: "how many times that digit appears in circles" (zdmnz4qx5m)',
+  ccFires('a digit in a circle gives how many times that digit appears in circles'));
+checkTrue('cc: adjective-first "a circled digit" (dqNLp6qJHR)',
+  ccFires('a circled digit indicates exactly how many circles contain that digit'));
+checkTrue('cc: "circled cell" / "circled cells" (i9wx9vdy41)',
+  ccFires('a digit in a circled cell indicates the total number of times that digit appears in circled cells in the grid'));
+checkTrue('cc: "the number of circles that contain the digit" — THE digit, not THAT (y6ivkzi761)',
+  ccFires('a digit in a circle indicates the number of circles that contain the digit'));
+checkTrue('cc: "means there are that many diamonds containing" (df7B2RJ4gB)',
+  ccFires('a digit in a diamond means there are that many diamonds containing that digit in the grid'));
+checkTrue('cc: "if the digit N appears in a circle, then exactly N circles contain" (mmayk15ji7)',
+  ccFires('circles: if the digit n appears in a circle, then exactly n circles contain the digit n'));
+checkTrue('cc: "how many circles in the puzzle that contain" (v1l5ri9ew3)',
+  ccFires('digits in circles also indicate how many circles in the puzzle that contain that digit'));
+checkTrue('cc: "a number in a circle" — number, not digit (4mH66tpGmM)',
+  ccFires('a number in a circle gives how many times that number appears in circles'));
+
+// Themed synonyms for the same picture, all read by the circle reader.
+check('cc: balloon → circle reader (blobz/hippo-birdie)',
+  ccStem('a digit in a balloon (circle) indicates the number of balloons containing that digit'), 'circle');
+check('cc: football → circle reader (gjyydhf4pm)',
+  ccStem('a digit in a football (white circle) indicates how many footballs contain that digit'), 'circle');
+// …and the one noun with its OWN reader, which is what keeps df7B2RJ4gB's arrow
+// circles out of its count.
+check('cc: diamond → diamond reader (df7B2RJ4gB)',
+  ccStem('a digit in a diamond means there are that many diamonds containing that digit'), 'diamond');
+// Nouns we have no reader for must not fire at all (blobz/centipede mushrooms,
+// pbz4ij1joh card suits) — a listed validator that can never find its clue is worse
+// than an absent row.
+checkFalse('cc: mushroom has no reader, so no cue (blobz/centipede)',
+  ccFires('a digit on a mushroom indicates how many mushrooms contain that digit'));
+checkFalse('cc: card suit has no reader, so no cue (pbz4ij1joh)',
+  ccFires('a digit on a suit indicates how many times that digit appears on that suit'));
+
+// THE RIVALS. All three count the CELLS a circle SEES, and all three would fire on a
+// looser cue. The anchored self-reference is what rejects them: what follows the
+// trigger is `cells`, not `circle`.
+checkFalse('cc: counts CELLS the circle sees, not circles (sotpbtg8o1)',
+  ccFires('the digit in a circle (blue as well as black) counts the number of cells that the circle sees from its own region in the row and column up to the first border including itself'));
+checkFalse('cc: counts cells of its own type that it sees (m73tnQmbbd)',
+  ccFires('a digit placed in a circle is the number of cells of its own type that it sees horizontally and vertically, including itself'));
+checkFalse('cc: counts unshaded cells seen (vgbfcjxvav)',
+  ccFires('digits in circles cannot be shaded, and represent the total number of unshaded cells seen horizontally and vertically from that cell'));
+// Two more from the catalog sweep that count MARKERS rather than markers-with-that-
+// digit — the self-reference has to mean "containing this digit", not just "circles".
+checkFalse('cc: counts rings in a region, not rings holding the digit (laj1tzweyh)',
+  ccFires('a digit on a gold ring indicates the number of gold rings within its region'));
+checkFalse('cc: counts discs in a direction, not discs holding the digit (q3b8weqj5f)',
+  ccFires('a digit on an arrow disc indicates the total number of discs in the indicated directions (combined) that match its own colour'));
+
+// SCOPING decides whether stray un-attributable circles are our problem. An unscoped
+// rule counts every circle (so a corner quad we can't read makes the count short);
+// a scoped one has told us which circles it means.
+checkFalse('cc: "a digit in a circle" is UNSCOPED (dGL3DgJgJd, gfr7xipywo)',
+  ccScoped('a digit in a circle indicates exactly how many circles contain that digit'));
+checkTrue('cc: "blue circles" is SCOPED (blobz/offset-circles)',
+  ccScoped('digits in blue circles indicate how many blue circles contain that digit'));
+checkTrue('cc: "small white circle" is SCOPED (miv6k9rwi0)',
+  ccScoped('a digit in a small white circle indicates how many times that digit appears in small white circles in the puzzle'));
+checkTrue('cc: "black-outlined counting circle" is SCOPED (erin-toler/counting-constraints)',
+  ccScoped('a digit in a black-outlined counting circle indicates the number of times that digit appears in a counting circle'));
+
+// The guard families, each anchored to the puzzle that forced it.
+checkTrue('cc guard NEG: "how many circles DO NOT contain" (4mtPGFb6dm)',
+  F.COUNTCIRCLE_NEG_RE.test('a digit in a circle shows how many circles do not contain that digit'));
+checkTrue('cc guard COLOUR: counted per colour (ah1c5p6zcr, 73oh4m8m8m)',
+  F.COUNTCIRCLE_COLOR_RE.test('the digit inside a circle appears that many times in circles of that color'));
+checkTrue('cc guard COLOUR: "coloured circle … of that colour" (hrinu3frw3)',
+  F.COUNTCIRCLE_COLOR_RE.test('a digit in a coloured circle indicates how many times that digit appears in a circle of that colour'));
+checkTrue('cc guard DEFERRED: only circles on the loop count (2vyqqhy6ky)',
+  F.COUNTCIRCLE_DEFERRED_RE.test('a digit in a circle on the loop indicates how many circles on the loop contain that digit'));
+checkTrue('cc guard DEFERRED: only *revealed* circles count (belm8cdujp)',
+  F.COUNTCIRCLE_DEFERRED_RE.test('a digit x in a revealed circle appears in revealed circles x times'));
+checkTrue('cc guard SEMI: semicircles pair into one circle (j27rj7frco)',
+  F.COUNTCIRCLE_SEMI_RE.test('a digit n placed inside a circle or semicircle indicates that exactly n full circles contain the digit n'));
+// …and a plain counting-circle rule must trip NONE of them.
+const ccPlain = 'a digit in a circle indicates exactly how many circles contain that digit';
+checkFalse('cc: a plain rule trips no guard', F.COUNTCIRCLE_NEG_RE.test(ccPlain)
+  || F.COUNTCIRCLE_COLOR_RE.test(ccPlain) || F.COUNTCIRCLE_DEFERRED_RE.test(ccPlain)
+  || F.COUNTCIRCLE_SEMI_RE.test(ccPlain));
+
+// ── the sum equation ─────────────────────────────────────────────────────────
+// n circles ⇒ the digits used form a subset summing to exactly n. Anchored to the
+// solutions measured in docs/COUNTING_CIRCLES_DESIGN.md.
+const D9 = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+const sums = (n, ds = D9) => F.countingCircleSums(ds, n).map((s) => s.join('+'));
+checkTrue('cc sums: 36 circles admits 1+2+…+8 (i9wx9vdy41)', sums(36).includes('1+2+3+4+5+6+7+8'));
+checkTrue('cc sums: 26 circles admits 1+3+4+5+6+7 (dGL3DgJgJd)', sums(26).includes('1+3+4+5+6+7'));
+checkTrue('cc sums: 29 circles admits 2+4+6+8+9 (xgmmht4odf)', sums(29).includes('2+4+6+8+9'));
+checkTrue('cc sums: 15 circles admits 1+2+3+4+5 (y6ivkzi761)', sums(15).includes('1+2+3+4+5'));
+checkTrue('cc sums: 14 circles admits 1+2+4+7 (swtm07rplk)', sums(14).includes('1+2+4+7'));
+checkTrue('cc sums: 9 circles admits 2+3+4 (blobz/offset-circles)', sums(9).includes('2+3+4'));
+check('cc sums: 6 circles, the only 6-subsets', sums(6).sort(), ['1+2+3', '1+5', '2+4', '6'].sort());
+check('cc sums: 45 circles forces the whole digit set', sums(45), ['1+2+3+4+5+6+7+8+9']);
+// STRUCTURAL: past Σ(digits) nothing is seatable — the v3.157 "our misread" report.
+check('cc sums: 46 circles is impossible over 1-9', sums(46), []);
+check('cc sums: 37 circles is impossible over 0-8 (max Σ = 36)',
+  sums(37, [0, 1, 2, 3, 4, 5, 6, 7, 8]), []);
+// A 0 in a circle would assert "zero circles contain 0" while being one, so 0 is
+// never a member — the reason blobz/hippo-birdie's digit set costs it nothing.
+checkTrue('cc sums: 0 never appears in a subset (blobz/hippo-birdie is 0-8)',
+  F.countingCircleSums([0, 1, 2, 3, 4, 5, 6, 7, 8], 14).every((s) => s.indexOf(0) < 0));
+check('cc sums: 14 over 0-8 admits 3+4+7 (blobz/hippo-birdie)',
+  sums(14, [0, 1, 2, 3, 4, 5, 6, 7, 8]).includes('3+4+7'), true);
+
+// ── seating the circles (complete support) ───────────────────────────────────
+// Three circles in one ROW, so all three must differ → the only subset that seats is
+// 1+2 … which needs two cells, not three. 3 alone needs three 3s in one row.
+const rowKeys = ['0,0', '1,0', '2,0'];
+const allNine = new Set(D9);
+const md = (a, b) => { if (a === b) return false; const p = a.split(','), q = b.split(','); return p[0] === q[0] || p[1] === q[1]; };
+const seat = (keys, doms, S) => F.countingCircleFill(keys, doms, S, md, -1, 0, { n: 200000 });
+check('cc fill: three circles in one row cannot all hold 3',
+  seat(rowKeys, rowKeys.map(() => allNine), [3]), null);
+checkTrue('cc fill: 1+2 cannot seat three cells either',
+  seat(rowKeys, rowKeys.map(() => allNine), [1, 2]) === null);
+// Spread across three boxes/rows/columns, three 3s seat fine (repeats are legal
+// wherever no unit forbids them).
+const freeKeys = ['0,0', '4,4', '8,8'];
+checkTrue('cc fill: three mutually non-conflicting circles CAN all hold 3',
+  JSON.stringify(seat(freeKeys, freeKeys.map(() => allNine), [3])) === JSON.stringify([3, 3, 3]));
+// The deduction the validator exists to make. THREE circles admits two subsets —
+// {3} (three 3s) and {1,2} (one 1 and two 2s) — so 4-9 are all impossible in ANY of
+// them. Six of the nine candidates go from every circle without a single pencilmark
+// being needed, which is the whole point of the sum equation.
+const sup3 = F.countingCircleSupport(freeKeys, freeKeys.map(() => allNine),
+  F.countingCircleSums(D9, 3), md, { n: 200000 });
+check('cc support: 3 free circles ⇒ only 1, 2, 3 survive anywhere',
+  sup3.sup.map((s) => Array.from(s).sort((a, b) => a - b)), [[1, 2, 3], [1, 2, 3], [1, 2, 3]]);
+check('cc support: both 3-subsets are seatable', sup3.feasible, 2);
+// …and with a mark already narrowed, the count still has to add up: two circles can
+// only be 1+? — no subset of distinct digits sums to 2 except {2}, needing two 2s.
+const twoKeys = ['0,0', '4,4'];
+const sup2 = F.countingCircleSupport(twoKeys, twoKeys.map(() => allNine),
+  F.countingCircleSums(D9, 2), md, { n: 200000 });
+check('cc support: 2 free circles ⇒ both are 2s',
+  sup2.sup.map((s) => Array.from(s)), [[2], [2]]);
+// A cell whose marks exclude the forced digit makes the whole set unseatable — a real
+// mark contradiction (the noValidComboMsg path), not a structural one.
+const sup2bad = F.countingCircleSupport(twoKeys, [new Set([5]), allNine],
+  F.countingCircleSums(D9, 2), md, { n: 200000 });
+check('cc support: a mark that blocks the forced digit leaves no support',
+  sup2bad.feasible, 0);
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);
