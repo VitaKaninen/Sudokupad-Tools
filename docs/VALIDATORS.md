@@ -275,8 +275,10 @@ colour** → that colour is the whisper; (3) else if the **rules name a colour**
 (`whisperNamedColorWord`+`colorWordMatches`, e.g. "grey line…differ by 5") → lines of that colour;
 (4) else **AMBIGUOUS** — the menu shows a ⚠ note (`whisperIsAmbiguous`) and only lines the player
 SELECTS are validated (run regardless of colour). "Any line if cue" was deliberately rejected (would
-mis-flag palindromes). `getCosmeticLines` = every `cp.lines` entry (DOM `#arrows` fallback, stroke
-**ATTRIBUTE** = author's pre-shading colour); `detect: whisperDetected` = mode≠none. Validation is
+mis-flag palindromes). `getCosmeticLines` = every stroked `fill:none` clue path in the
+`LINE_DOM_LAYER_IDS` layers — `#arrows`, `#overlay`, `#underlay` (**DOM only**; the `cp.lines` branch
+was dead and is gone since v3.170) — read from the stroke **ATTRIBUTE** (author's pre-shading
+colour); `detect: whisperDetected` = mode≠none. Validation is
 **deliberately LOCAL** — per cell, look ONLY at its 1–2 immediate line neighbours: candidate *d*
 survives iff every neighbour can hold a partner with `|d−e|≥5`, AND (when the two neighbours must
 differ by ordinary Sudoku — same row/col/box/uniqueness-cage, via

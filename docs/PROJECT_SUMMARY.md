@@ -906,6 +906,11 @@ Add a new line layer (or change what counts as a line path) → edit
 filled block-arrow shapes (`isLineFill`); other layers are plain `fill:none` stroke lines, so the
 fill pass stays `#arrows`-only.
 
+The list is `['arrows', 'overlay', 'underlay']`. **`#underlay` since v3.176** — an scl line entry may
+say `target:'underlay'`, which renders the line below the digits and out of our sight. See "A line
+drawn into `#underlay` poisons every OTHER line's detection" in LESSONS_LEARNED for why a missed
+layer is not a local miss.
+
 ### Puzzles that declare `regions: []` — the boxes are cosmetics (v3.158)
 A `.scl` can carry an explicitly EMPTY `regions` array. SudokuPad then has no boxes at all: no
 `type:'region'` entries in `currentPuzzle.cages` (only the 18 `rowcol` ones) and **no

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.175.0
+// @version      3.176.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.175.0';
+  var SCRIPT_VERSION = '3.176.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1632,7 +1632,26 @@
   // every subsystem picks it up. (#arrows additionally carries FILLED block-arrow
   // shapes shaded via isLineFill; other layers are plain fill:none stroke lines, so
   // the fill pass stays #arrows-only — see fixAllLines.)
-  var LINE_DOM_LAYER_IDS = ['arrows', 'overlay'];
+  //
+  // #underlay ADDED v3.176. An scl line entry may carry `target:'underlay'`, which
+  // renders it into #underlay (BELOW the digits/cell colours) instead of #arrows —
+  // so the line is on screen and nothing we read knows it exists. That is not a
+  // cosmetic detail, it silently corrupts detection for the whole board:
+  // `xgmmht4odf` (Allagem, "The Buddy System") draws its two BLUE between lines
+  // that way, leaving only the five GREY palindromes in the pool. One colour left →
+  // classifyCueLines' single-colour layer handed every grey palindrome to the
+  // BETWEEN validator (3 survived betweenSegments' minLen 3, two of them carrying
+  // no circle at all) while the real between lines went undetected. With #underlay
+  // read, the pool is two-coloured and the clause layer pins blue→between,
+  // grey→palindrome, which is what the rules say.
+  // Catalog-measured (2026-07-30, all 6,260 puzzles): only SIX draw any <path> into
+  // #underlay, and three are excluded by isLineCluePath anyway (they are FILLED
+  // shapes, not fill:none strokes). Of the three that qualify, two are real clue
+  // lines we were blind to — `xgmmht4odf`'s between lines and `fgtl60ohu1`'s blue
+  // REGION-SUM line — and the third (`sandra-and-nala/another-lost-toy`) is drawn
+  // ART whose rules carry no line cue and whose strokes are all warm/pale (none
+  // green), so no validator claims it.
+  var LINE_DOM_LAYER_IDS = ['arrows', 'overlay', 'underlay'];
   // Is DOM <path> p a plain cosmetic line clue? (stroked, fill:none — so block
   // arrows/marker shapes are excluded — not an arrow shaft, ≥2 waypoints.) The
   // cheap structural gate shared by the validator scan and the non-#arrows render/
