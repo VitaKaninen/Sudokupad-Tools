@@ -18,7 +18,7 @@ v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; s
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
 modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153; same-difference lines
 v3.159; palindromes v3.164; lockout lines v3.167; XV widened to any Roman numeral
-v3.171):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+v3.171; difference dots v3.172):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -66,6 +66,82 @@ numeral is **title text only** — episode numbers ("Czech Outsider III", "Corne
 "What Number Am I Thinking Of? (XVI)") or a title listing the clue set ("XVVX") — and a title is
 never drawn on a cell border, so this DOM-geometry reader cannot see one. The drawing IS the
 declaration.
+
+## Difference dots (v3.172) — the validator where the DRAWING carries no signal
+
+`collectDifferenceDots` / `classifyDifferenceDots` / `computeDifferenceDotRemovals`. A white circle on
+a cell border carrying a **digit**: the two cells differ by that digit. Geometrically a labeled Kropki
+dot; logically a white Kropki dot with the gap read off the label instead of fixed at 1 — so it reuses
+`isKropkiCircle` (which already rejects the double-arrow pill), `isOnCellBorder` (which already rejects
+a 4-cell corner marker) and `getKropkiAdjacentText`, then runs the same arc-consistency fixpoint.
+`hasPartner` is simply `other.has(d − target) || other.has(d + target)`.
+
+**A CUE IS MANDATORY, and this is the validator that proves why.** Four different rules draw a
+*pixel-identical* picture — a white 0.5-cell disc on a border with a digit in it:
+
+| puzzle | rule | verdict |
+|---|---|---|
+| `0jyxu79n6q` "Same Difference" (clover) | `|a−b|` | **ours** |
+| `b4qLdjD8LP` "Difference Sudoku 06" | `|a−b|` | **ours** |
+| `r9rLrppHpT` "Throuples" | `|a−b|`, plus V/X sum clues in the same grid | **ours** |
+| `nd0191ecm9` / `f37rd0c6uu` / `twqc1a8ybe` / `55tm8zuuwb` | `|a−b|` = a constant, and each dot is labeled with it | **ours** |
+| `24zhxatww7` "Sum or Greater" (clover) | `a+b` **or** `max(a,b)` | must NOT fire |
+| `ck9j1oe9s0` "Rounding Error" (clover) | tens digit of `a×b` | must NOT fire |
+| `m425nwqjyg` "The Greater" | `max(a,b)` | must NOT fire |
+
+Every reading was **confirmed against the puzzle's own solution** (which rides along in the metadata —
+see PROJECT_SUMMARY "Decoding ONE puzzle's payload offline"): scoring `|a−b|` over every dot gives
+28/28, 7/7, 8/8 and 16/16 on the difference puzzles, and **0/24, 1/22, 0/16** on the three rivals.
+Measured in the live DOM, the collector finds 18 dots on `b4qLdjD8LP` **and all 24 on `24zhxatww7`** —
+so the geometry genuinely cannot tell them apart, and a geometry-only detector would over-remove on
+two clover puzzles. That is the one failure mode the elimination contract forbids.
+
+**Detection ladder** (`differenceDotClause` is clause-scoped — split on `. \n ;` — so a whisper
+sentence elsewhere in the rules can never lend its "difference of 5" to a dot sentence):
+
+1. a clause must state a **difference** (`DIFFDOT_DIFF_RE`) …
+2. … for a **marker** (`DIFFDOT_MARKER_RE`: dot/circle/circled/clue/number/value) …
+3. … sitting **between two adjacent cells** (`DIFFDOT_ADJACENT_RE`). This one requirement cut the
+   catalog-wide fires from **32 to 15**, dropping differences that live somewhere else entirely:
+   between cage sums (`MfhQqpqPHt`), along a sequence (`gir24mff1k`), inside one cell (`n2h6m5b7aa`),
+   on an arrow (`7p6p7L2L8D`), between 2×2 squares (`F28G66PTLg`).
+4. and NOT `DIFFDOT_LINEISH_RE` (whisper/thermo/arrow/cage, and every ≥ form — "at least", "or more",
+   "minimum"). **`lines?`, not `line`** — the plural matters: `\bline\b` does not match "turquoise
+   lines", which let the per-line difference rules of `s7221r2i0r` and `7D4Bdb3NJg` through until the
+   catalog scan caught it.
+5. and NOT `DIFFDOT_OUTSIDE_RE` (frame clues), NOT `DIFFDOT_KROPKI1_RE` (**a difference of ONE is a
+   plain white Kropki dot**, and setters spell it out that way constantly — "digits separated by a
+   white dot are consecutive (have a difference of 1)" — so without this the validator moved into
+   Kropki's lane on a huge number of ordinary puzzles), and NOT `DIFFDOT_DEFERRED_RE` (the gap is left
+   to the solver, so there is no label to read — `H3MfbFJ83R` "Manatee Meadow": "cells separated by an
+   orange dot differ by the same value, to be determined", a same-difference-DOT variant).
+6. **A surviving clause that also offers a RIVAL meaning → AMBIGUOUS** (`DIFFDOT_RIVAL_RE`: either /
+   or the greater / larger / smaller / sum / total / product). `e13uslyl3l` "Difference or Greater" is
+   the case: "the value in the circle tells you EITHER the difference …, OR the greater" — measured on
+   its own solution, difference fits 15/32 and max 17/32, i.e. **neither rule alone**, so the puzzle
+   really does hand the choice to the solver. `philip-newman/20250606-66` ("sum, difference, ratio, or
+   product given by the dot") is the second. Ambiguous mode **requires a selection** and validates only
+   dots whose BOTH cells are selected — the same policy whispers use, and the whole-clue contract.
+
+Catalog-wide after all of that: **15 confident, 2 ambiguous** out of 6,260. Eleven of the fifteen are
+genuine labeled difference dots; the other four (`QBNff6rPdR` "Rainbow Kropki" — gap given by the dot's
+COLOUR, `2zsjgd6sfq` "Middle Distance" — gap given by a digit elsewhere, `L8t8jQ7Ljn` — diamonds not
+circles, `17rhp0owyb` "Difference Fences" — drawn as edge segments) are **safe because they draw no
+digit-labeled round border marker**, so the collector returns nothing and the mode falls to `none`.
+That is load-bearing: the label requirement is the second gate behind the cue, not a convenience.
+
+**BLACK markers are excluded.** Where a puzzle uses both, black is a RATIO and white a difference —
+`nrGRHthTj2` "Kropki Kounting": *"digits separated by a black circle have a ratio of 1:N … by a white
+circle have a difference of N"*. Reading a labeled black dot as a difference is a wrong answer, not a
+weak one. **Roman-numeral labels are excluded too** (the label must match `^[0-9]{1,2}$`), which is what
+keeps `r9rLrppHpT`'s V/X sum clues with the XV validator and its 3/6 dots here — one puzzle, two clue
+types, split by the label alone.
+
+**Known gap (deliberate):** a puzzle stating "white dot = difference 3" while drawing **bare** dots
+would be read by the Kropki validator as consecutive — an over-removal. No catalog puzzle does this
+(all four constant-difference puzzles label every dot), so no guard was added rather than change
+Kropki's behaviour speculatively. If one turns up, the fix is to make `collectKropkiDots` skip bare
+white dots when a confident non-1 difference clause exists.
 
 **THE BORDER TEST IS THE ONLY THING SEPARATING AN XV FROM A CORNER CLUE — never loosen it.**
 `rfijdcynhv` "Cross Sums" (clover) draws a bare **X at the corner of four cells**, meaning the two
@@ -542,6 +618,7 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Arrow / double arrow** | target range `tc×min…tc×max` disjoint from line range | **new**; a 10-cell shaft can't sum under 10, one circle can't exceed 9 |
 | **Region sum** | no S in every segment's `n-smallest … n-largest` range | **new**; segments are one region → distinct digits |
 | **Same difference** | no difference `d` fills the line over the FULL digit set (`sameDiffLineSupport` with `st.fullSet` in every cell) | v3.159; the test is the validator's own engine run mark-free — e.g. a 3-cell closed loop of mutually-conflicting cells has no `d` at all |
+| **Difference dot** | the labeled difference is not `|a−b|` for any two **distinct** digit-set digits (over 1-9: 0, or anything ≥9) | **new** v3.172; same reasoning as XV — the two cells are orthogonally adjacent so they must differ, making a 0 gap impossible and 9+ off the scale. `24zhxatww7` actually draws two dots labeled 9, so this fires on real data if the cue is ever loosened |
 | **XV / Roman numeral** | the numeral's total is not the sum of any two **distinct** digit-set digits (over 1-9: anything outside 3…17) | **new** v3.171; the clue's two cells are orthogonally adjacent, so they share a row or column and MUST differ — a total needing a repeat (2 = 1+1, 18 = 9+9) or lying off the scale is unsatisfiable however the grid is filled. Mark-independent, and conservative because any legal fill exhibits such a pair. This is also what makes the widened numeral set safe: "II" or "XVIII" is dropped + reported, never propagated |
 | **Palindrome** | a fold pair (cell `i`, cell `L−1−i`) that `makeMustDiffer` forces to DIFFER | **new** v3.164; the pair must be EQUAL, so a shared row/column/region/uniqueness-cage makes the whole line unfillable. Mark-independent, and conservative because `makeMustDiffer` only asserts units the puzzle guarantees |
 | **Lockout** | no diamond pair survives `lockoutSegmentSupport` with the FULL digit set in every cell (`pairs === 0`) | **new** v3.167; the validator's own engine run mark-free, like same-difference. The widest outside region a gap-4 pair leaves over 1-9 is four digits (1/5 → {6,7,8,9}), so e.g. **five** mutually-conflicting interior cells can never be filled. Conservative by construction: any legal fill has a diamond pair, which the full-set run necessarily sees. NOT length-checked — digits may repeat, so a ten-cell interior with no internal conflicts is fine |
@@ -585,7 +662,7 @@ extra eliminations the conflict matrix would have added. When designing a new se
 shape; better still, look for the one that needs no cap at all (a chain CSP is solved exactly by arc
 consistency, which is why same-difference searches only when conflicts or a loop break the chain).
 Every other validator (kropki, cage, thermo,
-whisper, Dutch, XV, renban, nabner, parity, zipper, entropic, modular, **palindrome**) is
+whisper, Dutch, XV, **difference dot**, renban, nabner, parity, zipper, entropic, modular, **palindrome**) is
 pairwise, per-cell, bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial,
 no cap, nothing to audit. Palindrome is the cheapest of them all: **no search at all**, one set
 intersection per fold pair.

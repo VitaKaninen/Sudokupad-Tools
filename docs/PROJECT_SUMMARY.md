@@ -470,7 +470,7 @@ way so it stays low-maintenance.
 - **Validate Constraints — the validator subsystem (v3.53+; full documentation in
   [VALIDATORS.md](VALIDATORS.md)):** floating button + popup menu of per-constraint validators
   (Kropki, cages, little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
-  between lines, renban, nabner, ten lines, region-sum, parity, same difference, zipper, entropic, modular) that remove — never add — centre candidates with no
+  between lines, renban, nabner, ten lines, region-sum, parity, same difference, zipper, entropic, modular, difference dots) that remove — never add — centre candidates with no
   complete support. Entry points: `buildValidateButton` / `openValidateMenu` /
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
   authoritative checklist) / `detectedValidators` (classifies line validators once per menu build →
@@ -531,6 +531,18 @@ way so it stays low-maintenance.
   drawn may fail on an untouched grid and that report is wanted, but reasoning backwards from it to
   "the rules must mean something else here, so switch off" is the solver's job (the reverted v3.165
   `LINE_MORPH_RE` guard; see VALIDATORS.md).
+  **Difference dots (v3.172): `collectDifferenceDots` / `classifyDifferenceDots` /
+  `computeDifferenceDotRemovals` / `differenceDotClause`** — a white border circle carrying a DIGIT
+  means the two cells differ by it; the Kropki fixpoint with the gap read off the label instead of
+  fixed at 1. **The one validator whose drawing carries no signal whatsoever**: `|a−b|`, `a+b`,
+  `max(a,b)` and "tens digit of `a×b`" all draw the identical white disc + digit, so the rules CUE is
+  the entire safety boundary (the live collector finds 18 dots on the real `b4qLdjD8LP` and all 24 on
+  `24zhxatww7` "Sum or Greater"). Every reading was confirmed against each puzzle's own solution:
+  difference scores 100% on the six real ones and 0–1 on the three rivals. Clause-scoped ladder →
+  confident / **ambiguous** (a rival meaning offered, `e13uslyl3l` "Difference or Greater" — select the
+  dots you mean) / none; 15 confident + 2 ambiguous catalog-wide. Black circles are ratio clues and
+  Roman labels are XV clues, so `r9rLrppHpT` splits its own dots between the two validators by label.
+  Full detail + the anti-cue rationale in [VALIDATORS.md](VALIDATORS.md).
   **XV = any Roman numeral (v3.171): `romanValue` / `romanString` / `ROMAN_UNITS`** — the border
   numeral's own value is the sum target (`VI`→6, `XI`→11, `XIII`→13, `XV`→15, not just X/V), parsed
   **canonical-form-only** over I/V/X so decorative letter runs and the title strings `XVX`/`VXX` can

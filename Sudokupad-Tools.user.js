@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.171.0
+// @version      3.172.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.171.0';
+  var SCRIPT_VERSION = '3.172.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7694,6 +7694,249 @@
     return { removals: removals, xvCount: dots.length, emptiedCells: emptied, invalid: invalid };
   }
 
+  // ── Difference dots (v3.172) ──────────────────────────────────────────────
+  // A white circle on a cell border carrying a DIGIT: the two cells differ by that
+  // digit. Geometrically a labeled Kropki dot; logically a white Kropki dot with the
+  // gap read off the label instead of fixed at 1 — so it reuses the same shape and
+  // position detectors and the same arc-consistency fixpoint.
+  //
+  // A CUE IS MANDATORY HERE, and this is the validator that proves why. Four rules
+  // draw *pixel-identical* pictures — a white 0.5-cell disc on a border with a digit
+  // in it — and only the rules text separates them:
+  //   `0jyxu79n6q` "Same Difference"  |a−b|              ← ours
+  //   `b4qLdjD8LP` "Difference Sudoku 06" |a−b|          ← ours
+  //   `r9rLrppHpT` "Throuples"        |a−b| (+ V/X sums) ← ours
+  //   `24zhxatww7` "Sum or Greater"   a+b OR max(a,b)    ← must NOT fire
+  //   `ck9j1oe9s0` "Rounding Error"   tens digit of a×b  ← must NOT fire
+  //   `m425nwqjyg` "The Greater"      max(a,b)           ← must NOT fire
+  // Each reading was CONFIRMED against the puzzle's own solution (the metadata
+  // carries one): scoring |a−b| over every dot gives 28/28, 7/7, 8/8, 16/16 on the
+  // difference puzzles and 0/24, 1/22, 0/16 on the three rivals. So the geometry
+  // genuinely carries no signal, and a geometry-only detector would over-remove on
+  // two clover puzzles — exactly what the elimination contract forbids.
+  //
+  // The three rivals never say "difference", so the cue excludes them for free. The
+  // case that actually needs the rival guard is `e13uslyl3l` "Difference or Greater"
+  // — "the value in the circle tells you EITHER the difference of the digits …, OR
+  // the greater of the two values" (measured: diff 15/32, max 17/32, i.e. neither
+  // rule alone). The puzzle hands the choice to the SOLVER, so it resolves AMBIGUOUS
+  // and only validates dots the player selects, the same policy whispers use.
+  var DIFFDOT_DIFF_RE = /\bdifference\b|\bdiffer(?:s|ing)?\b/;
+  // The marker the clue is drawn as. "clue"/"number"/"value" are broad on purpose —
+  // `0jyxu79n6q` says only "clues indicate the difference", `b4qLdjD8LP` "the circled
+  // number" — and are narrowed by the anti-patterns below rather than by this list.
+  var DIFFDOT_MARKER_RE = /\b(?:dots?|circles?|circled|clues?|numbers?|values?)\b/;
+  // A LINE clue, not a dot: whisper family ("adjacent digits along a green line have
+  // a difference of five or more"), same-difference lines, Dutch. Also the ≥ forms,
+  // which are whisper language wherever they appear.
+  // NB `lines?` — the plural matters. `\bline\b` alone does NOT match "turquoise
+  // lines", which let `s7221r2i0r` and `7D4Bdb3NJg` (both per-LINE difference rules)
+  // through the filter until the catalog scan caught it.
+  var DIFFDOT_LINEISH_RE = /\blines?\b|\bwhisper|\bthermo|\barrows?\b|\bcages?\b|\bat\s+least\b|\bor\s+more\b|\bminimum\b|\bmaximum\b|\bmore\b/;
+  // The clue must be stated as sitting BETWEEN two adjacent cells — that is what a
+  // border dot is. Without this the cue also claimed differences that live somewhere
+  // else entirely: between cage sums (`MfhQqpqPHt`), along a sequence
+  // (`gir24mff1k`), inside one cell (`n2h6m5b7aa` — "if a circle appears in a cell"),
+  // or between 2x2 squares (`F28G66PTLg`). All twelve genuine difference-dot puzzles
+  // in the catalog use one of these phrasings.
+  var DIFFDOT_ADJACENT_RE = /\bseparat(?:e|es|ed|ing)\b|\bjoin(?:s|ed|ing)?\b|\badjoin(?:s|ing)\b|\bbetween\s+(?:the\s+)?(?:two|2|adjacent|neighbou?ring|orthogonally)\b|\bbetween\s+(?:the\s+)?cells\b|\b(?:in|of)\s+(?:the\s+)?two\s+cells\b|\bthose\s+two\s+(?:cells|digits)\b|\bpairs?\s+of\s+cells\b/;
+  // Clues OUTSIDE the grid (sandwich/X-sum frames) are not border dots.
+  var DIFFDOT_OUTSIDE_RE = /outside\s+(?:the\s+)?grid|outside\s+clue|\brow\s+or\s+column\b/;
+  // A difference of ONE is a plain white Kropki dot, which the Kropki validator
+  // already owns — and setters routinely spell it out that way ("digits separated by
+  // a white dot are consecutive (have a difference of 1)"). Claiming that clause
+  // would put this validator in Kropki's lane on a huge number of ordinary puzzles.
+  var DIFFDOT_KROPKI1_RE = /\bconsecutive\b|\bdifference\s+of\s+(?:1|one)\b|\bdiffer\s+by\s+(?:1|one)\b/;
+  // The gap is DEFERRED to the solver rather than written on the dot — a
+  // same-difference-dot variant, a different clue type with no label to read
+  // (`H3MfbFJ83R` "Manatee Meadow": "cells separated by an orange dot differ by the
+  // same value, to be determined").
+  var DIFFDOT_DEFERRED_RE = /\bto\s+be\s+determined\b|\bsame\s+value\b|\bsame\s+difference\b|\bunknown\b|\bnot\s+given\s+which\b/;
+  // A RIVAL meaning offered as an alternative → the solver decides, not us.
+  var DIFFDOT_RIVAL_RE = /\beither\b|\bor\s+(?:the\s+)?(?:greater|larger|higher|smaller|lower|lesser|sum|total|product)\b/;
+  // Does any single clause state that a border marker gives a DIFFERENCE? Clause-
+  // scoped (split on . \n ;) so a whisper sentence elsewhere in the rules can't lend
+  // its "difference of 5" to a dot sentence, and vice versa — the reason `6o5zvf29rt`
+  // ("minimum difference of 5" on a green LINE, white dot = consecutive) is silent.
+  // Takes the blob as a parameter (like hasEntropicCue / hasPerLineConstDiffCue) so
+  // the harness can score it against real rules text without a DOM.
+  function differenceDotClause(blob) {
+    var clauses = String(blob || '').split(/[.\n;]/);
+    for (var i = 0; i < clauses.length; i++) {
+      var c = clauses[i];
+      if (!DIFFDOT_DIFF_RE.test(c)) continue;
+      if (!DIFFDOT_MARKER_RE.test(c)) continue;
+      if (!DIFFDOT_ADJACENT_RE.test(c)) continue;
+      if (DIFFDOT_LINEISH_RE.test(c)) continue;
+      if (DIFFDOT_OUTSIDE_RE.test(c)) continue;
+      if (DIFFDOT_KROPKI1_RE.test(c)) continue;
+      if (DIFFDOT_DEFERRED_RE.test(c)) continue;
+      return c;
+    }
+    return null;
+  }
+  function hasDifferenceDotCue(blob) { return differenceDotClause(blob) !== null; }
+
+  // Every labeled round border marker whose label is a plain number: the difference
+  // dots as drawn. Reuses isKropkiCircle (which already rejects the double-arrow
+  // pill — a w≈h test, see LESSONS) and isOnCellBorder (which already rejects a
+  // 4-cell corner marker), so this inherits both hardened guards rather than
+  // re-deriving them. The label is found by getKropkiAdjacentText, which handles
+  // both renderings SudokuPad uses: a sibling disc + separate text (`0jyxu79n6q`,
+  // 28 discs + 28 texts) and a text whose own backgroundColor becomes a
+  // `rect.textbg` disc (`b4qLdjD8LP`, 18 textbg rects at w=h=30 rx=15).
+  //
+  // BLACK markers are excluded: where a puzzle uses both, black means a RATIO and
+  // white a difference ("Kropki Kounting" `nrGRHthTj2`: "digits separated by a black
+  // circle have a ratio of 1:N … by a white circle have a difference of N"). Reading
+  // a labeled black dot as a difference would be a wrong answer, not a weak one.
+  // Returns [{ target, a:'col,row', b:'col,row' }] (0-indexed cell keys).
+  function collectDifferenceDots() {
+    var svg = document.getElementById('svgrenderer');
+    var cs = getGridCellSize();
+    if (!svg || !cs) return [];
+    var N = detectGridSize();
+    var out = [], seen = {};
+    function inGrid(col, row) { return col >= 0 && col < N && row >= 0 && row < N; }
+    svg.querySelectorAll('rect.feature-kropki, rect.textbg, #overlay rect, #underlay rect').forEach(function (rect) {
+      if (!isKropkiCircle(rect)) return;
+      if (!isOnCellBorder(rect, cs)) return;
+      var f = (rect.getAttribute('fill') || '').toUpperCase();
+      if (f === '#000000' || f === 'BLACK') return;      // black = ratio clue, not a difference
+      var t = getKropkiAdjacentText(rect);
+      if (!t) return;                                    // a BARE dot is a plain Kropki dot
+      var s = (t.textContent || '').trim();
+      if (!/^[0-9]{1,2}$/.test(s)) return;               // "X"/"V"/"~"/":" belong to other clue types
+      var target = Number(s);
+      var x = parseFloat(rect.getAttribute('x') || 0), y = parseFloat(rect.getAttribute('y') || 0);
+      var w = parseFloat(rect.getAttribute('width') || 0), h = parseFloat(rect.getAttribute('height') || 0);
+      var cx = x + w / 2, cy = y + h / 2;
+      function gridDist(v) { var m = ((v % cs) + cs) % cs; return Math.min(m, cs - m); }
+      var tol = cs * 0.15, half = cs / 2;
+      var onVert = gridDist(cx) < tol && Math.abs(gridDist(cy) - half) < tol;
+      var a, b;
+      if (onVert) {                              // vertical border → left | right cells
+        var bc = Math.round(cx / cs), r = Math.floor(cy / cs);
+        a = (bc - 1) + ',' + r; b = bc + ',' + r;
+      } else {                                   // horizontal border → top | bottom cells
+        var br = Math.round(cy / cs), c = Math.floor(cx / cs);
+        a = c + ',' + (br - 1); b = c + ',' + br;
+      }
+      var ap = a.split(',').map(Number), bp = b.split(',').map(Number);
+      if (!inGrid(ap[0], ap[1]) || !inGrid(bp[0], bp[1])) return;
+      var key = a + '|' + b + '|' + target;
+      if (seen[key]) return;
+      seen[key] = 1;
+      out.push({ target: target, a: a, b: b });
+    });
+    return out;
+  }
+
+  // { mode:'confident'|'ambiguous'|'none', dots, allDots } — same shape the line
+  // classifiers return, so detectedValidators()/the menu greying/the eyeball all
+  // work unchanged. Confident = a clause states the difference reading. Ambiguous =
+  // such a clause exists but offers a RIVAL meaning too (`e13uslyl3l`), so the
+  // player must select the dots they mean. No clause = not this clue type.
+  function classifyDifferenceDots() {
+    var dots = collectDifferenceDots();
+    if (!dots.length) return { mode: 'none', dots: [], allDots: [] };
+    var clause = differenceDotClause(getPuzzleRulesBlob());
+    if (!clause) return { mode: 'none', dots: [], allDots: dots };
+    if (DIFFDOT_RIVAL_RE.test(clause)) return { mode: 'ambiguous', dots: [], allDots: dots };
+    return { mode: 'confident', dots: dots, allDots: dots };
+  }
+
+  // The Kropki fixpoint with |d − e| = the dot's own label instead of 1. A dot's two
+  // cells are orthogonally adjacent, so they share a row or column and must DIFFER —
+  // which is why a label of 0 can never be satisfied, and why the reachable
+  // differences over 1-9 are exactly 1..8.
+  function computeDifferenceDotRemovals(unitFilter) {
+    var cls = classifyDifferenceDots();
+    if (cls.mode === 'none') return { noDiffDots: true };
+    var st = readValidatorBoardState();
+    if (!st) return { unsupported: true };   // letters / empty digit set → differences undefined
+    var uni = st.uni;
+
+    var dots, masked = false, selection = null;
+    if (cls.mode === 'ambiguous') {
+      // The rules leave the reading to the solver, so only dots the player has
+      // explicitly selected are validated — and, per the whole-clue contract, a dot
+      // counts as selected only when BOTH its cells are.
+      selection = getSelectedCells();
+      if (!selection || selection.size === 0) return { noDiffDots: true, needSelection: true };
+      dots = cls.allDots.filter(function (d) { return selection.has(d.a) && selection.has(d.b); });
+      if (!dots.length) return { noDiffDots: true, needSelection: true };
+      masked = true;
+    } else {
+      dots = cls.dots;
+      if (unitFilter) dots = dots.filter(function (d) { return unitFilter([d.a, d.b]); });
+    }
+
+    // STRUCTURAL, i.e. MARK-INDEPENDENT (v3.157 contract): a difference no pair of
+    // distinct digit-set digits can realise is unsatisfiable however the grid is
+    // filled (over 1-9 that is 0 and anything ≥9). Drop it, count it, report it —
+    // it means we claimed the wrong clue type, and the marks are innocent.
+    var reach = {};
+    (function () {
+      var ds = Array.from(st.fullSet);
+      for (var i = 0; i < ds.length; i++)
+        for (var j = 0; j < ds.length; j++)
+          if (i !== j) reach[Math.abs(ds[i] - ds[j])] = 1;
+    })();
+    var invalid = 0;
+    dots = dots.filter(function (d) {
+      if (reach[d.target]) return true;
+      invalid++;
+      return false;
+    });
+    if (dots.length === 0) return { noDiffDots: true, invalid: invalid };
+
+    var values = st.values, centre = st.centre, fullSet = st.fullSet;
+    var isFogged = getFogTester();
+    function neighbourSet(key) {
+      if (values[key] != null) return new Set([values[key]]);
+      if (centre[key]) return centre[key];
+      return fullSet;
+    }
+    function hasPartner(target, d, otherSet) {
+      return otherSet.has(d - target) || otherSet.has(d + target);
+    }
+    function mayRemove(key) {
+      if (masked && !selection.has(key)) return false;
+      if (isFogged && isFogged(key)) return false;
+      return true;
+    }
+
+    var markedKeys = Object.keys(centre);
+    var removals = [], seen = {};
+    function consider(self, other, target) {
+      if (values[self] != null || !centre[self]) return;
+      if (!mayRemove(self)) return;
+      var os = neighbourSet(other);
+      Array.from(centre[self]).forEach(function (d) {
+        if (!hasPartner(target, d, os)) {
+          centre[self].delete(d);
+          var k = self + '/' + d;
+          if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: self, digit: String(d) }); }
+        }
+      });
+    }
+    var changed = true, guard = 0;
+    while (changed && guard++ < 1000) {
+      var before = removals.length;
+      dots.forEach(function (dot) {
+        consider(dot.a, dot.b, dot.target);
+        consider(dot.b, dot.a, dot.target);
+      });
+      changed = removals.length > before;
+    }
+
+    var emptied = 0;
+    markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
+
+    return { removals: removals, diffDotCount: dots.length, emptiedCells: emptied, invalid: invalid };
+  }
+
   // ── Cage validator ────────────────────────────────────────────────────────
   // Standard killer cages (a small total in a corner, no repeated digit). For
   // each cage we generate every distinct-digit combination matching its size and
@@ -13187,6 +13430,20 @@
         },
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
+      // Difference dots use `classify` (not `detect`) purely to inherit the menu's
+      // ambiguity greying + ⚠ note — they are dots, not lines, so validatorClueObjects
+      // has its own case for them.
+      { name: 'difference dot', unitNoun: 'difference dot',
+        menuLabel: function () {
+          var ds = collectDifferenceDots(), seen = {}, vals = [];
+          ds.forEach(function (d) { if (!seen[d.target]) { seen[d.target] = 1; vals.push(d.target); } });
+          vals.sort(function (p, q) { return p - q; });
+          // One shared difference is worth naming outright ("Difference-3 dots");
+          // a puzzle whose dots each carry their own gap just says "Difference dots".
+          return vals.length === 1 ? ('Difference-' + vals[0] + ' dots') : 'Difference dots';
+        },
+        classify: classifyDifferenceDots, compute: computeDifferenceDotRemovals,
+        countKey: 'diffDotCount', noneKey: 'noDiffDots' },
       // Double arrows share this row: same equation, same engine (see
       // computeArrowRemovals), so one button validates both. The label names what
       // this puzzle actually has (a double-arrow-only puzzle shouldn't offer to
@@ -13275,6 +13532,13 @@
     switch (def.name) {
       case 'Kropki':        collectKropkiDots().forEach(function (d) { out.push({ type: 'dot', a: d.a, b: d.b }); }); break;
       case 'XV':            collectXVDots().forEach(function (d) { out.push({ type: 'dot', a: d.a, b: d.b }); }); break;
+      // Draws only what a plain click WOULD validate: an AMBIGUOUS puzzle
+      // (`e13uslyl3l`) auto-validates nothing, so cls.dots is empty and the shared
+      // ambiguous-tooltip path in makeValidatorEye explains why.
+      case 'difference dot':
+        var ddcls = validatorClassify(def) || { dots: [] };
+        (ddcls.dots || []).forEach(function (d) { out.push({ type: 'dot', a: d.a, b: d.b }); });
+        break;
       case 'cage':          getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;
       case 'little killer': getLittleKillers().forEach(function (lk) { out.push({ type: 'diag', keys: lk.keys }); }); break;
       case 'thermo':        getThermos().forEach(function (t) { out.push({ type: 'thermo', edges: t.edges, root: t.root, keys: t.keys }); }); break;

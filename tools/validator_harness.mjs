@@ -93,6 +93,10 @@ const NAMES = [
   'mergeLineStrokes', 'lineClueChains', 'zipperChains', 'zipperFoldCenter',
   // Roman numerals on a cell border (the XV validator's sum target)
   'ROMAN_UNITS', 'romanString', 'romanValue',
+  // difference dots (a labelled white border circle: |a-b| = the label)
+  'DIFFDOT_DIFF_RE', 'DIFFDOT_MARKER_RE', 'DIFFDOT_LINEISH_RE', 'DIFFDOT_ADJACENT_RE',
+  'DIFFDOT_OUTSIDE_RE', 'DIFFDOT_KROPKI1_RE', 'DIFFDOT_DEFERRED_RE', 'DIFFDOT_RIVAL_RE',
+  'differenceDotClause', 'hasDifferenceDotCue',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -856,6 +860,108 @@ checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable
           diffsOf(false), [1]);
   }
 }
+// ── DIFFERENCE DOTS (v3.172) ────────────────────────────────────────────────
+// The cue is the ENTIRE safety boundary here, because the drawing carries no
+// signal at all: a white 0.5-cell disc on a border with a digit in it is the
+// picture used by |a-b|, by a+b, by max(a,b) and by "tens digit of a*b" alike.
+// Measured in the live DOM: the collector finds 18 dots on `b4qLdjD8LP` (a real
+// difference puzzle) and all 24 on `24zhxatww7` (Sum or Greater) — the cue is the
+// only thing that stops the second being validated as the first.
+// Each expectation is the puzzle's own rules text, lowercased as the blob is.
+{
+  const fires = (blob) => F.differenceDotClause(blob) !== null;
+  const ambiguous = (blob) => { const c = F.differenceDotClause(blob); return c !== null && F.DIFFDOT_RIVAL_RE.test(c); };
+  const confident = (blob) => fires(blob) && !ambiguous(blob);
+
+  // ── CONFIDENT: the six reported examples + two more the catalog scan found ──
+  checkTrue('diffdot: 0jyxu79n6q "clues indicate the difference between the two adjacent cells"',
+    confident('normal sudoku rules apply. clues indicate the difference between the two adjacent cells. for instance, r1c7 and r2c7 have a difference of exactly 2.'));
+  checkTrue('diffdot: nd0191ecm9 "separated by a white dot have a difference of 3"',
+    confident('normal sudoku rules apply. difference: digits separated by a white dot have a difference of 3. renban: digits along a line form a set of non-repeating consecutive digits in any order. x-sums: clues outside the grid indicate the sum of the first x numbers where x is the first digit seen.'));
+  checkTrue('diffdot: twqc1a8ybe "joined by a white dot have a difference of exactly 5"',
+    confident('fill each row, column and box with the same 8 distinct digits from 1 to 9. kropki dots: digits in cells joined by a white dot have a difference of exactly 5. digits in cells joined by a black dot have a 1:2 ratio. not all possible dots are given.'));
+  checkTrue('diffdot: r9rLrppHpT "numbers in circles show the difference between the adjoining pair"',
+    confident('normal sudoku rules apply. numbers in circles show the difference between the adjoining pair of digits. digits separated by a v sum to 5. digits separated by an x sum to 10.'));
+  checkTrue('diffdot: b4qLdjD8LP "the circled number between two cells represents the difference"',
+    confident('normal sudoku rules apply. the circled number between two cells represents the difference between the two cells.'));
+  checkTrue('diffdot: f37rd0c6uu "separated by a white dot must have a difference of 3"',
+    confident('normal sudoku rules apply. digits separated by a white dot must have a difference of 3. not all dots are given.'));
+  checkTrue('diffdot: 55tm8zuuwb "separated by white circles must have a difference of 5"',
+    confident('normal sudoku rules apply. digits in cells separated by white circles must have a difference of 5. all circles are given.'));
+  checkTrue('diffdot: nrGRHthTj2 "a difference of n, where n is the digit assigned to the circle"',
+    confident('digits separated by a black circle have a ratio of 1:n, where n is the digit assigned to the circle. digits separated by a white circle have a difference of n, where n is the digit assigned to the circle.'));
+
+  // ── MUST NOT FIRE: the three reported counter-examples. None says "difference",
+  // which is why the picture being identical costs us nothing.
+  checkFalse('diffdot: 24zhxatww7 Sum or Greater must not fire',
+    fires('normal sudoku rules apply. a clue appearing between two cells, tells you either the sum of the digits in those two cells, or the greater of the two digits in those cells.'));
+  checkFalse('diffdot: ck9j1oe9s0 Rounding Error (tens digit of the product) must not fire',
+    fires('normal sudoku rules apply. clues give the tens digit of the product (multiplication) of the two surrounding digits. for instance, two adjacent cells containing 8 and 9 could have a clue of 7, since 8*9=72.'));
+  checkFalse('diffdot: m425nwqjyg The Greater must not fire',
+    fires('normal sudoku rules apply. digits inbetween two cells give the larger of the two digits in those cells.'));
+
+  // ── AMBIGUOUS: a rival meaning is offered, so the SOLVER chooses. Measured on
+  // e13uslyl3l's own solution: difference fits 15/32 dots, max fits 17/32 — neither
+  // rule alone, so auto-validating either would be wrong.
+  checkTrue('diffdot: e13uslyl3l "either the difference ... or the greater" is AMBIGUOUS',
+    ambiguous('normal sudoku rules apply. also, some pairs of cells are separated by a white circle. the value in the circle tells you either the difference of the digits in the two cells, or the greater of the two values in those cells.'));
+  checkTrue('diffdot: philip-newman 6/6 "sum, difference, ratio, or product" is AMBIGUOUS',
+    ambiguous('math pairs: digits in cells separated by a white dot must have the sum (+), difference (-), ratio (/), or product (x) given by the dot.'));
+
+  // ── MUST NOT FIRE: a difference of ONE is a plain white Kropki dot, and setters
+  // spell it out that way constantly. Without DIFFDOT_KROPKI1_RE this claimed
+  // ordinary Kropki puzzles.
+  checkFalse('diffdot: "consecutive (have a difference of 1)" is plain Kropki',
+    fires('normal sudoku rules apply. german whispers: along each green line, adjacent digits must have a difference of 5 or more. consecutive pairs: digits separated by a white dot are consecutive (have a difference of 1). not all possible dots are necessarily given.'));
+  checkFalse('diffdot: "separated by a white dot differ by 1" is plain Kropki',
+    fires('digits separated by a white dot differ by 1. digits separated by a black dot are in a 1:2 ratio.'));
+
+  // ── MUST NOT FIRE: whisper / line families. The >=5 forms are whisper language
+  // wherever they appear, and `lines?` (not `line`) is what catches the plural —
+  // s7221r2i0r and 7D4Bdb3NJg slipped through on "turquoise lines" until fixed.
+  checkFalse('diffdot: german whisper line',
+    fires('adjacent digits along a green line must have a difference of 5 or more.'));
+  checkFalse('diffdot: dutch whisper line',
+    fires('adjacent digits along an orange line must differ by at least 4.'));
+  checkFalse('diffdot: 6o5zvf29rt line difference + consecutive dot',
+    fires('digits along a green line have a minimum difference of 5 cells separated by a white dot have consecutive digits'));
+  checkFalse('diffdot: xpkfq77yk0 "differ by exactly 5" on a LINE',
+    fires('adjacent digits on a dark green line differ by exactly 5. digits separated by a white dot are consecutive.'));
+  checkFalse('diffdot: s7221r2i0r per-LINE difference (plural "lines")',
+    fires('this difference value can be different for different turquoise lines'));
+  checkFalse('diffdot: ndo5ff4agt same-difference LINE',
+    fires('adjacent digits along a grey line have the same difference. (separate lines may have different differences)'));
+
+  // ── MUST NOT FIRE: the gap is deferred to the solver, so there is no label to
+  // read — a same-difference-DOT variant, a different clue type (H3MfbFJ83R).
+  checkFalse('diffdot: H3MfbFJ83R "differ by the same value, to be determined"',
+    fires('cells separated by an orange dot differ by the same value, to be determined. not all such dots are given.'));
+
+  // ── MUST NOT FIRE: a difference that lives somewhere other than a cell border.
+  // These are the fires the adjacency requirement removed (32 -> 15 catalog-wide).
+  checkFalse('diffdot: MfhQqpqPHt difference between CAGE sums',
+    fires('if two cages are adjacent, their sums must be adjacent too (in other words, if two cages share an edge, the sum of the numbers must differ by one)'));
+  checkFalse('diffdot: gir24mff1k constant difference along a SEQUENCE',
+    fires('that is, a sequence of numbers with a constant difference between each of the terms, like 1-2-3-4 or 3-5-7-9'));
+  checkFalse('diffdot: n2h6m5b7aa circle INSIDE a cell',
+    fires('if a circle appears in a cell, then the digit in that cell is equal to the difference between the largest digit and the smallest digit'));
+  checkFalse('diffdot: 7p6p7L2L8D difference on an ARROW',
+    fires('digits on an arrow have the difference of the digit in the attached circle'));
+  checkFalse('diffdot: outside-the-grid clue',
+    fires('clues outside the grid give the difference between the two digits nearest the clue'));
+
+  // The reachable differences over 1-9 with two DISTINCT digits are exactly 1..8 —
+  // the validator's structural test. A dot labelled 9 (24zhxatww7 draws two) or 0
+  // could never be satisfied, so it is dropped and reported, never propagated.
+  {
+    const reach = (d) => { for (let i = 1; i <= 9; i++) for (let j = 1; j <= 9; j++) if (i !== j && Math.abs(i - j) === d) return true; return false; };
+    check('diffdot: difference 0 unreachable (cells are adjacent, must differ)', reach(0), false);
+    check('diffdot: difference 1 reachable', reach(1), true);
+    check('diffdot: difference 8 reachable (1 and 9)', reach(8), true);
+    check('diffdot: difference 9 unreachable over 1-9', reach(9), false);
+  }
+}
+
 // ── Roman numerals on a cell border (v3.171) ────────────────────────────────
 // The XV validator reads the border numeral's own VALUE as the sum target, so the
 // parser is the whole safety boundary: it must accept every numeral real puzzles
