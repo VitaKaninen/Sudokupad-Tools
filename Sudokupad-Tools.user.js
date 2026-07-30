@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.173.0
+// @version      3.174.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.173.0';
+  var SCRIPT_VERSION = '3.174.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -1913,22 +1913,37 @@
   // px down for the baseline. Tolerance stays well under one cell, so a
   // neighbouring clue (≥ 1 cell away) can never be matched. Scoped to
   // overlay/underlay so grid digits / pencilmarks are never picked up.
-  function getCenteredKropkiText(rect) {
-    var svg = rect.ownerSVGElement; if (!svg) return null;
+  // Squared anchor-to-centre distance of a text from a circle, or -1 when the text
+  // is not ON that circle. THE one place the "is this text this dot's label?" box is
+  // defined, so the sibling walk and the positional search cannot disagree (v3.174).
+  var KROPKI_TEXT_DX = 10, KROPKI_TEXT_DY = 16;   // anchor tolerance: x centred, y allows the baseline drop
+  function kropkiTextOffset(t, rect) {
+    if (!t || t.tagName !== 'text') return -1;
+    if (t.getAttribute('data-spdr-kropki-label') != null) return -1;   // our own label
+    if (t.textContent.trim() === '') return -1;
     var w = parseFloat(rect.getAttribute('width') || 0);
     var h = parseFloat(rect.getAttribute('height') || 0);
     var cx = parseFloat(rect.getAttribute('x') || 0) + w / 2;
     var cy = parseFloat(rect.getAttribute('y') || 0) + h / 2;
+    var tx = parseFloat(t.getAttribute('x')), ty = parseFloat(t.getAttribute('y'));
+    if (!isFinite(tx) || !isFinite(ty)) return -1;
+    var dx = tx - cx, dy = ty - cy;
+    if (Math.abs(dx) > KROPKI_TEXT_DX || Math.abs(dy) > KROPKI_TEXT_DY) return -1;
+    return dx * dx + dy * dy;
+  }
+  // NEAREST centred text, not the first one found (v3.174). "First in document order"
+  // let two dots resolve to the same text while one dot's own label went unclaimed —
+  // see the getKropkiAdjacentText note. Nearest is unambiguous: a label's anchor sits
+  // ON its own disc, so it is always closest to it.
+  function getCenteredKropkiText(rect) {
+    var svg = rect.ownerSVGElement; if (!svg) return null;
     var texts = svg.querySelectorAll('#overlay text, #underlay text');
+    var best = null, bestD = Infinity;
     for (var i = 0; i < texts.length; i++) {
-      var t = texts[i];
-      if (t.getAttribute('data-spdr-kropki-label') != null) continue;  // our own label
-      if (t.textContent.trim() === '') continue;
-      var tx = parseFloat(t.getAttribute('x')), ty = parseFloat(t.getAttribute('y'));
-      if (!isFinite(tx) || !isFinite(ty)) continue;
-      if (Math.abs(tx - cx) <= 10 && Math.abs(ty - cy) <= 16) return t;
+      var d = kropkiTextOffset(texts[i], rect);
+      if (d >= 0 && d < bestD) { bestD = d; best = texts[i]; }
     }
-    return null;
+    return best;
   }
 
   // Returns the non-spdr value text belonging to a Kropki circle rect (its
@@ -1946,13 +1961,28 @@
       if (next.tagName === 'rect' && next.classList && next.classList.contains('textbg')) { next = next.nextElementSibling; continue; }
       break;
     }
+    // DOM ADJACENCY IS NOT PROOF OF OWNERSHIP (v3.174). The sibling has to be ON the
+    // disc as well, because SudokuPad batches these clues: the element following a
+    // dot is often the NEXT clue's text, not this dot's. Reported as "one set of
+    // digits has the inverted colour", and it is a DOM-order accident, so it lands on
+    // an arbitrary clue in each puzzle — box 9 of `ed0mko9d0b`, box 3 of `ogcall10hl`,
+    // box 9 of `t12fc7v8bl`, the box 6/9 border of `rjl0oqocet`, box 7 of
+    // `3y38nrs34s`. Measured on `ed0mko9d0b`: 17 of its 18 dots resolved positionally
+    // and correctly, and the ONE that took this branch grabbed a text 192px away in x
+    // and 319px in y — five cells off. That text then had two owners while the box-9
+    // dot's real label had none, so fixKropkiDot never pinned it and it stayed
+    // off-white on a white disc.
+    var sibD = next ? kropkiTextOffset(next, rect) : -1;
+    if (sibD >= 0) return next;
+    // Otherwise find it by position (SudokuPad renders Ratio fractions and XV/Roman
+    // sums in a separate batch, so the label is frequently not a sibling at all).
+    var centred = getCenteredKropkiText(rect);
+    if (centred) return centred;
+    // Neither test placed a label on this disc. Prefer an UNCENTRED sibling over
+    // nothing: a labeled dot read as bare gets a spurious injected '~' on top of the
+    // author's value, which is worse than trusting DOM order for its colour.
     if (next && next.tagName === 'text' && next.textContent.trim() !== '') return next;
-    // Fallback: the value text isn't a sibling at all — SudokuPad batched it
-    // elsewhere in the group (Ratio fractions, XV/Roman sums). Match by position.
-    // Without this we mistake the labeled dot for bare → inject a spurious '~'
-    // AND never pin the value's colour → off-white numerals vanish on the white
-    // disc. (clover "XIIIVIII" ed0mko9d0b, "Back to the Ratio" 3y38nrs34s, etc.)
-    return getCenteredKropkiText(rect);
+    return null;
   }
 
   // Any Kropki-shaped circle — used for color fixing. SHAPE test only; the
