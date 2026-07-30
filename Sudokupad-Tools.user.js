@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.174.0
+// @version      3.175.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.174.0';
+  var SCRIPT_VERSION = '3.175.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2067,6 +2067,34 @@
     }
   }
 
+  // Pin a Kropki value/glyph's colour — fill AND the native text-outline halo.
+  //
+  // SudokuPad's "Outlines on digits" setting (`outlinesondigits`) does NOT choose a
+  // halo colour: the renderer puts an inline `stroke: var(--color-white)` on every
+  // board <text> and the setting only toggles `stroke-width` 0 → 2px (with
+  // `paint-order: stroke`, so it paints under the glyph). `--color-white` means "the
+  // paper colour", so our inversion remaps it to `--dm-black` (#181A1B) — correct for
+  // ordinary dark-mode text, which is a LIGHT glyph needing a dark halo.
+  //
+  // But a label we pin BLACK (to contrast with the author's white disc) then gets a
+  // near-black halo behind near-black ink: no contrast at all, the glyph merely looks
+  // fatter/bolder. That is invisible while the value sits ON the disc, and unreadable
+  // the moment it OVERFLOWS one — which authors do routinely, e.g. a two-digit ratio
+  // fraction ("1⁄3") on a 0.35-cell disc (3y38nrs34s), where the overflowing ink lands
+  // on the dark cell. So the halo must be pinned to the OPPOSITE of the fill we chose,
+  // which is what an outline is for. Both colours are set !important because the
+  // renderer's own inline style would otherwise win.
+  //
+  // We never touch `stroke-width` — the player's Outlines-on-digits setting stays in
+  // charge of whether a halo shows at all (width 0 when off ⇒ our colour paints
+  // nothing). data-spdr-kropki-text records the ink colour for the MutationObserver.
+  function pinKropkiTextColor(t, color) {
+    if (!t) return;
+    t.setAttribute('data-spdr-kropki-text', color);
+    t.style.setProperty('fill', color, 'important');
+    t.style.setProperty('stroke', color.toLowerCase() === '#ffffff' ? '#000000' : '#ffffff', 'important');
+  }
+
   function fixKropkiDot(rect) {
     var fill = rect.getAttribute('fill');
     var isWhite = fill && fill.toUpperCase() === '#FFFFFF';
@@ -2100,8 +2128,7 @@
       applyKropkiDotRing(rect, labelRingOn, labelRingColor);
       if (rect.dataset.spdrKropkiFo === undefined) rect.dataset.spdrKropkiFo = rect.style.getPropertyValue('fill-opacity');
       rect.style.setProperty('fill-opacity', '1', 'important');
-      adjText.setAttribute('data-spdr-kropki-text', labelTextColor);
-      adjText.style.setProperty('fill', labelTextColor, 'important');
+      pinKropkiTextColor(adjText, labelTextColor);
       return;
     }
     // ── BARE dots ── genuine Kropki: keep the SEMANTIC fill (white = consecutive,
@@ -2211,11 +2238,11 @@
     if (isBlack) {
       rect.style.setProperty('fill', '#000000', 'important');
       applyKropkiDotRing(rect, !!settings.kropkiOutlineEnabled, '#ffffff');
-      if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#ffffff'); glyph.style.setProperty('fill', '#ffffff', 'important'); }
+      pinKropkiTextColor(glyph, '#ffffff');
     } else {
       rect.style.setProperty('fill', '#ffffff', 'important');
       applyKropkiDotRing(rect, settings.kropkiWhiteOutlineEnabled !== false, '#000000');
-      if (glyph) { glyph.setAttribute('data-spdr-kropki-text', '#000000'); glyph.style.setProperty('fill', '#000000', 'important'); }
+      pinKropkiTextColor(glyph, '#000000');
     }
     rect.style.setProperty('fill-opacity', '1', 'important');
   }

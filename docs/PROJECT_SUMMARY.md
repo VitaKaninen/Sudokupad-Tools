@@ -248,7 +248,11 @@ way so it stays low-maintenance.
   double-arrow pills) / `isKropkiRect` (shape + no text sibling) / `isOnCellBorder` /
   `getKropkiAdjacentText`, and **`isKropkiDotRect` = shape ∧ black/white fill ∧ on-border** (the
   single "the Kropki fix owns this" predicate; object shading + label-bg both skip it so dots aren't
-  double-claimed). Scans include class-less `#overlay`/`#underlay` circles. Rules + the 3 puzzles
+  double-claimed). **`pinKropkiTextColor`** is the single writer for a value/glyph's colour — it pins
+  `fill` *and* the native text-outline halo (`stroke`) to opposite colours, because SudokuPad's
+  "Outlines on digits" setting only toggles `stroke-width` and leaves the halo at
+  `var(--color-white)`, which our inversion remaps to dark (see LESSONS_LEARNED).
+  Scans include class-less `#overlay`/`#underlay` circles. Rules + the 3 puzzles
   that hardened them in LESSONS_LEARNED; `rebuildKropkiLabels` (+ `centerKropkiLabel`, which centers
   each label's ink via a FIXED per-glyph nudge table `KROPKI_INK_NUDGE` measured off the
   **alphabetic baseline** — forces `dominant-baseline:alphabetic` **and**
