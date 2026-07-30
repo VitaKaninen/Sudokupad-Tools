@@ -110,6 +110,39 @@ DarkReader overrides SVG fills two ways:
 - ✅ **Disjoint/scattered sudoku regions need the puzzle MODEL, not geometry (v3.13.0).** Some puzzles (e.g. clover's "Scattered" `2xjf6aw4m2`) define one sudoku region whose 9 cells are **not contiguous** — scattered single cells that are one region for digit logic and must share one colour. `inferRegionsFromSVG` is pure geometry (flood-fill between border paths) and CAN'T know non-touching pieces are one region → it saw them as 9 separate regions in 9 colours. **The logical region list is in the runtime model:** `app.puzzle.currentPuzzle.cages`, filtered to `type === 'region'`, each with a comma-separated **1-indexed** RC-notation `cells` string (`"r2c2,r5c8,…"`). NB: `app.puzzle.cells[i]` does NOT carry a `region` field (only row/col/value/…); the resolved region membership lives only on the `currentPuzzle` cage list. Normal sudoku has **no** `type:'region'` cages (boxes are implicit) → map is null → geometry path unchanged. Implementation: `getModelRegionMap` caches `{ 'r,c': logicalId }` keyed by `location.pathname`; since the render path is sync but `Framework.getApp()` is async, first call returns null + kicks an async refresh that repaints once when the map lands (guarded by a `_pending` flag + key-match so no loop). `buildRegionGroups` collapses geometric pieces with the same logical id into one colour group; `computeRegion4Colors` now colours per GROUP and returns per geo-region (drawing code unchanged — disjoint pieces just get matching colours and each still draws its own border outline). ⚠️ **Forcing a DISCONNECTED region to one colour can break 4-colourability** (the four-colour theorem only guarantees 4 for *connected* regions) — so `computeRegion4Colors` falls back to ungrouped (geometry) colouring when no proper grouped 4-colouring exists, preferring a clash-free result over the disjoint match in that rare case. (Single-disjoint-region puzzles are usually still 4-colourable: the scattered region touches everything → just takes the 4th colour.) **v3.14.0: disjoint groups are PINNED to palette colour 3 (the 4th, orange)** so the common regions keep the earlier, more-frequent colours (red 0 > blue 1 > green 2) and the scattered region is the rare orange. `countComponents` flags a group as disjoint when its cells form >1 orthogonal component; `colourGraph` takes an optional `pinned[]` (fixed colour per node, rejects mutually-clashing pins, backtracks only the free nodes). Degrade order: pinned grouped → unpinned grouped → ungrouped geometry. (Pinning the scattered node to 3 forces all its neighbours off 3, so the rest must be 3-colourable with {0,1,2} — held for `2xjf6aw4m2`; if it ever doesn't, it falls to unpinned automatically.)
 - ❌ **Dead end — `fixCellGrid`** (the v2.71–v2.80 clipping function): tried to clip cell-grid segments at region boundaries. Removed v2.83. The "white lines in black cells" it chased were actually the cage-box strokes (fixed v2.81) + sub-pixel anti-aliasing (fixed v2.82). v2.67 had neither `fixCellGrid` nor the white-lines problem — confirmed baseline.
 
+## Circle markers — a bare BULB vs a real circle, and semicircle MASKS (2026-07-30)
+
+Found while designing the counting-circles validator (see
+[`COUNTING_CIRCLES_DESIGN.md`](COUNTING_CIRCLES_DESIGN.md)); all measured in the live DOM and
+confirmed against the puzzles' own published solutions.
+
+- ✅ **A bare thermo/arrow bulb is `stroke:none`; a circle a setter means as a *circle clue* carries
+  a stroke.** `y6ivkzi761` draws 6 thermo bulbs as `#underlay` 0.85cs `#CFCFCF` **stroke:none** and
+  15 counting circles as `#overlay` 0.93cs `#FFFFFF` stroke `#000000`. `dGL3DgJgJd` draws its 4
+  bulbs the same bare way and then puts a **second, black-stroked** circle on 4 of those same cells
+  — which is exactly how a setter says *"this bulb counts too"* (its rules say so out loud). So
+  "is a bulb" alone must never exclude a marker: exclude only a bulb that is **unstroked AND has no
+  other circle marker on its cell**. Scoring both readings against the solutions settles it — all-21
+  on `y6ivkzi761` is invalid, the 15 stroked ones give 1:1 2:2 3:3 4:4 5:5.
+- ❌ **Do NOT use "is it stroked" as a general filter for circle clues.** `gfr7xipywo`'s genuine grey
+  odd-circles are `stroke:none`, so a stroke-gated reader returns **zero** there. Fine as
+  under-detection, but a puzzle mixing stroked and unstroked clue circles would yield a wrong
+  *subset*. Stroke is a bulb-subtraction signal only.
+- ✅ **A SEMICIRCLE is a full circle plus a half-cell white masking rect.** `j27rj7frco` "Half
+  Circles" renders 56 round `#underlay` rects and **40** `w0.50 h1.00` white `stroke:none` rects laid
+  over half of some of them. Any reader sees 56 circles where the puzzle shows 16 full + 40 halves.
+  Same masking trick as `3y38nrs34s`'s white text-background discs — **a white rect over a marker is
+  a mask, and it changes what the marker MEANS.**
+- ✅ **Decorative round art can be cell-centred and still enormous.** `miv6k9rwi0` "Bubbles!" has
+  2.50cs and 2.82cs bubble rings that pass the cell-centred test; only
+  `getCellCenteredCircles`' 0.55–1.05cs size gate rejects them. Its 6 rotated oblong "shine"
+  highlights are rejected by the near-square + `rx ≈ w/2` gates. **Don't loosen any of the three
+  gates** — each one is the sole rejecter of something real.
+- ⚠️ **`cp.thermos` generic-line-store trap, confirmed on a third puzzle.** `gfr7xipywo` "Mods, Quads
+  & Odds" has **no thermometers at all** yet reports `cp.thermos.length === 10` — those are its
+  turquoise *same-difference* lines. Same trap as `vd0mn9xqjw`'s green whispers; the DOM outranks
+  `cp.thermos` (v3.169) for good reason.
+
 ## Region / shaded-region geometry
 
 - ✅ **`path.cage-extraregion` only ever means a *checked* region (digit-uniqueness enforced), never cosmetic shading.** Verified via `window.convertedPuzzle.cages`: those paths come from cages with `style:"extraregion", unique:true, sum:45` (a real 1-9 no-repeat constraint). The cage `style` tally on a normal puzzle is `region` (the 9 boxes), `rowcol` (rows+cols), and `extraregion`. Purely decorative grey shading lives in a **separate `cosmetic` array** and renders through a different path — it does NOT get the `cage-extraregion` class. So scoping Easy Shade to `path.cage-extraregion` is safe: it never colours non-constraint decoration. (`window.convertedPuzzle` is the handy decoded-puzzle global; the `/api/puzzle/<id>` response is `fpuz…` = LZString-compressed f-puzzles, not directly readable.)

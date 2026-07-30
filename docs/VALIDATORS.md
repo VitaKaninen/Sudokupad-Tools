@@ -6,6 +6,11 @@ file. Same role: current state + architecture. Hard-won do/don't knowledge stays
 `constraintValidators()` is the authoritative extension checklist — update it and this file
 together.*
 
+*Designed but NOT built: **counting circles** — see
+[`COUNTING_CIRCLES_DESIGN.md`](COUNTING_CIRCLES_DESIGN.md) for the cue (catalog-measured: 60 fires /
+6,260), the five guards, the bulb-vs-circle geometry rule and the subset-sum algorithm. Read it
+before starting that validator; don't re-derive it.*
+
 *Verification tooling: `node tools/validator_harness.mjs` (pure-logic regression cases extracted
 from the live userscript — run green before committing validator changes) and `python
 tools/cue_recall.py` (catalog-wide cue recall + clause blindness — run on every cue change; keep
