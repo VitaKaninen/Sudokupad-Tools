@@ -348,7 +348,25 @@ way so it stays low-maintenance.
   **Model-only regions (v3.49 — Windoku):** an extra region can have NEITHER a `cage-extraregion`
   path NOR a grey `#underlay` rect — only the model cage + (sometimes) a dashed `cage-killer`
   outline (`5krkgmjq7q` Windoku: 4 sum-less unique cages drawn as dashed killer boxes, 0 underlay
-  rects). `getModelShadedRegionMap` (cache `_modelShadedCache`, keyed by URL, final once
+  rects).
+  **A `hidden` cage is NOT a region this path may paint (v3.173 — the Sudoku-X diagonal bug).**
+  `getModelShadedRegionMap` INVENTS the shading (nothing on screen was shaded), so it is the one place
+  that must ask whether the author presented a region at all — and it inherited none of the v3.21/v3.22
+  qualification rules when v3.49 added it for the Windoku. **A Sudoku-X diagonal is declared exactly
+  like a Windoku window**: a 9-cell sum-less `unique:true` cage. The only difference is `hidden:true` —
+  the author telling SudokuPad to draw no outline. So Easy Shade painted both main diagonals as big
+  stripes on `yffxa7cuz1` "SIGMA"tized and `329yqbkq53` "Schubladen" (each carries two
+  `{unique:true, hidden:true}` diagonal cages, drawn only as a thin cosmetic line). `modelCageIsHidden`
+  now drops them. Measured: those two render **0** `#cages path`, while the Windoku renders **4**
+  `path.cage-killer` and its cages carry no `hidden` flag → the two diagonal puzzles go 2 regions → 0,
+  the Windoku stays 4.
+  **The filter is on the INVENTOR, not the reader:** `readModelExtraRegions` is ALSO the *grouping*
+  source for the grey-rect path, where a hidden cage is entirely legitimate — "We Live Here"
+  `zax289niwv` shades four hidden sum-less cages as grey cells, and the shading it can see is its own
+  proof of intent (verified unchanged: 36 shaded cells, all 4 regions still resolve). The old guard that
+  used to stop diagonals — v3.21/v3.22's "EVERY cell must carry a shade rect", which a diagonal fails
+  because it is barely shaded — exists only in `computeDomShadedRegionMap`; this is that gap closed.
+  `getModelShadedRegionMap` (cache `_modelShadedCache`, keyed by URL, final once
   `currentPuzzle` is set) reads `readModelExtraRegions`, 4-colours via `colourShadedRegions`,
   returns `{ 'r,c': idx }`; `puzzleHasShadedRegions` now returns true when it is non-null too.
   `drawRegionSplitBorders` gained a **model-shade pass** (after the clone pass): when

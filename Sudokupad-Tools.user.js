@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.172.0
+// @version      3.173.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.172.0';
+  var SCRIPT_VERSION = '3.173.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -2816,11 +2816,50 @@
   // Cached per puzzle once the model is readable (null before that → a later paint,
   // e.g. getModelRegionMap's async repaint, retries). This drives drawRegionSplitBorders'
   // model-shading pass; the grey-rect path (getDomShadedRegionMap) is unaffected.
+  //
+  // A `hidden` CAGE IS NOT A REGION WE MAY PAINT (v3.173). This path INVENTS the
+  // shading — nothing on screen was shaded — so it is the one place that must ask
+  // whether the author presented a region at all. `hidden:true` is the author telling
+  // SudokuPad to draw no outline, and it is exactly how a SUDOKU-X DIAGONAL is
+  // declared: `yffxa7cuz1` "SIGMA"tized and `329yqbkq53` "Schubladen" each carry two
+  // 9-cell `{unique:true, hidden:true}` cages for the main diagonals, drawn only as a
+  // thin cosmetic line, and Easy Shade was painting both as big diagonal stripes.
+  // (Measured: those puzzles render 0 `#cages path` and 0 `#underlay rect`; the
+  // Windoku renders 4 `path.cage-killer` and its cages carry no `hidden` flag — so the
+  // flag separates them exactly.)
+  //
+  // The v3.21/v3.22 rule that used to stop this — "EVERY cell of the region must
+  // carry a shade rect", which a diagonal fails because it is barely shaded — lives in
+  // computeDomShadedRegionMap only. v3.49 added this model-only path for the Windoku
+  // and inherited none of those guards; this is that gap closed.
+  //
+  // Deliberately NOT filtered in readModelExtraRegions: that fn is ALSO the grouping
+  // source for the grey-rect path, where a hidden cage is perfectly legitimate — "We
+  // Live Here" `zax289niwv` shades four hidden sum-less cages as grey cells, and the
+  // shading it can see is its own proof of intent. Filter the inventor, not the reader.
   var _modelShadedCache = { key: null, map: null };
+  function modelCageIsHidden(cells) {
+    try {
+      var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+        ? Framework.app.puzzle.currentPuzzle : null;
+      if (!cp || !Array.isArray(cp.cages)) return false;
+      var want = cells.map(function (rc) { return 'r' + (rc[0] + 1) + 'c' + (rc[1] + 1); }).join(',');
+      for (var i = 0; i < cp.cages.length; i++) {
+        var c = cp.cages[i];
+        if (!c || c.unique !== true) continue;
+        if (String(c.cells || '').replace(/\s+/g, '').toLowerCase() === want) return c.hidden === true;
+      }
+    } catch (e) {}
+    return false;
+  }
   function getModelShadedRegionMap() {
     var key = modelRegionCacheKey();
     if (_modelShadedCache.key === key) return _modelShadedCache.map;
     var regions = readModelExtraRegions();
+    if (regions) {
+      regions = regions.filter(function (cells) { return !modelCageIsHidden(cells); });
+      if (!regions.length) regions = null;
+    }
     var map = null;
     if (regions && regions.length) {
       var colors = colourShadedRegions(regions);
