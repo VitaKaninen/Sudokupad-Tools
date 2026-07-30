@@ -91,6 +91,8 @@ const NAMES = [
   'lockoutOutside', 'lockoutSegmentSupport',
   // zipper stroke-joining + fold centre
   'mergeLineStrokes', 'lineClueChains', 'zipperChains', 'zipperFoldCenter',
+  // Roman numerals on a cell border (the XV validator's sum target)
+  'ROMAN_UNITS', 'romanString', 'romanValue',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -854,6 +856,73 @@ checkFalse('ten line: 1 cell over 1-6 is impossible too', F.tenLinePartitionable
           diffsOf(false), [1]);
   }
 }
+// ── Roman numerals on a cell border (v3.171) ────────────────────────────────
+// The XV validator reads the border numeral's own VALUE as the sum target, so the
+// parser is the whole safety boundary: it must accept every numeral real puzzles
+// draw and reject the look-alikes a decorative letter run produces.
+{
+  // The numerals the catalog's XV-family puzzles actually draw, with the target
+  // each puzzle's rules state for it.
+  check('roman V = 5 (rjl0oqocet "by a V ... sum to 5")', F.romanValue('V'), 5);
+  check('roman X = 10 (rjl0oqocet "by an X ... sum to 10")', F.romanValue('X'), 10);
+  check('roman VI = 6 (ogcall10hl/jfqxrndls1 "an XI sum to 11 ... a VI sum to 6")', F.romanValue('VI'), 6);
+  check('roman VII = 7 (t12fc7v8bl/jyzu1d9w9q "a VII sum to 7")', F.romanValue('VII'), 7);
+  check('roman VIII = 8 (ed0mko9d0b/mlw8npbcnr "a VIII sum to 8")', F.romanValue('VIII'), 8);
+  check('roman XI = 11 (ogcall10hl "an XI sum to 11")', F.romanValue('XI'), 11);
+  check('roman XII = 12 (t12fc7v8bl "an XII sum to 12")', F.romanValue('XII'), 12);
+  check('roman XIII = 13 (ed0mko9d0b "an XIII sum to 13")', F.romanValue('XIII'), 13);
+  check('roman XV = 15 (rjl0oqocet "by an XV must sum to 15")', F.romanValue('XV'), 15);
+  check('roman IX = 9 (subtractive form)', F.romanValue('IX'), 9);
+  check('roman IV = 4 (subtractive form)', F.romanValue('IV'), 4);
+
+  // NON-CANONICAL look-alikes must all score 0 — this is what stops a run of
+  // decorative tick marks being read as a sum. "XVX" and "VXX" appear as TITLE
+  // text in the catalog (`philip-newman/20240726-xvx`, `NmMBndq3mM`), which is
+  // exactly the shape that must never parse.
+  check('roman IIII rejected (non-canonical)', F.romanValue('IIII'), 0);
+  check('roman VV rejected', F.romanValue('VV'), 0);
+  check('roman IIX rejected', F.romanValue('IIX'), 0);
+  check('roman XVX rejected (a title, philip-newman/20240726-xvx)', F.romanValue('XVX'), 0);
+  check('roman VXX rejected (a title, NmMBndq3mM)', F.romanValue('VXX'), 0);
+  check('roman XXV is canonical 25', F.romanValue('XXV'), 25);
+  check('roman XXXX rejected', F.romanValue('XXXX'), 0);
+  check('roman empty rejected', F.romanValue(''), 0);
+  // Letters outside {I,V,X} never parse: L/C/D/M denote totals no digit pair can
+  // reach, and they appear as ordinary cosmetic labels ("C:"/"E:" outside clues).
+  check('roman L rejected (not in the I/V/X set)', F.romanValue('L'), 0);
+  check('roman C rejected', F.romanValue('C'), 0);
+  check('roman XL rejected', F.romanValue('XL'), 0);
+  check('non-roman O rejected (Counting-Neighbours X/O markers)', F.romanValue('O'), 0);
+
+  // round-trip: romanString is the canonicality oracle, so pin its range ends
+  check('romanString 1', F.romanString(1), 'I');
+  check('romanString 39 (max over I/V/X)', F.romanString(39), 'XXXIX');
+  check('romanString 40 out of range', F.romanString(40), '');
+  check('romanString 0 out of range', F.romanString(0), '');
+  // Every value 1..39 must survive the value → string → value round trip, or the
+  // parser would reject a numeral a setter could legitimately draw.
+  {
+    let bad = [];
+    for (let n = 1; n <= 39; n++) if (F.romanValue(F.romanString(n)) !== n) bad.push(n);
+    check('romanValue round-trips every 1..39', bad, []);
+  }
+  // The two-cell sum reachability the validator uses for its structural test: over
+  // 1-9 with DISTINCT digits (the cells are orthogonally adjacent) only 3..17 are
+  // reachable, so I/II and XVIII+ are impossible as drawn.
+  {
+    const reachable = (t) => {
+      for (let i = 1; i <= 9; i++) for (let j = i + 1; j <= 9; j++) if (i + j === t) return true;
+      return false;
+    };
+    check('sum target 1 (I) unreachable over 1-9', reachable(1), false);
+    check('sum target 2 (II) unreachable — needs 1+1', reachable(2), false);
+    check('sum target 3 (III) reachable 1+2', reachable(3), true);
+    check('sum target 10 (X) reachable', reachable(10), true);
+    check('sum target 17 (XVII) reachable 8+9', reachable(17), true);
+    check('sum target 18 (XVIII) unreachable — needs 9+9', reachable(18), false);
+  }
+}
+
 // ── thermo arm length (v3.157) ──────────────────────────────────────────────
 // A STRICT thermometer rises by >=1 every cell, so an arm longer than the digit
 // set can never be filled — that clue is impossible as read and gets dropped +

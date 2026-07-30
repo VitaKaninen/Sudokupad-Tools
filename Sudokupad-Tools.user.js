@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.170.0
+// @version      3.171.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.170.0';
+  var SCRIPT_VERSION = '3.171.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7509,20 +7509,64 @@
 
   // ── XV validator ──────────────────────────────────────────────────────────
   // XV clues sit on a cell border like a Kropki dot, but the constraint is a SUM:
-  // a "V" means the two cells sum to 5, an "X" means they sum to 10. Structurally
-  // identical to the Kropki validator (arc consistency to a fixpoint) — only the
-  // partner rule differs. Independent of Kropki (own collector, own compute) so the
-  // two toggle separately. NOTE: this validates only the POSITIVE clues that are
-  // drawn; it makes no use of a "negative constraint" (all Xs/Vs given) — an absent
-  // X/V is never treated as forbidding a 5/10 sum.
+  // the border's ROMAN NUMERAL is the total — "V" → 5, "X" → 10, and (v3.171) any
+  // other numeral means its own value: "VI" → 6, "XI" → 11, "XII" → 12, "XIII" → 13,
+  // "XV" → 15. Structurally identical to the Kropki validator (arc consistency to a
+  // fixpoint) — only the partner rule differs. Independent of Kropki (own collector,
+  // own compute) so the two toggle separately. NOTE: this validates only the POSITIVE
+  // clues that are drawn; it makes no use of a "negative constraint" (all clues
+  // given) — an absent numeral is never treated as forbidding that sum.
+  //
+  // WHY THE NUMERAL'S OWN VALUE IS THE TARGET, with no rules cue: the catalog's
+  // whole population of puzzles that DRAW a multi-character I/V/X numeral states
+  // exactly that mapping, in these words — "Digits on either side of an XIII sum to
+  // 13" (`ed0mko9d0b`), "…an XI sum to 11" (`ogcall10hl` / `jfqxrndls1`), "…an XII
+  // sum to 12" (`t12fc7v8bl` / `jyzu1d9w9q`), "…a VIII must sum to 8" (`mlw8npbcnr`),
+  // "…by an XV must sum to 15" (`rjl0oqocet`). The remaining catalog hits on a 2+
+  // character numeral are TITLES ONLY — episode numbers ("Czech Outsider III",
+  // "Corner|Edge Sudoku III", "What Number Am I Thinking Of? (XVI)") and titles
+  // spelling out the clue set ("XVVX", "VXX - XVX - XXV") — and a title is never
+  // drawn on a cell border, so this DOM-geometry reader cannot see them. Hence no
+  // cue gate: the drawing IS the declaration.
+  var ROMAN_UNITS = [[10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
+  // Render 1..39 as a canonical Roman numeral over {I,V,X}. '' outside that range.
+  function romanString(n) {
+    if (!(n >= 1 && n <= 39)) return '';
+    var out = '';
+    ROMAN_UNITS.forEach(function (p) { while (n >= p[0]) { out += p[1]; n -= p[0]; } });
+    return out;
+  }
+  // Value of a CANONICAL Roman numeral over {I,V,X}; 0 for anything else. The
+  // canonicality test is a round-trip through romanString, which rejects the
+  // look-alikes a decorative letter run produces — "IIII", "VV", "XVX", "IIX",
+  // "XXXX" — so only a real number gets through. Deliberately restricted to I/V/X:
+  // L/C/D/M all denote totals no pair of digits can reach, and those letters DO
+  // appear as ordinary cosmetic labels (region names, "C:"/"E:" outside clues).
+  function romanValue(s) {
+    if (!/^[IVX]+$/.test(s)) return 0;
+    var vals = { I: 1, V: 5, X: 10 }, n = 0;
+    for (var i = 0; i < s.length; i++) {
+      var v = vals[s.charAt(i)], nx = vals[s.charAt(i + 1)] || 0;
+      n += (nx > v) ? -v : v;
+    }
+    return romanString(n) === s ? n : 0;
+  }
 
   // Find XV clues in the DOM (works for native SCL/fpuz renders AND cosmetic ones):
-  // both draw the clue as an #overlay/#underlay <text> of exactly "X" or "V"
+  // both draw the clue as an #overlay/#underlay <text> holding a Roman numeral
   // centred on a cell border (native XV is a BARE letter, no disc; cosmetic XV is a
   // labeled Kropki-style circle whose letter text also lives in #overlay). We read
   // the letter's geometric centre (getBBox — robust to text-anchor/baseline) and
   // derive the two bordered cells with the exact geometry collectKropkiDots uses.
-  // Returns [{ type:'X'|'V', a:'col,row', b:'col,row' }] (0-indexed cell keys).
+  //
+  // THE BORDER TEST IS THE WHOLE GUARD AGAINST CORNER CLUES, and it must stay
+  // (`rfijdcynhv` "Cross Sums", clover: an X at the CORNER of four cells means the
+  // two diagonal PAIRS have equal sums — nothing to do with a 10 sum). Its X sits
+  // where both axes are on a gridline, so gridDist(cy) ≈ 0 rather than ≈ half a
+  // cell, and both onVert and onHorz reject it. Verified still 0 clues detected
+  // there after the v3.171 numeral widening.
+  //
+  // Returns [{ type:'XIII'…, target:13, a:'col,row', b:'col,row' }] (0-indexed).
   function collectXVDots() {
     var svg = document.getElementById('svgrenderer');
     var cs = getGridCellSize();
@@ -7534,7 +7578,14 @@
     svg.querySelectorAll('#overlay text, #underlay text').forEach(function (t) {
       if (t.getAttribute('data-spdr-kropki-label') != null) return;   // our own injected label
       var s = (t.textContent || '').trim().toUpperCase();
-      if (s !== 'X' && s !== 'V') return;
+      var target = romanValue(s);
+      if (!target) return;
+      // SINGLE letters: only the two conventional ones. A lone "I" is far more
+      // likely a decorative tick than a sum-1 clue (no two distinct digits make 1
+      // anyway), whereas X and V are the established XV convention. Numerals of 2+
+      // characters are unambiguous enough to accept on sight — nothing else in the
+      // catalog draws one on a cell border.
+      if (s.length === 1 && s !== 'X' && s !== 'V') return;
       var bb; try { bb = t.getBBox(); } catch (e) { return; }
       if (!bb || bb.width === 0 || bb.height === 0) return;            // not rendered (e.g. under fog)
       var cx = bb.x + bb.width / 2, cy = bb.y + bb.height / 2;
@@ -7556,23 +7607,23 @@
       var key = a + '|' + b + '|' + s;
       if (seen[key]) return;
       seen[key] = 1;
-      out.push({ type: s, a: a, b: b });
+      out.push({ type: s, target: target, a: a, b: b });
     });
     return out;
   }
 
   // Same arc-consistency-to-a-fixpoint machinery as computeKropkiRemovals, but the
   // partner test is a SUM: candidate d in a cell on an XV clue survives only if the
-  // neighbour can currently hold e with d+e = 5 (V) or 10 (X). The two cells of any
-  // XV clue are orthogonally adjacent, so they always share a row or column → they
-  // can never be equal; a self-partner (d == target−d, i.e. d=2.5 for V, d=5 for X)
-  // is therefore impossible and excluded (mirrors black Kropki dropping 2d==d).
+  // neighbour can currently hold e with d+e = the clue's numeral (5 for V, 10 for X,
+  // 13 for XIII, …). The two cells of any XV clue are orthogonally adjacent, so they
+  // always share a row or column → they can never be equal; a self-partner
+  // (e == d, i.e. d = target/2) is therefore impossible and excluded (mirrors black
+  // Kropki dropping 2d == d).
   function computeXVRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };   // letters / empty digit set → sums undefined
     var uni = st.uni;
-    function partners(type, d) {
-      var target = type === 'X' ? 10 : 5;
+    function partners(target, d) {
       var e = target - d;
       if (e === d) return [];                // same-digit partner impossible (cells share a row/col)
       return uni[e] ? [e] : [];
@@ -7580,7 +7631,27 @@
 
     var dots = collectXVDots();
     if (unitFilter) dots = dots.filter(function (dot) { return unitFilter([dot.a, dot.b]); });
-    if (dots.length === 0) return { noXV: true };
+
+    // STRUCTURAL, i.e. MARK-INDEPENDENT (v3.157 contract): the clue's two cells are
+    // orthogonally adjacent, so they share a row or column and MUST differ. A target
+    // that no pair of DISTINCT digit-set digits can reach is therefore unsatisfiable
+    // however the grid is filled — over 1-9 that is everything outside 3..17. Puzzles
+    // are peer-reviewed, so this means WE read the wrong clue type: drop the clue
+    // (the marks are innocent), count it, and report it. Provably conservative — any
+    // legal fill exhibits such a pair, so a satisfiable clue is never flagged.
+    var reach = {};
+    (function () {
+      var ds = Array.from(st.fullSet);
+      for (var i = 0; i < ds.length; i++)
+        for (var j = i + 1; j < ds.length; j++) reach[ds[i] + ds[j]] = 1;
+    })();
+    var invalid = 0;
+    dots = dots.filter(function (dot) {
+      if (reach[dot.target]) return true;
+      invalid++;
+      return false;
+    });
+    if (dots.length === 0) return { noXV: true, invalid: invalid };
 
     var values = st.values, centre = st.centre, fullSet = st.fullSet;
     function neighbourSet(key) {
@@ -7588,19 +7659,19 @@
       if (centre[key]) return centre[key];
       return fullSet;
     }
-    function hasPartner(type, d, otherSet) {
-      var ps = partners(type, d);
+    function hasPartner(target, d, otherSet) {
+      var ps = partners(target, d);
       for (var i = 0; i < ps.length; i++) if (otherSet.has(ps[i])) return true;
       return false;
     }
 
     var markedKeys = Object.keys(centre);
     var removals = [], seen = {};
-    function consider(self, other, type) {
+    function consider(self, other, target) {
       if (values[self] != null || !centre[self]) return;
       var os = neighbourSet(other);
       Array.from(centre[self]).forEach(function (d) {
-        if (!hasPartner(type, d, os)) {
+        if (!hasPartner(target, d, os)) {
           centre[self].delete(d);
           var k = self + '/' + d;
           if (!seen[k]) { seen[k] = 1; removals.push({ cellKey: self, digit: String(d) }); }
@@ -7611,8 +7682,8 @@
     while (changed && guard++ < 1000) {
       var before = removals.length;
       dots.forEach(function (dot) {
-        consider(dot.a, dot.b, dot.type);
-        consider(dot.b, dot.a, dot.type);
+        consider(dot.a, dot.b, dot.target);
+        consider(dot.b, dot.a, dot.target);
       });
       changed = removals.length > before;
     }
@@ -7620,7 +7691,7 @@
     var emptied = 0;
     markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
 
-    return { removals: removals, xvCount: dots.length, emptiedCells: emptied };
+    return { removals: removals, xvCount: dots.length, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Cage validator ────────────────────────────────────────────────────────
@@ -13095,7 +13166,25 @@
         classify: classifyWhisperLines, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
       { name: 'Dutch whisper', unitNoun: 'Dutch whisper line', menuLabel: 'Dutch whisper lines',
         classify: classifyDutchWhisperLines, compute: computeDutchWhisperRemovals, countKey: 'dutchCount', noneKey: 'noDutch' },
-      { name: 'XV', unitNoun: 'XV clue', menuLabel: 'XV clues',
+      // The label names the numerals this puzzle actually draws — "XV clues" is
+      // wrong on clover's XIII/VIII and XII/VII puzzles, and the genre name means
+      // nothing to a player looking at an XI. Sorted by value so the row reads
+      // "VI / XI clues", not "XI / VI clues". unitNoun stays STATIC (the toast
+      // machinery reads it as a plain string for every validator) but is worded to
+      // be true of X and V as well — both are Roman numerals.
+      { name: 'XV', unitNoun: 'Roman numeral clue',
+        menuLabel: function () {
+          var seen = {}, vals = [];
+          collectXVDots().forEach(function (d) {
+            if (!seen[d.type]) { seen[d.type] = 1; vals.push(d); }
+          });
+          if (!vals.length) return 'XV clues';
+          vals.sort(function (p, q) { return p.target - q.target; });
+          var names = vals.map(function (d) { return d.type; });
+          // A plain X/V/XV puzzle keeps the familiar genre name.
+          if (names.every(function (n) { return n === 'X' || n === 'V' || n === 'XV'; })) return 'XV clues';
+          return (names.length > 3 ? names.slice(0, 3).join(' / ') + ' …' : names.join(' / ')) + ' clues';
+        },
         detect: function () { return collectXVDots().length > 0; },
         compute: computeXVRemovals, countKey: 'xvCount', noneKey: 'noXV' },
       // Double arrows share this row: same equation, same engine (see

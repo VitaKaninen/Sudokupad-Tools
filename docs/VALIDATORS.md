@@ -17,7 +17,8 @@ UNREADABLE at 0).*
 v3.59; thermo v3.67; German whispers v3.69, layered detection v3.70; XV v3.72; sum arrows v3.73;
 renban + region-sum lines v3.75; parity + zipper v3.78; entropic lines v3.85; Dutch whisper +
 modular lines v3.93; double arrows v3.131; nabner v3.152; ten lines v3.153; same-difference lines
-v3.159; palindromes v3.164; lockout lines v3.167):** a floating **"Validate Constraints"** button (`buildValidateButton`,
+v3.159; palindromes v3.164; lockout lines v3.167; XV widened to any Roman numeral
+v3.171):** a floating **"Validate Constraints"** button (`buildValidateButton`,
 `#sp-validate-btn`, bottom-right cluster above the Auto-fill button at `bottom:120px right:12px`;
 hidden via `settings.showValidateButton`/the "Show Validate Constraints button" checkbox). Removes —
 never adds — centre candidates that no constraint can satisfy. **Modular by design:**
@@ -38,14 +39,41 @@ validator retroactively AND added to that checklist so the next validator inheri
 ({1,4,7}/{2,5,8}/{3,6,9}); **Dutch whisper lines (v3.93)** = the whisper engine
 (`computeWhisperLikeRemovals`) with threshold 4 instead of 5, cue-gated (no trusted colour, unlike
 German green). Both are near-clones of their sibling — proof the shared engines pay off. **XV
-validator (v3.72 — structurally a Kropki clone):** `collectXVDots` finds an `#overlay`/`#underlay`
-`<text>` of exactly "X" or "V" centred on a cell border (native XV is a bare letter, no disc;
-cosmetic XV is a labeled Kropki circle whose letter also lives in `#overlay`) — reads the letter's
-`getBBox` centre and derives the 2 cells with the **exact** geometry `collectKropkiDots` uses.
-`computeXVRemovals` reuses the Kropki arc-consistency-to-a-fixpoint machinery; only the partner rule
-differs — a candidate *d* survives iff the neighbour can hold *e* with `d+e = 5` (V) / `10` (X). The
-2 cells are orthogonally adjacent (always share a row/col) → a self-partner (`e==d`, i.e. d=5 on an
-X) is impossible and excluded. Positive clues only (no negative "all Xs/Vs given" constraint).
+validator (v3.72 — structurally a Kropki clone; ANY Roman numeral since v3.171):** `collectXVDots`
+finds an `#overlay`/`#underlay` `<text>` holding a **canonical Roman numeral** centred on a cell
+border (native XV is a bare letter, no disc; cosmetic XV is a labeled Kropki circle whose letter also
+lives in `#overlay`) — reads the letter's `getBBox` centre and derives the 2 cells with the **exact**
+geometry `collectKropkiDots` uses. `computeXVRemovals` reuses the Kropki
+arc-consistency-to-a-fixpoint machinery; only the partner rule differs — a candidate *d* survives iff
+the neighbour can hold *e* with `d+e = the numeral's own value`. The 2 cells are orthogonally
+adjacent (always share a row/col) → a self-partner (`e==d`, i.e. d=5 on an X) is impossible and
+excluded. Positive clues only (no negative "all clues given" constraint).
+
+**The numeral's value IS the target, and no rules cue gates it (v3.171).** `romanValue` /
+`romanString` / `ROMAN_UNITS` parse I/V/X only, and accept **canonical form only** — the value is
+re-rendered and compared, so "IIII", "VV", "IIX", "XVX", "VXX", "XXXX" all score 0. That matters
+because `XVX` and `VXX` are real catalog strings (`philip-newman/20240726-xvx`, `NmMBndq3mM`) — as
+*titles*. L/C/D/M are deliberately excluded: every total they denote is unreachable by a digit pair,
+and those letters do appear as ordinary cosmetic labels. **A single character is still only accepted
+as `X` or `V`** — a lone "I" is far likelier a decorative tick than a sum-1 clue (and 1 is
+unreachable anyway), while 2+ character numerals are unambiguous enough to take on sight.
+
+The no-cue decision is catalog-measured: **every** puzzle that DRAWS a multi-character I/V/X numeral
+states exactly the numeral=total mapping — "an XIII sum to 13" (`ed0mko9d0b`), "an XI sum to 11"
+(`ogcall10hl`, `jfqxrndls1`), "an XII sum to 12" (`t12fc7v8bl`, `jyzu1d9w9q`), "a VIII must sum to 8"
+(`mlw8npbcnr`), "an XV must sum to 15" (`rjl0oqocet`). Every *other* catalog hit on a 2+ character
+numeral is **title text only** — episode numbers ("Czech Outsider III", "Corner|Edge Sudoku III",
+"What Number Am I Thinking Of? (XVI)") or a title listing the clue set ("XVVX") — and a title is
+never drawn on a cell border, so this DOM-geometry reader cannot see one. The drawing IS the
+declaration.
+
+**THE BORDER TEST IS THE ONLY THING SEPARATING AN XV FROM A CORNER CLUE — never loosen it.**
+`rfijdcynhv` "Cross Sums" (clover) draws a bare **X at the corner of four cells**, meaning the two
+diagonal *pairs* have equal sums; nothing to do with 10. Its X's sit on a gridline in **both** axes,
+so `gridDist(cy) ≈ 0` instead of ≈ half a cell and both `onVert`/`onHorz` reject them. Measured after
+the v3.171 widening: 12 X texts read, **0 detected**, every one rejected by that test alone (and
+`ed0mko9d0b` reads 19 = 12 XIII + 7 VIII, `rjl0oqocet` reads 24 = 14 X + 5 V + 5 XV, lowercase
+included — the payload counts exactly).
 **Dropdown menu (v3.59 — replaces the old union-in-one-pass `validateConstraints`):** clicking the
 button opens a menu (`toggleValidateMenu`/`openValidateMenu`, `#sp-validate-menu`) listing **"Run
 all (loop until stable)"** + one item per enabled validator (`menuLabel`). `positionValidateMenu`
@@ -514,6 +542,7 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Arrow / double arrow** | target range `tc×min…tc×max` disjoint from line range | **new**; a 10-cell shaft can't sum under 10, one circle can't exceed 9 |
 | **Region sum** | no S in every segment's `n-smallest … n-largest` range | **new**; segments are one region → distinct digits |
 | **Same difference** | no difference `d` fills the line over the FULL digit set (`sameDiffLineSupport` with `st.fullSet` in every cell) | v3.159; the test is the validator's own engine run mark-free — e.g. a 3-cell closed loop of mutually-conflicting cells has no `d` at all |
+| **XV / Roman numeral** | the numeral's total is not the sum of any two **distinct** digit-set digits (over 1-9: anything outside 3…17) | **new** v3.171; the clue's two cells are orthogonally adjacent, so they share a row or column and MUST differ — a total needing a repeat (2 = 1+1, 18 = 9+9) or lying off the scale is unsatisfiable however the grid is filled. Mark-independent, and conservative because any legal fill exhibits such a pair. This is also what makes the widened numeral set safe: "II" or "XVIII" is dropped + reported, never propagated |
 | **Palindrome** | a fold pair (cell `i`, cell `L−1−i`) that `makeMustDiffer` forces to DIFFER | **new** v3.164; the pair must be EQUAL, so a shared row/column/region/uniqueness-cage makes the whole line unfillable. Mark-independent, and conservative because `makeMustDiffer` only asserts units the puzzle guarantees |
 | **Lockout** | no diamond pair survives `lockoutSegmentSupport` with the FULL digit set in every cell (`pairs === 0`) | **new** v3.167; the validator's own engine run mark-free, like same-difference. The widest outside region a gap-4 pair leaves over 1-9 is four digits (1/5 → {6,7,8,9}), so e.g. **five** mutually-conflicting interior cells can never be filled. Conservative by construction: any legal fill has a diamond pair, which the full-set run necessarily sees. NOT length-checked — digits may repeat, so a ten-cell interior with no internal conflicts is fine |
 

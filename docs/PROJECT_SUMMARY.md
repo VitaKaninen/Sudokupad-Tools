@@ -531,6 +531,13 @@ way so it stays low-maintenance.
   drawn may fail on an untouched grid and that report is wanted, but reasoning backwards from it to
   "the rules must mean something else here, so switch off" is the solver's job (the reverted v3.165
   `LINE_MORPH_RE` guard; see VALIDATORS.md).
+  **XV = any Roman numeral (v3.171): `romanValue` / `romanString` / `ROMAN_UNITS`** — the border
+  numeral's own value is the sum target (`VI`→6, `XI`→11, `XIII`→13, `XV`→15, not just X/V), parsed
+  **canonical-form-only** over I/V/X so decorative letter runs and the title strings `XVX`/`VXX` can
+  never read as a number. No rules cue: every catalog puzzle that *draws* a multi-character numeral
+  states that exact mapping, and the other hits are titles, which are never on a cell border. The
+  border test is the sole guard against corner clues (`rfijdcynhv` "Cross Sums" — X at a 4-cell
+  corner, 0 detected); a total no two distinct digits can make is the structural error.
   **Lockout lines (v3.167): `classifyLockoutLines` / `computeLockoutRemovals` /
   `lockoutSegmentSupport` / `lockoutOutside` / `lockoutMinGap`** — the between line's mirror, drawn
   diamond-to-diamond: the two diamonds differ by ≥4 (the gap is READ from a diamond/endpoint sentence,
@@ -969,6 +976,30 @@ bucket dump and, unlike it, **names the variants** (sandwich, renban, whisper, b
 rather than collapsing them all into `#arrows | path`. Two uses: **(a)** pull example puzzles for a
 given rule type when building/testing a validator or feature, and **(b)** count how many puzzles a
 broad change can reach.
+
+### Decoding ONE puzzle's payload offline — two traps that produce wrong conclusions
+Fetching `https://sudokupad.app/api/puzzle/<id>` and lz-decoding it is **not enough** to read a
+puzzle (see also the `lz-string` note in the global CLAUDE.md for the format prefixes):
+
+1. **The decoded text is SudokuPad's "zipped" SCL dialect, not JSON or even valid JS** — keys are
+   abbreviated (`ce`/`re`/`o`/`u`/`ct`/`wp` = cells/regions/overlays/underlays/center/wayPoints),
+   arrays carry **elision holes** (`[,,,]`), booleans are bare `t`/`f`, and colours use shorthand
+   `#F`/`#0` plus unquoted 6-hex (`c2:ffcc00`). `json5` and `eval` both choke. The real decoder is
+   the page's own `PuzzleZipper.unzip`, whose transform is a fixed regex chain + a reverse `propMap`;
+   its helpers are module-scoped, so to work offline you reimplement it and **verify by hashing your
+   output against the page's `PuzzleZipper.unzip` for the same ids** (done 2026-07-29, 7/7 identical).
+2. **`metadata` is frequently NOT in a `metadata` key — it is smuggled into `cages`** as entries
+   `{value: "rules: …"}`, `{value: "title: …"}`, `{value: "author: …"}`, `{value: "solution: …"}`.
+   Read `d.metadata` alone and a fully-documented puzzle looks like it has **no rules, title or
+   author at all** — which is exactly the false premise that nearly shipped a geometry-only
+   Difference-dots detector. Always merge both sources, and cross-check against
+   `Framework.app.puzzle.currentPuzzle.metadata` in the page (that object is what
+   `getPuzzleRulesBlob()` actually reads, so it is the authority).
+
+The **solution** rides along in that metadata far more often than expected, which makes a decisive
+offline test available: extract the clue markers, then score each candidate rule (difference / sum /
+max / product) against the solution. That is how the Difference-dots reading was confirmed at 100%
+and the three look-alike rules ruled out at 0–1 — do this before trusting a cue.
 
 ### Query surface — three files (never read into context)
 `corpus.json` is 68 MB and the log/review files are MB-scale; **always query via `python`,
