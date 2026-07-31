@@ -225,6 +225,14 @@ This is the rigorous distinct-cell-assignment test, NOT just "the partner digits
 so it never over-eliminates. **Iterated to a fixpoint** (a removal can kill a neighbour cell's only
 supporting combo). **Safety:** a cage that yields ZERO combinations (impossible total, or a digit
 set that doesn't match the puzzle) is **dropped**, never allowed to wipe out every candidate.
+**A visible cage total is NOT proof of a `sum` — and reading it would be unsafe.** SudokuPad draws
+a cosmetic underlay/overlay `text` anchored at a cage's top-left corner identically to a native
+cage total, so a `style:'killer'` cage can *look* like a killer cage while carrying no `sum` at
+all. `yiaonocy5d` ("...What?", a deliberate-troll 6x6) is the counter-example that says leave it
+alone: cage `r5c1-r5c4` has no `sum`, is labelled **16** by an underlay at `[4.25,0.25]`, and the
+puzzle's own `solution` puts **14** there — the rules list never mentions cage sums, so the label
+is a decoy. Inferring sums from cage-corner text would fire this validator on a false total and
+eliminate correct candidates. Only `cage.sum` / `cage.value` counts.
 **Little-killer validator (v3.57 — diagonal sums, duplicates allowed):**
 `computeLittleKillerRemovals` (independent of Kropki/cages; always-on — the per-validator enable
 settings were removed v3.104). A little killer sums a diagonal; digits **may repeat** along it
