@@ -637,8 +637,24 @@ is forced on **once** and the flag remembers that it happened — a later delibe
 Flags live in `validatorHilite.byName` as per-validator `{ set:Set("col,row,digit"), stale:bool }`,
 flattened into **two** lookups: `validatorHilite.keys` = every flag (what is **painted**, via
 `validatorHiliteHas`) and `validatorHilite.liveKeys` = the non-stale flags only (what other code may
-**reason from**, via `validatorHiliteRuledOut`). Three properties carry the design:
+**reason from**, via `validatorHiliteRuledOut`). Four properties carry the design:
 
+0. **ORANGE IS NOT RED (v3.181) — the rule that decides how a new reader should treat it.** Red is
+   SudokuPad's verdict about the board *as it stands*; orange is **our** verdict about a candidate
+   set a caller may be about to rebuild. So the test is what the function is asked to do, not how
+   invalid the mark is:
+   - **Asked to REMOVE what is wrong → orange counts as invalid, same as red.** Clear, Clear All,
+     `countVisibleConflicts`, and the reasoning readers below.
+   - **Asked to RE-DERIVE a cell's candidates → drop our verdicts for those cells first and let the
+     marks come back plain blue.** Only **Fill** does this today
+     (`validatorHiliteClearCells(selected)` in `fillSelectedCellsWithCandidates`, run *between* the
+     fill phase and the sweep). Without it Fill was self-defeating: it re-added a flagged digit and
+     its own sweep — which honours orange, stale flags included — deleted it again, so a digit a
+     validator had ever flagged could never be filled back in. What survives Fill's sweep is now
+     only SudokuPad's red conflicts. `validatorHiliteSnapshotFlags` / `…RestoreFlags` put the orange
+     back if the sweep aborts and the board is reverted, so "everything was reverted" stays true.
+   - **A ↻ auto-update re-flags a freshly filled cell on its next pass.** That is intended and is
+     the *only* thing allowed to re-orange a fill — see also the no-memory rule (2b).
 1. **An orange mark is invalid everywhere** — that's the whole claim, so every reader of "invalid"
    honours it: `readValidatorBoardState` drops a flagged digit exactly as it drops a red `.conflict`
    one, `fsScanValid` (Auto-fill) does the same, and the **Clear / Clear All buttons sweep orange

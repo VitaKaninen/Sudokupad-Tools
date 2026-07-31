@@ -514,7 +514,10 @@ way so it stays low-maintenance.
   *stale* (kept on screen, no longer trusted as input — `validatorHiliteRuledOut` vs
   `validatorHiliteHas`) — but only until that mark itself goes: **v3.179**
   `validatorHilitePruneRemoved` deletes a flag whose candidate has left the grid, so re-entering the
-  digit (by hand or via **Fill**) comes back plain instead of instantly re-orange. Highlight mode has **no run-all**; the bottom button is "Clear all
+  digit (by hand or via **Fill**) comes back plain instead of instantly re-orange, and **v3.181**
+  `validatorHiliteClearCells` makes **Fill** re-derive its cells — orange is dropped before Fill's
+  sweep, so the cell ends as a clean blue set and only red conflicts are removed (Clear / Clear All
+  still treat orange as invalid; see "ORANGE IS NOT RED" in VALIDATORS.md). Highlight mode has **no run-all**; the bottom button is "Clear all
   highlights" (`clearAllValidatorHighlights`). **v3.146:** a row click is a plain one-shot run and no
   control keeps an "on" look except the per-row **↻ auto-update toggle** (`validatorAuto`,
   `runAutoValidators` — re-runs that validator on every board edit, debounced + silent; disabled

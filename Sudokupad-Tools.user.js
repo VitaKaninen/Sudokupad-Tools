@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.180.0
+// @version      3.181.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.180.0';
+  var SCRIPT_VERSION = '3.181.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7336,6 +7336,15 @@
         else showRemoveInvalidToast('CRITICAL — unexpected change while filling, revert failed. Press Ctrl+Z until the puzzle looks right.', 'error');
         return;
       }
+      // FILL RE-DERIVES THESE CELLS, so the validators' verdicts about them are spent
+      // (v3.181). Drop the orange in the selected cells BEFORE the sweep — otherwise the
+      // sweep, which treats orange as invalid exactly like red, deletes the very
+      // candidates the fill just restored, and Fill could never bring a flagged digit
+      // back. What survives the sweep now is only SudokuPad's own red conflicts, so the
+      // cell ends up a clean blue candidate set. A ↻ auto-update will re-flag it on its
+      // next pass — that toggle is the one thing allowed to re-orange a fresh fill.
+      var flagSnap = validatorHiliteSnapshotFlags();
+      validatorHiliteClearCells(selected);
       // Now strip invalid pencilmarks in those same cells.
       var removeResult = await _removeInvalidPencilmarksMultiPass({ cellFilter: selected });
       var totalElapsed = formatDuration(performance.now() - t0);
@@ -7343,6 +7352,7 @@
         // Sweep failed AFTER a successful fill (which is its own committed undo
         // group) → revert EVERYTHING (sweep + fill) back to the pre-button state.
         var reverted = await revertToSnapshot(preSnap, 12);
+        validatorHiliteRestoreFlags(flagSnap);   // "everything" includes the orange we just dropped
         var t = removeResult.abortTarget;
         var where = t ? (t.type + ' ' + t.digit + ' in cell ' + fsCellLabel(cellKeyFromMarkXY(t.cellX, t.cellY))) : 'the puzzle';
         if (fillResult.wasLetterMode) dispatchClickEl(document.querySelector('[data-control="toggleletter"]'));
@@ -15136,6 +15146,51 @@
     validatorHiliteWatch();
     validatorHiliteRepaint();
     return true;
+  }
+  // ORANGE IS NOT RED (v3.181). A red mark is SudokuPad's own verdict about the board as
+  // it stands; an orange one is OUR verdict about a candidate set that a caller may be
+  // about to rebuild. So a function that RE-DERIVES a cell's candidates (Fill) drops our
+  // verdicts for those cells first and lets the marks come back plain blue — anything
+  // else means Fill can never restore a candidate a validator once flagged. Clear /
+  // Clear All keep treating orange as invalid: they are asked to remove what is wrong,
+  // not to rebuild anything.
+  //
+  // Takes a Set of "col,row". Returns whether anything was dropped. If a ↻ auto-update
+  // is on for a validator it will re-flag these on its next pass — which is exactly what
+  // that toggle is for, and the only way orange should come back on its own.
+  function validatorHiliteClearCells(cellKeys) {
+    if (validatorHilite.keys.size === 0 || !cellKeys || cellKeys.size === 0) return false;
+    var dropped = false;
+    Object.keys(validatorHilite.byName).forEach(function (n) {
+      var e = validatorHilite.byName[n], gone = [];
+      e.set.forEach(function (k) { if (cellKeys.has(k.slice(0, k.lastIndexOf(',')))) gone.push(k); });
+      if (!gone.length) return;
+      gone.forEach(function (k) { e.set.delete(k); });
+      dropped = true;
+      if (e.set.size === 0) delete validatorHilite.byName[n];
+    });
+    if (!dropped) return false;
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();
+    validatorHiliteRepaint();
+    if (!validatorHiliteAny() && document.getElementById('sp-validate-menu')) rebuildValidateMenu();
+    return true;
+  }
+  // Deep copy / restore of the whole flag store, so a caller that clears flags as part of
+  // a multi-step action can put them back when it reverts the board ("everything was
+  // reverted" has to include the orange).
+  function validatorHiliteSnapshotFlags() {
+    var out = Object.create(null);
+    Object.keys(validatorHilite.byName).forEach(function (n) {
+      out[n] = { set: new Set(validatorHilite.byName[n].set), stale: validatorHilite.byName[n].stale };
+    });
+    return out;
+  }
+  function validatorHiliteRestoreFlags(snap) {
+    validatorHilite.byName = snap;
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();
+    validatorHiliteRepaint();
   }
   // SPA navigation: flags are meaningless on a different puzzle. The board observer
   // normally catches the re-render, but it holds references to the OLD layer nodes if
