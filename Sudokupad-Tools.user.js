@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.184.0
+// @version      3.185.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.184.0';
+  var SCRIPT_VERSION = '3.185.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -9079,6 +9079,56 @@
       else unreadable++;
     });
     cagesShown += unreadable;
+
+    // ── ONE UNREADABLE CAGE INDICTS THE WHOLE PUZZLE (v3.184) ────────────────
+    // v3.183 mutes the individual zero-combination cages and keeps validating the
+    // rest — but a non-sum cage rule is a PUZZLE-WIDE rule, not a per-cage one. A
+    // "Knapp Daneben" (sums off by one), a Multiplication Cages, a Max Cage puzzle
+    // applies its variant to every cage it draws; the ones that happen to yield a
+    // legal distinct-sum combination are not honest killer cages, they are the ones
+    // whose variant total collides with a real sum. Validating those over-removes,
+    // silently — the one direction the contract forbids.
+    //
+    // MEASURED over the 682 solution-bearing puzzles with readable cages
+    // (`tools/cage_variants.py`, 2026-07-31):
+    //   • 99 of 598 puzzles (17%) contain at least one cage the solution refutes,
+    //     and in 43 of them EVERY cage is refuted — a whole-puzzle variant.
+    //   • Gating on "this puzzle has ≥1 arithmetically impossible cage" catches 70
+    //     of those 99 (71% recall) at 83% precision.
+    // The 17% of gated puzzles that were honest lose their cage validator. That is
+    // the right side of the trade: a validator that declines to run costs a
+    // convenience, a validator that removes the correct digit costs the solve.
+    //
+    // ONLY WHERE THE SOLUTION CANNOT ANSWER. With a trustworthy solution the v3.182
+    // per-cage mute is strictly better — surgical, and measured on exactly these
+    // puzzles — so the gate defers to it. 46% of the catalog's cage puzzles publish
+    // no solution, and that is the entire population this exists for.
+    //
+    // The census is over the WHOLE puzzle, never the selection: "are these corner
+    // numbers sums?" is not a question a hand-selection changes the answer to.
+    var wholePuzzleUnreadable = unreadable;
+    if (unitFilter) {
+      wholePuzzleUnreadable = 0;
+      getKillerCages().forEach(function (cage) {
+        if (cageCombinations(digitList, cage.keys.length, cage.sum).length === 0)
+          wholePuzzleUnreadable++;
+      });
+    }
+    //
+    // Reported through `note`, not silently: this one IS safe to say out loud,
+    // because it restates arithmetic the player can do themselves (a 14-cell cage
+    // marked 29 is visibly not a sum of different digits). It gives away nothing
+    // about which cage, or about any cage that looks ordinary — unlike v3.157's
+    // "⛔ impossible", which pointed straight at the joke.
+    if (wholePuzzleUnreadable > 0 && !getPuzzleSolution()) {
+      return {
+        removals: [], cageCount: cagesShown + active.length,
+        note: 'No cage was checked: ' + wholePuzzleUnreadable + ' of this puzzle\'s cages '
+            + (wholePuzzleUnreadable === 1 ? 'has a corner number that cannot be' : 'have corner numbers that cannot be')
+            + ' a sum of different digits, so the corner numbers here are probably not sums.',
+      };
+    }
+
     if (active.length === 0)
       return cagesShown ? { removals: [], cageCount: cagesShown } : { noCages: true };
 

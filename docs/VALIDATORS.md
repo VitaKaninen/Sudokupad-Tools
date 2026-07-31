@@ -299,6 +299,69 @@ solution-bearing puzzles with readable cages it caught 43 variants, missed 81, a
 alarms (60% precision, 35% recall); greying out the validator on 29 honest killer puzzles costs
 more than the gap it closes. Revisit only with a much sharper cue.
 
+### Can we just IDENTIFY the cage rule? Measured, and no (v3.184)
+
+The obvious next step is to stop guessing and *classify* the corner number — product, difference,
+repeats-allowed sum, digit list, partial list — then validate under whichever reading is right.
+`tools/cage_variants.py` measures whether that is possible, using each puzzle's own solution as
+ground truth over the 682 solution-bearing puzzles with readable cages (6,413 cages with a numeric
+corner; 352 more carry `<=10`, `x` or a label and are never validated anyway).
+
+**What the corner really means** — 82.1% distinct sum, 10.4% *none of the six readings*, 3.2%
+partial list, 1.7% digit list, 1.0% difference, 0.9% product, 0.8% repeats-allowed sum.
+
+**Why classification fails.** Take the 602 cages that yield zero distinct-sum combinations — the
+ones v3.183 goes silent on — and ask which *other* readings are arithmetically possible:
+
+| alternatives still possible | cages | |
+|---|---|---|
+| 0 | 63 | 10.5% |
+| **1** | **230** | **38.2%** |
+| 2+ | 309 | 51.3% |
+
+So only 38% narrow to a single candidate reading at all — **and when they do, the solution confirms
+that reading just 58.3% of the time (134 of 230)**. Requiring a rules cue as well changes nothing:
+it fires on 24 cages and is still 58.3% correct. A classifier built on this would validate under the
+wrong rule roughly two times in five, i.e. over-remove — the one direction the contract forbids.
+The 10.4% "no reading explains it" bucket says why the ceiling is so low: the variant space is open
+-ended (`0zhq0og7uz` "Outbreak!!" and `1pdzuv445k` "Zombie Drome" make a cell's *value* differ from
+its digit; `ay6r6mmu5w` "Close Enough" and `uqvv06s42j` "Knapp Daneban Killer" are off-by-one sums;
+`clover/20250731-max-cage-sudoku` totals only the largest). No fixed list of readings closes it.
+
+### The gate that DOES work: one unreadable cage indicts the whole puzzle (v3.184)
+
+The same measurement found a bigger problem than the silent cages, and a fix for it.
+
+**The risk today:** of the 5,811 cages that *look* like ordinary killer cages (a distinct-sum
+combination exists, so the validator runs), **556 — 9.6% — are refuted by the puzzle's own
+solution.** By puzzle: **99 of 598 (17%) contain at least one such cage, and in 43 of them EVERY
+cage is refuted.** That last figure is the point — **a non-sum cage rule is a puzzle-wide rule.**
+A Knapp-Daneben / Multiplication-Cages / Max-Cage puzzle applies its variant to every cage it
+draws; the ones that still yield a legal distinct-sum combination are not honest killer cages, they
+are the ones whose variant total happens to collide with a real sum. v3.183 mutes the impossible
+ones and keeps eliminating on their neighbours.
+
+**The gate:** if the puzzle has ≥1 arithmetically impossible cage, don't validate *any* cage.
+Measured: **catches 70 of the 99 (71% recall) at 83% precision** — 14 honest puzzles lose their cage
+validator. That is the right side of the trade, and the same policy as everywhere else in this file:
+a validator that declines to run costs a convenience; one that removes the correct digit costs the
+solve.
+
+**Scoped to puzzles with no published solution**, because where a solution exists the v3.182
+per-cage mute is strictly better — surgical, and measured on exactly this population. **46% of the
+catalog's 1,258 cage puzzles publish no solution** (577), and they are the entire reason this
+exists.
+
+The census is over the whole puzzle, never the selection: "are these corner numbers sums?" is not a
+question a hand-selection can change the answer to. The outcome is reported through the standard
+`note` channel rather than silently — this one is safe to say out loud, because it restates
+arithmetic the player can do themselves (a 14-cell cage marked 29 is visibly not a sum of different
+digits) and names no cage. Contrast v3.157's "⛔ impossible", which pointed straight at the joke.
+
+**Still open:** the 29 puzzles with no arithmetic tip-off at all (`0zhq0og7uz`, `ay6r6mmu5w`,
+`5kx4d90kcm` "Sigma or Pi") and no solution. Nothing available to us distinguishes those from an
+honest killer puzzle.
+
 **Relationship to v3.157 (fail loudly).** A *structurally* impossible clue is still reported via
 `invalidClueMsg` — that is a detection bug we want to hear about. A *solution-refuted* clue is
 silent. The distinction: structural impossibility is mark- and solution-independent and always
