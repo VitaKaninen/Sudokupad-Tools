@@ -114,9 +114,47 @@ weighing any future "but it would over-remove" objection.
 
 | state | when | behaviour |
 |---|---|---|
-| **live** | **the default, and the overwhelming majority.** A clue of this shape is drawn and nothing in the *rules text* says our rule isn't the puzzle's rule | normal row, normal run, full loudness |
-| **grey** | (a) we cannot determine **which** drawn clue this validator applies to, or where it is; (b) the rules **declare** that clues lie; or (c) the rules hand the clue's type to the solver **and we can check at least one of the offered readings** | listed, disabled, hover explains why; **rescued by "Validate selection only" — and that run is real, and may fail**; excluded from run-all and from ↻ auto-update; eyeball stays live |
-| **drop** | the rules state a rule we **cannot check at all** — sums rounded to the nearest multiple of 5, a cell's value differing from its digit | removed from the menu |
+| **live** | **the default, and by a wide margin** — everything not positively identified below | normal row, normal run, full loudness |
+| **grey** | (a) we cannot determine **which** drawn clue this applies to, or where it is; (b) the rules **declare** that clues lie *and* the probe refutes; (c) two or more readings **we support** could apply and the puzzle does not say which clue is which | listed, disabled, hover explains why; **rescued by "Validate selection only" — and that run is real, and may fail**; excluded from run-all and ↻ auto-update; eyeball stays live |
+| **drop** | we **positively recognise** a variant we do not implement — from the rules text or from pure arithmetic, **never from the solution** | removed from the menu |
+
+### The bar for grey and drop: positive identification
+
+**We may only demote a row for a reason we can name.** This is the governing constraint, and it
+falls out of a question that has no good answer otherwise: *how do we know we can't validate this?*
+
+- **From the solution?** No. That route can't tell "this puzzle uses a variant" from "this puzzle is
+  lying on purpose", so acting on it risks revealing a wrogn puzzle. §5 already forbids it.
+- **From the rules?** Only for variants we already know exist. **We cannot search for what we don't
+  know is out there.** A cue list can recognise the variants we've met; it is silent on the next one.
+
+So the bar is: **can we point at the specific thing — a rules phrase we recognise, or an arithmetic
+fact — that says our rule doesn't apply here? If not, the row is live and we default to the standard
+reading** (for cages, the distinct-digit sum).
+
+> "If we are not sure, then I had rather default to showing the validator as normal, assuming that it
+> can locate the clue in the grid, and then we play dumb, since we really do not know what is there.
+> This is pretty much how life works. You are given a tool that may or may not work, but you are told
+> what it is supposed to do. You try it, and if it doesn't work, then you know that you are using the
+> wrong tool, or that the tool does not fit the job. **That is not a failure, it is doing what it is
+> supposed to do.**" — 2026-08-01
+
+That last sentence is the whole design in one line. A validator that runs and fails on a clue it
+wasn't built for is **working correctly**. It is not an error state to be engineered away.
+
+**Consequence — `drop` shrinks to almost nothing.** It survives only for variants we positively
+recognise, so the list starts near-empty and grows one entry at a time as we meet them. In
+particular a systematic probe refutation **no longer drops a row on its own**; that branch of
+`validatorTrust` goes (§7).
+
+**Consequence — grey (c) covers mixed readings.** A puzzle holding both sum and product cages gets
+**both** validators listed, **both greyed**, and the solver picks per cage with the checkbox — unless
+the puzzle labels which cage is which, in which case each goes live on its own clues.
+
+> "if we can tell that a puzzle contains both sum and product cages, then it would be nice to have
+> both validators available to the solver, but both grayed out, unless it is already explicitly told
+> which cage is which. If they are supposed to figure it out for themselves, then we would not
+> indicate which is which, and they would need to trial and error it to find out." — 2026-08-01
 
 Sources: grey semantics 2026-07-17; the (b) branch and `drop` 2026-07-31.
 
@@ -190,10 +228,34 @@ is how the player learns. We do not neuter it; we do not remove it. What we *do*
 for the rules the twist actually uses (odd circles, whispers) — because listing those would announce
 the twist. Absence of a row we were never going to be sure about is normal; a row that lies is not.
 
-### The one hard exception: fog
+### Fog
 
-Fogged puzzles disable the affected functions outright (2026-07-23). Revealing hidden content
-outranks everything in this document.
+**Not a blanket lockout.** That was proposed on 2026-07-23 05:29, corrected by the same person 21
+minutes later at 05:50, and reverted in v3.134.0 — a detail easily missed by reading only the first
+message.
+
+> "I did not intend to completely disable the validators, just make it so that hovering over the
+> eyeball icon had no effect other than to explain the reason why it was disabled." — 2026-07-23
+
+Three separate rules:
+
+1. **The 👁 preview is disabled on any fogged puzzle**, with a tooltip saying why. It isn't a run —
+   it draws *every* clue of the type, including ones still under fog, so it leaks directly.
+2. **A whole-puzzle run skips any clue with a cell still fogged** (`combineFogFilter`). Validating a
+   half-hidden clue tells the player where the rest of it is.
+3. **A selection run may proceed even on fogged cells.** The player chose those cells; deducing over
+   what they can see is exactly what solving the puzzle requires of them anyway.
+
+> "if they want to validate something on their own, even if it is fogged, then that is absolutely
+> something that they would need to be able to do anyway to solve the puzzle." — 2026-08-01
+
+Rule 3 is a **change from current code** — `combineFogFilter` skips fogged clues in every mode.
+
+**Fog is the one place UNCHECKED is not named (§3).** "5 of 12 cages checked" would reveal that
+there are 12 cages, which is the fogged content itself. Under fog the count is reported silently.
+This is the single exception to the never-a-false-green rule, and it is defensible only because the
+player already knows the board is hiding things from them — the reading "I checked everything" isn't
+available to them the way it is on a clear board.
 
 ---
 
@@ -253,6 +315,32 @@ puzzle is actually using:
 > validating the cages with several rulesets to find out which one fits. If all the cages fit only
 > one ruleset, then we have found the validator to use on that puzzle." — 2026-07-31
 
+### Worked example — `67rr7DMJDh` "121" (Dorlir)
+
+The puzzle that started this. Its rules are ordinary: *"The digits within a cage must sum to the
+small clue in the top-left corner."* It has **one** real killer cage: **36 cells, total 121.**
+
+The cage is completely honest — summing the puzzle's own solution over those 36 cells gives exactly
+121. It is a **repeats-allowed sum cage**, which the rules never say out loud because at 36 cells
+over 9 digits repeats are unavoidable. Nothing is lying; `cage.unique` is not set.
+
+`cageCombinations` enumerates **distinct-digit** subsets only, so 36 cells over 9 digits yields zero
+combinations. Today that means: v3.183 makes it silent, it lands in the count, and the toast says
+all clear — the exact false green that opened this whole review. And v3.186 then *drops* the Cages
+row entirely, on a 1-of-1 refutation.
+
+**Both are wrong, and neither is a policy problem.** This is a §6 capability gap:
+
+- It is **positively identifiable with no solution and no rules cue at all**: *cells > digits ⇒
+  repeats are forced ⇒ a distinct-digit reading cannot apply.* Pure arithmetic, visible to the
+  player, leaks nothing.
+- **Right answer:** implement the repeats-allowed branch and validate it as `Cage (repeats
+  allowed)`. Even the weak min/max bound is sound and beats silence.
+- **Interim answer:** report it UNCHECKED with that arithmetic reason. Never drop the row, never
+  count it as clean.
+
+File this under capability, not under wrogn. It was miscategorised as a decoy once already.
+
 ### The measurement that said "impossible" answered a different question
 
 `tools/cage_variants.py` concluded classification fails: only 38% of impossible-as-sum cages narrow
@@ -277,7 +365,8 @@ Every item below is a place where shipped behaviour contradicts this document.
 | `cagesShown = cageMute.muted + countSumlessKillerCages()` (≈9188) | inflates the checked count with clues that were never checked — the false green | count and name them separately; never fold into the clean total |
 | `computeCageRemovals` zero-combination path (v3.183, ≈9194) | silently drops the cage | UNCHECKED with an honest, non-diagnostic reason |
 | v3.184 whole-puzzle cage gate | one impossible cage disables cage validation puzzle-wide, silently — 14 honest puzzles lose their cage validator at the measured 83% precision | remove. It pays a Road A price (silent loss on honest puzzles) to tidy a Road B case the player was already told about (§4). Replaced by per-cage UNCHECKED + §6 ruleset identification |
-| `validatorTrust` (≈14963) | structure is **right** and stays | but `ok` must mean *fully live*, not *live-but-neutered*. Its dependence on the mute for the "quiet" behaviour goes away with the mute |
+| `validatorTrust` (≈14963) | `ok` means *live but neutered*; `drop` fires on probe + `validatorTypeNamedInRules` | `ok` must mean **fully live**. **Delete the `drop` branch** — a probe refutation is not a positive identification (§4), so it may not remove a row. `grey` via `rulesDeclareUnreliable` stays |
+| fog handling | `combineFogFilter` skips fogged clues in every mode; the 👁 is disabled | keep 1 and 2; **let a selection run proceed on fogged cells** (§4). Suppress the UNCHECKED count under fog |
 | toast/summary text | says "nothing to remove" when clues went unchecked | three-bucket reporting per §3 |
 
 `probeInfo` / `buildSolutionProbeState` / `probeSystematic` are **kept** — the probe is the
@@ -290,10 +379,16 @@ what we do with a refutation: no longer "go quiet", now "read it properly, or sa
 
 1. **The puzzle-wide cage-ruleset measurement** (§6). Run it before anything else — it sets how much
    of the problem §6 can actually absorb.
-2. **Removal mode vs highlight mode.** P1 says let a misidentified clue fail. In highlight mode that
-   is cheap. In removal mode it silently deletes correct candidates. Should P1's "let it fail" be
-   restricted to highlight mode, or should removal mode refuse to act on any clue that isn't
-   CHECKED under a trusted ruleset? Not yet decided.
-3. **UNCHECKED wording.** The reason string must be honest without diagnosing (P2). "This cage's
+2. **UNCHECKED wording.** The reason string must be honest without diagnosing (P2). "This cage's
    corner is not a sum of different digits" is arithmetic the player could do themselves; "this
    cage is a decoy" is the answer. Draft each one against that line.
+3. **The known-unsupported variant list** that `drop` now depends on (§4). It starts empty. Adding
+   an entry means we met a variant, recognised it from the rules, and chose not to implement it —
+   so each entry should record which puzzle taught us.
+
+**Decided, not open:**
+
+- **Removal mode acts exactly like highlight mode** (2026-08-01). P1 applies equally in both; a
+  player in removal mode knows they are playing with fire and can switch to highlight mode for
+  safety. Do not build a separate, more cautious removal path. The mode may be retired entirely
+  later.
