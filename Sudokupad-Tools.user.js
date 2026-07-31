@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.186.0
+// @version      3.187.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.186.0';
+  var SCRIPT_VERSION = '3.187.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -14637,6 +14637,27 @@
 
   // ════════════════════════════════════════════════════════════════════════════
   //  ADDING A VALIDATOR — the full checklist (keep this current!)
+  // ════════════════════════════════════════════════════════════════════════════
+  //  ⚠️ READ docs/VALIDATOR_POLICY.md FIRST — it governs when a validator may
+  //  speak, stay silent, or disappear, and it OVERRIDES this banner and
+  //  VALIDATORS.md wherever they disagree. The five rules it comes down to:
+  //    1. A validator may DECLINE to check. It may never PRETEND to have checked.
+  //       Every clue lands in CHECKED-clean, CHECKED-violated, or UNCHECKED, and
+  //       UNCHECKED is counted separately and named — never folded into the green
+  //       total. Toast colour tracks how much of the run you can trust: green =
+  //       all clues checked, amber = some unchecked, red = a real error.
+  //    2. Treat every clue as TRUE. Never weaken, reinterpret or excuse a clue
+  //       because the puzzle might be lying. If it fails, it fails — that is the
+  //       tool working, and it is how the player discovers a twist.
+  //    3. The SOLUTION may certify a puzzle and identify which ruleset a clue
+  //       type uses. It may NEVER silence a check, and no solution digit may
+  //       reach a removal, a candidate set, or any player-visible string.
+  //    4. A menu row is LIVE by default. Grey or drop it only for a reason we can
+  //       NAME — a rules phrase we recognise, or an arithmetic fact. A probe
+  //       refutation is NOT such a reason. When unsure, run under the standard
+  //       reading and let it fail.
+  //    5. Never over-remove. Where 2 and 5 collide, decline to check (rule 1) —
+  //       never check under a rule the puzzle never stated.
   // ════════════════════════════════════════════════════════════════════════════
   // The validators wired into the button. Each is independent (own board read, own
   // removal list). The whole feature's single on/off is the "Show Validate
