@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.189.0
+// @version      3.190.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.189.0';
+  var SCRIPT_VERSION = '3.190.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -9166,6 +9166,36 @@
     return true;
   }
 
+  // Why a cage went UNCHECKED, in the player's own arithmetic (§3 + §8 q2). Three
+  // reasons can apply at once, and one `uncheckedWhy` has to carry all of them:
+  //   notSum   the corner number is not reachable as a sum of different digits
+  //   repeats  more cells than the puzzle has digits, so repeats are forced
+  //   noTotal  the cage is drawn but carries no total we could read
+  // Every one of these is something the player can verify on paper — count the
+  // cells, look at the number. NONE of them says what the cage "really" is: "this
+  // cage is a decoy" is the answer, and diagnosing is the solver's job (P2). Nor
+  // may any of them come from the published solution (§5's hard rule).
+  //
+  // One reason alone reads as a plain clause about the cages; two or more get their
+  // own counts, because the header states the total and the player is owed the
+  // split. Returns null when nothing went unchecked.
+  function cageUncheckedWhy(notSum, repeats, noTotal) {
+    var parts = [];
+    if (notSum)  parts.push([notSum,  'a corner number that is not a sum of different digits',
+                                      'corner numbers that are not sums of different digits']);
+    if (repeats) parts.push([repeats, 'more cells than this puzzle has digits, so repeats are forced',
+                                      'more cells than this puzzle has digits, so repeats are forced']);
+    if (noTotal) parts.push([noTotal, 'no total we could read', 'no total we could read']);
+    if (parts.length === 0) return null;
+    function phrase(p, withCount) {
+      var one = p[0] === 1;
+      return (withCount ? p[0] + ' ' : '') + (one ? 'has ' : 'have ') + (one ? p[1] : p[2]);
+    }
+    if (parts.length === 1) return (parts[0][0] === 1 ? 'it ' : 'they ') + phrase(parts[0], false);
+    var f = parts.map(function (p) { return phrase(p, true); });
+    return f.slice(0, -1).join(', ') + ' and ' + f[f.length - 1];
+  }
+
   // Compute centre-candidate removals forced by the killer cages, iterated to a
   // fixpoint (a removal in one cell can invalidate a neighbour's only supporting
   // combination, so we re-sweep until a full pass changes nothing). Pure w.r.t. the
@@ -9189,23 +9219,22 @@
     // Selection-only counts just what the player picked, so the whole-puzzle
     // sum-less sweep is skipped there and the run carries no denominator.
     var sumless = unitFilter ? 0 : countSumlessKillerCages();
-    var sumlessWhy = sumless ? 'we could not read a total for '
-                             + (sumless === 1 ? 'it' : 'them') : null;
     if (cages.length === 0)
-      return sumless ? { noCages: true, unchecked: sumless, uncheckedWhy: sumlessWhy }
+      return sumless ? { noCages: true, unchecked: sumless, uncheckedWhy: cageUncheckedWhy(0, 0, sumless) }
                      : { noCages: true };
 
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
 
-    // Per-cage combination list. A cage with ZERO valid combinations is dropped —
-    // never allowed to wipe out every candidate.
+    // ── A CAGE WE CANNOT READ IS UNCHECKED, NOT CLEAN (v3.190) ───────────────
+    // A cage with ZERO distinct-digit combinations is dropped from the removal
+    // computation — it must never be allowed to wipe out every candidate. What
+    // happens NEXT is what this rollout is about.
     //
-    // IT IS *NOT* REPORTED AS AN IMPOSSIBLE CLUE (changed v3.183). It used to go
-    // down the v3.157 invalidClueMsg path — "⛔ no arrangement of digits can satisfy
-    // it" — and for cages that message is both alarming and FACTUALLY WRONG. A cage
-    // corner is not always a distinct-digit sum. Measured over the catalog, 888
-    // cages across 172 puzzles yield zero combinations, and they are dominated by
-    // ordinary NON-SUM CAGE VARIANTS, not by misparses:
+    // It is not `invalid` (v3.157's "⛔ no arrangement of digits can satisfy it").
+    // v3.183 was right that the message is alarming and, for a cage, factually
+    // wrong: a cage corner is not always a distinct-digit sum. Measured over the
+    // catalog, 888 cages across 172 puzzles yield zero combinations, dominated by
+    // ordinary NON-SUM CAGE VARIANTS rather than misparses:
     //   • product      — `26e1w4r81e` "The Devil is in the Details", 666 over 5-8 cells
     //   • difference   — `2mcr6exf3p` "Sub-Zero", corners of -1 / -4 / -7
     //   • repeats OK   — `36fnN33h7L` "Leap Day", 29 over a 14-cell cage
@@ -9215,75 +9244,58 @@
     // `cage.unique === false` does not identify these: the catalog sets it on just
     // 51 cages in total, so repeats-allowed cages overwhelmingly look standard.
     //
-    // So a zero-combination cage means WE READ THE WRONG CLUE TYPE (exactly what
-    // v3.157 says), but for cages that is the common case rather than a detection
-    // bug worth shouting about — and shouting also points the player straight at a
-    // cage on a puzzle where the corner number is the puzzle's own joke. Count it
-    // with the other unusable cages and stay quiet. v3.157's loud path is untouched
-    // for every other clue type.
-    var active = [], unreadable = 0;
+    // But v3.183 answered that with SILENCE, and silence here is the false green —
+    // the cage landed in the checked count and the toast said all clear. It is now
+    // UNCHECKED (§3): dropped from the maths, named in the toast, absent from the
+    // green total. v3.157's loud path is untouched for every other clue type.
+    //
+    // REPEATS FORCED is split out because it is POSITIVELY IDENTIFIABLE with no
+    // solution and no rules cue at all: more cells than digits ⇒ some digit must
+    // repeat ⇒ a distinct-digit reading cannot apply. Pure arithmetic, visible to
+    // the player, leaking nothing. `67rr7DMJDh` "121" is the case — one 36-cell
+    // cage totalling 121, completely honest (its own solution sums to exactly 121)
+    // and a repeats-allowed sum the rules never spell out, because at 36 cells over
+    // 9 digits repeats are unavoidable. That cage is a CAPABILITY gap, not a wrogn
+    // puzzle, and it was miscategorised as a decoy once already.
+    //
+    // We say "repeats are forced", not "this is a repeats-allowed sum cage" — the
+    // pigeonhole is arithmetic, the ruleset is a guess. Validating it as a
+    // repeats-allowed sum would be checking under a rule the puzzle never stated
+    // (P4), and picking the right ruleset is §6's job, gated on a measurement that
+    // has not been run yet.
+    var active = [], notSum = 0, repeatsForced = 0;
     cages.forEach(function (cage) {
+      if (cage.keys.length > digitList.length) { repeatsForced++; return; }
       var combos = cageCombinations(digitList, cage.keys.length, cage.sum)
         .map(function (c) { return { arr: c, set: new Set(c) }; });
       if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
-      else unreadable++;
+      else notSum++;
     });
-    // Still folded into the reported count — the false green Phase 3 removes.
-    var cagesShown = unreadable;
+    var unchecked = sumless + repeatsForced + notSum;
+    var uncheckedWhy = cageUncheckedWhy(notSum, repeatsForced, sumless);
 
-    // ── ONE UNREADABLE CAGE INDICTS THE WHOLE PUZZLE (v3.184) ────────────────
-    // v3.183 mutes the individual zero-combination cages and keeps validating the
-    // rest — but a non-sum cage rule is a PUZZLE-WIDE rule, not a per-cage one. A
-    // "Knapp Daneben" (sums off by one), a Multiplication Cages, a Max Cage puzzle
-    // applies its variant to every cage it draws; the ones that happen to yield a
-    // legal distinct-sum combination are not honest killer cages, they are the ones
-    // whose variant total collides with a real sum. Validating those over-removes,
-    // silently — the one direction the contract forbids.
+    // ── THE v3.184 WHOLE-PUZZLE GATE IS GONE (v3.190) ────────────────────────
+    // It disabled cage validation across the ENTIRE puzzle as soon as one cage came
+    // back arithmetically impossible, reasoning that a non-sum cage rule is a
+    // puzzle-wide rule. The measurement was real (`tools/cage_variants.py`: 71%
+    // recall at 83% precision over the 682 solution-bearing puzzles), and it is
+    // still the wrong trade — it pays a Road A price to tidy a Road B case (§4).
+    // The 17% it caught wrongly were HONEST puzzles that silently lost their cage
+    // validator, while the puzzles it was protecting had already told the player
+    // outright, in the rules, that their cages work differently. Getting a Road B
+    // row wrong costs a menu entry the player knew was useless; getting a Road A
+    // row wrong costs a working tool, silently. Per-cage UNCHECKED above replaces
+    // it, and §6's ruleset identification is the real cure.
     //
-    // MEASURED over the 682 solution-bearing puzzles with readable cages
-    // (`tools/cage_variants.py`, 2026-07-31):
-    //   • 99 of 598 puzzles (17%) contain at least one cage the solution refutes,
-    //     and in 43 of them EVERY cage is refuted — a whole-puzzle variant.
-    //   • Gating on "this puzzle has ≥1 arithmetically impossible cage" catches 70
-    //     of those 99 (71% recall) at 83% precision.
-    // The 17% of gated puzzles that were honest lose their cage validator. That is
-    // the right side of the trade: a validator that declines to run costs a
-    // convenience, a validator that removes the correct digit costs the solve.
-    //
-    // ONLY WHERE THE SOLUTION CANNOT ANSWER. With a trustworthy solution the v3.182
-    // per-cage mute is strictly better — surgical, and measured on exactly these
-    // puzzles — so the gate defers to it. 46% of the catalog's cage puzzles publish
-    // no solution, and that is the entire population this exists for.
-    //
-    // The census is over the WHOLE puzzle, never the selection: "are these corner
-    // numbers sums?" is not a question a hand-selection changes the answer to.
-    var wholePuzzleUnreadable = unreadable;
-    if (unitFilter) {
-      wholePuzzleUnreadable = 0;
-      getKillerCages().forEach(function (cage) {
-        if (cageCombinations(digitList, cage.keys.length, cage.sum).length === 0)
-          wholePuzzleUnreadable++;
-      });
-    }
-    //
-    // Reported through `note`, not silently: this one IS safe to say out loud,
-    // because it restates arithmetic the player can do themselves (a 14-cell cage
-    // marked 29 is visibly not a sum of different digits). It gives away nothing
-    // about which cage, or about any cage that looks ordinary — unlike v3.157's
-    // "⛔ impossible", which pointed straight at the joke.
-    if (wholePuzzleUnreadable > 0 && !getPuzzleSolution()) {
-      return {
-        removals: [], cageCount: cagesShown + active.length,
-        unchecked: sumless, uncheckedWhy: sumlessWhy,
-        note: 'No cage was checked: ' + wholePuzzleUnreadable + ' of this puzzle\'s cages '
-            + (wholePuzzleUnreadable === 1 ? 'has a corner number that cannot be' : 'have corner numbers that cannot be')
-            + ' a sum of different digits, so the corner numbers here are probably not sums.',
-      };
-    }
+    // EXPECTED CONSEQUENCE, do not "fix" it: a variant-cage puzzle with no
+    // published solution will again over-remove on those of its cages whose variant
+    // total happens to be a legal distinct-digit sum. That is P1 — every clue is
+    // assumed true, and a wrong reading is allowed to fail — and highlight mode is
+    // what makes it affordable (a wrong elimination is orange the player can see
+    // and reverse, not a silent deletion).
 
     if (active.length === 0)
-      return cagesShown ? { removals: [], cageCount: cagesShown, unchecked: sumless, uncheckedWhy: sumlessWhy }
-                        : { noCages: true, unchecked: sumless, uncheckedWhy: sumlessWhy };
+      return { noCages: true, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
 
     // Working copies of the player's centre marks (the only cells we may modify).
     var work = {};
@@ -9341,8 +9353,9 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, cageCount: active.length + cagesShown, emptiedCells: emptied,
-             unchecked: sumless, uncheckedWhy: sumlessWhy };
+    // cageCount is what we ACTUALLY checked — `active`, and nothing else.
+    return { removals: removals, cageCount: active.length, emptiedCells: emptied,
+             unchecked: unchecked, uncheckedWhy: uncheckedWhy };
   }
 
   // ── Little-killer validator ───────────────────────────────────────────────

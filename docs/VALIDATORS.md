@@ -294,7 +294,26 @@ by the v3.157 structural check: *Sigma or Pi* has a 4-cell cage marked 30 whose 
 PRODUCT, and 6+7+8+9=30 is a legal sum — so before v3.182 the validator eliminated against a rule
 the puzzle never stated.
 
-### Non-sum cage variants (v3.183) — a cage corner is not always a sum
+### Non-sum cage variants (v3.183) — a cage corner is not always a sum — ♻️ REWORKED v3.190
+
+> **The facts below stand; the "and stay silent" response does not.** A zero-combination cage is now
+> reported **UNCHECKED** (§3) — dropped from the maths as before, but named in the toast and absent
+> from the green total. Silence was the false all-clear: the cage landed in `cageCount` and the run
+> said all clear over a cage nothing had looked at.
+>
+> **`67rr7DMJDh` "121" was miscategorised as a decoy and is not one.** One 36-cell cage totalling
+> 121, whose own published solution sums to exactly 121 over those cells — an honest repeats-allowed
+> sum the rules never spell out, because at 36 cells over 9 digits repeats are unavoidable. It is a
+> **capability** gap, filed under §6, not a wrogn puzzle. `computeCageRemovals` now splits it out
+> ahead of the combination search: **more cells than digits ⇒ repeats forced ⇒ a distinct-digit
+> reading cannot apply.** That is positively identifiable with no solution and no rules cue at all —
+> pure pigeonhole the player can see — so it earns its own reason string. We say *"repeats are
+> forced"*, never *"this is a repeats-allowed sum cage"*: the pigeonhole is arithmetic, the ruleset
+> is a guess, and guessing it would validate under a rule the puzzle never stated.
+>
+> Reason strings come from `cageUncheckedWhy(notSum, repeats, noTotal)`, harness-pinned.
+
+A killer-style cage's corner number can be a **product** (`26e1w4r81e` "The Devil is in the
 
 A killer-style cage's corner number can be a **product** (`26e1w4r81e` "The Devil is in the
 Details", 666 over 5–8 cells), a **difference** (`2mcr6exf3p` "Sub-Zero", corners of −1/−4/−7), a
@@ -349,7 +368,20 @@ The 10.4% "no reading explains it" bucket says why the ceiling is so low: the va
 its digit; `ay6r6mmu5w` "Close Enough" and `uqvv06s42j` "Knapp Daneban Killer" are off-by-one sums;
 `clover/20250731-max-cage-sudoku` totals only the largest). No fixed list of readings closes it.
 
-### The gate that DOES work: one unreadable cage indicts the whole puzzle (v3.184)
+### The gate that DOES work: one unreadable cage indicts the whole puzzle (v3.184) — ⚰️ REMOVED v3.190
+
+> **The measurement is real; the trade was wrong.** 71% recall at 83% precision means **14 honest
+> puzzles silently lost their cage validator** — a Road A cost (a working tool disappears, and the
+> player is never told) paid to tidy a **Road B** case (§4): puzzles whose rules *state outright*
+> that their cages work differently, so the player already knew the row was useless. Road B decisions
+> are cheap and must not be bought with Road A costs. Replaced by per-cage UNCHECKED above, with §6's
+> ruleset identification as the real cure.
+>
+> **Accepted regression, do not "fix":** a variant-cage puzzle with no published solution will again
+> over-remove on those cages whose variant total happens to be a legal distinct-digit sum. That is
+> P1 — every clue is assumed true and a wrong reading is allowed to fail — and highlight mode is what
+> makes it affordable: a wrong elimination is orange the player can see and reverse, not a silent
+> deletion.
 
 The same measurement found a bigger problem than the silent cages, and a fix for it.
 

@@ -99,7 +99,22 @@ real cure.
   Sum-less cages are **unchecked**, reported via Phase 1, never added to the checked total.
 - Harness: expect failures here. See trap 1.
 
-## Phase 3 — cages stop going quiet
+## Phase 3 — cages stop going quiet — ✅ LANDED v3.190.0
+
+**What shipped.** `cageCount` is now `active.length` and nothing else. Three unchecked buckets feed
+the Phase 1 channel via `cageUncheckedWhy(notSum, repeats, noTotal)`: zero-combination cages, the
+new repeats-forced case, and the sum-less cages moved in Phase 2. The v3.184 whole-puzzle gate and
+its `note` channel are gone, along with `wholePuzzleUnreadable` (harness asserts it stays gone).
+
+**On `67rr7DMJDh` "121" — marked unchecked, not implemented.** Policy §6 offers both; the interim is
+taken deliberately. `cells > digits` proves repeats are *forced*, which is arithmetic — but it does
+not prove the rule is a repeats-allowed **sum** (it could be a product, a digit list). Validating it
+as a repeats-allowed sum would check under a rule the puzzle never stated (P4), and choosing the
+ruleset is exactly what Phase 6's unrun measurement is for. The reason string says "repeats are
+forced", never "this is a repeats-allowed sum cage".
+
+**Trap 4 is now live.** Variant-cage puzzles with no published solution will over-remove on cages
+whose variant total is a legal sum. Accepted, recorded, not to be fixed here.
 
 - `computeCageRemovals` zero-combination path (≈9194): report UNCHECKED with the arithmetic reason
   instead of dropping silently.

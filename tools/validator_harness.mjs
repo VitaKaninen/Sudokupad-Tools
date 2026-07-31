@@ -126,7 +126,7 @@ const NAMES = [
   // wrogn / liar declarations + the clue-type-named test (v3.186)
   'WROGN_DECLARED_RE', 'TYPE_CHOICE_RE', 'rulesDeclareUnreliable',
   // the third outcome — UNCHECKED reporting (v3.188, VALIDATOR_POLICY.md §3)
-  'pluralUnit', 'uncheckedMsg', 'checkedPhrase',
+  'pluralUnit', 'uncheckedMsg', 'checkedPhrase', 'cageUncheckedWhy',
 ];
 
 const decls = NAMES.map((n) => ({ name: n, ...extractDecl(n) }))
@@ -1580,6 +1580,40 @@ check('checked: zero checked still reports the population it came from',
 // what every validator that has not yet been swept still returns.
 check('checked: an undefined unchecked count behaves as zero',
   F.checkedPhrase(5, undefined, 'dot'), '5 dots');
+
+// ── why a cage went unchecked (v3.190) ───────────────────────────────────────
+// The player-facing product of the whole rollout: what a validator says when it
+// declines. Every string here must be arithmetic the player could redo on paper
+// (count the cells, look at the corner number) and must never diagnose — "this
+// cage is a decoy" is the answer, and the answer is the solver's to find (P2).
+check('cage why: nothing unchecked says nothing',
+  F.cageUncheckedWhy(0, 0, 0), null);
+check('cage why: one unreachable corner number, singular',
+  F.cageUncheckedWhy(1, 0, 0), 'it has a corner number that is not a sum of different digits');
+check('cage why: several unreachable corner numbers, plural',
+  F.cageUncheckedWhy(3, 0, 0), 'they have corner numbers that are not sums of different digits');
+// 67rr7DMJDh "121": 36 cells over 9 digits. Positively identifiable with no
+// solution and no rules cue — pigeonhole, and the player can see it.
+check('cage why: repeats forced states the pigeonhole, not the ruleset',
+  F.cageUncheckedWhy(0, 1, 0),
+  'it has more cells than this puzzle has digits, so repeats are forced');
+// yiaonocy5d "...What?": a cage drawn with a cosmetic label and no real total.
+// The reason names OUR limit, so it never claims the corner number is fake.
+check('cage why: no readable total blames the reading, not the puzzle',
+  F.cageUncheckedWhy(0, 0, 2), 'they have no total we could read');
+// Two or more reasons: the header already gave the total, so the split is owed.
+check('cage why: two reasons each carry their own count',
+  F.cageUncheckedWhy(3, 1, 0),
+  '3 have corner numbers that are not sums of different digits and '
+  + '1 has more cells than this puzzle has digits, so repeats are forced');
+check('cage why: all three reasons list with a serial comma-free join',
+  F.cageUncheckedWhy(2, 1, 1),
+  '2 have corner numbers that are not sums of different digits, '
+  + '1 has more cells than this puzzle has digits, so repeats are forced and '
+  + '1 has no total we could read');
+// The v3.184 whole-puzzle gate is gone: one bad cage may not disable the rest.
+checkFalse('cage: no whole-puzzle gate survives (policy §4, Road B is cheap)',
+  /wholePuzzleUnreadable/.test(src));
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);
