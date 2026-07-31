@@ -646,6 +646,19 @@ flattened into **two** lookups: `validatorHilite.keys` = every flag (what is **p
    `validatorHiliteCheckPuzzle` still drops flags outright on SPA navigation. Our own repaint only
    sets inline `style` (not observed), so it can't self-stale — which is also what keeps the ↻
    auto-run from re-triggering itself.
+2b. **…but a flag has NO MEMORY of a candidate that is gone (v3.179).** "Persist" means *until the
+   mark itself goes*. `validatorHilitePruneRemoved` runs first in `validatorHiliteOnBoardChange` and
+   **deletes** any flag whose `col,row,digit` no longer exists as a centre tspan — deleted by hand,
+   swept by Clear, or removed by the validator itself. Re-entering that digit later is a **new**
+   candidate and comes back plain; only ↻ auto-update re-judges it, which is the point of ↻ being a
+   toggle. Two consequences worth knowing: **Fill was unusable without this** — it re-added the
+   digit, the surviving flag re-painted it orange, and Fill's own invalid-sweep (which honours
+   *stale* orange too, via `validatorHiliteHas`) deleted it again, so those cells could never fill;
+   and **Ctrl+Z does not bring the orange back**, since the flag died with the mark. A cell holding a
+   **value/given is exempt** — SudokuPad drops its centre tspans from the DOM while a digit sits
+   there and restores them on clear, so pruning them would make typing a digit silently forget every
+   flag in that cell. Because stale flags must now be watched too, `validatorHiliteWatch` keeps the
+   observer connected while **any** flag exists (was: any *fresh* flag) or any ↻ is on.
 3. **Red stays red.** `fixCenterTspan` checks the flag store *after* the `.conflict` and `.given`
    branches, so only ordinary blue marks are recoloured. Rendering reads the store rather than the
    run, so the orange survives every board repaint for free — the pencilmark observer already

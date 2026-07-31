@@ -512,7 +512,9 @@ way so it stays low-maintenance.
   `readValidatorBoardState`, `fsScanValid` and the Clear/Clear All sweep, so validators still
   cross-feed. A highlight **persists until the player clears it**: a board edit marks the flags
   *stale* (kept on screen, no longer trusted as input — `validatorHiliteRuledOut` vs
-  `validatorHiliteHas`). Highlight mode has **no run-all**; the bottom button is "Clear all
+  `validatorHiliteHas`) — but only until that mark itself goes: **v3.179**
+  `validatorHilitePruneRemoved` deletes a flag whose candidate has left the grid, so re-entering the
+  digit (by hand or via **Fill**) comes back plain instead of instantly re-orange. Highlight mode has **no run-all**; the bottom button is "Clear all
   highlights" (`clearAllValidatorHighlights`). **v3.146:** a row click is a plain one-shot run and no
   control keeps an "on" look except the per-row **↻ auto-update toggle** (`validatorAuto`,
   `runAutoValidators` — re-runs that validator on every board edit, debounced + silent; disabled

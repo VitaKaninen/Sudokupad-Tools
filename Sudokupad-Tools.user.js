@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.178.0
+// @version      3.179.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.178.0';
+  var SCRIPT_VERSION = '3.179.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -14966,10 +14966,11 @@
     validatorAuto = Object.create(null);
     validatorHiliteWatch();
   }
-  // The observer is needed while anything is fresh (to stale it on the first edit)
-  // AND while any ↻ is on (to re-run it on every edit).
+  // The observer is needed while ANY flag exists — fresh ones to stale on the first
+  // edit, stale ones so validatorHilitePruneRemoved can drop a flag the moment its
+  // candidate leaves the grid — AND while any ↻ is on (to re-run it on every edit).
   function validatorHiliteWatch() {
-    var want = validatorHiliteAnyFresh() || validatorAutoAny();
+    var want = validatorHiliteAny() || validatorAutoAny();
     if (want && !validatorHilite.observer) {
       var targets = ['#cell-values', '#cell-candidates', '#cell-pencilmarks']
         .map(function (s) { return document.querySelector(s); }).filter(Boolean);
@@ -14992,8 +14993,61 @@
     validatorAutoTimer = setTimeout(runAutoValidators, 150);
   }
   function validatorHiliteOnBoardChange() {
+    validatorHilitePruneRemoved();   // BEFORE the stale pass: a gone candidate is gone, not stale
     validatorHiliteMarkStale();
     scheduleAutoValidators();
+  }
+  // A FLAG HAS NO MEMORY (v3.179). The orange marks a candidate that is ON the grid
+  // right now; once that candidate leaves — the player deletes it, Clear sweeps it,
+  // the validator's own removal takes it — the flag has nothing left to describe, so
+  // it is dropped. Putting the same digit back later is a NEW candidate and comes back
+  // plain: a validator that ran once ran once, and only ↻ auto-update re-judges it.
+  //
+  // Without this the (cellKey,digit) keys outlived their marks and re-attached to any
+  // later one, which made Fill unusable — it re-added the digit, the flag re-painted it
+  // orange, and Fill's own invalid-sweep (which treats orange as invalid, stale flags
+  // included) deleted it again, so those cells could never be filled.
+  //
+  // A PLACED VALUE IS NOT A REMOVAL: SudokuPad drops the centre marks from the DOM
+  // while a cell holds a digit and restores them when it is cleared, so cells with a
+  // value/given are skipped here — otherwise entering a digit would silently forget
+  // every flag in that cell.
+  function validatorHilitePruneRemoved() {
+    if (validatorHilite.keys.size === 0) return;
+    var valued = new Set();
+    document.querySelectorAll('#cell-values text, #cell-givens text, text.cell-given').forEach(function (t) {
+      var x = t.getAttribute('x'), y = t.getAttribute('y');
+      if (x == null || y == null) return;
+      if ((t.textContent || '').trim().length === 0) return;
+      valued.add(cellKeyFromMarkXY(x, y));
+    });
+    var present = new Set();
+    document.querySelectorAll('#cell-candidates text.cell-candidate').forEach(function (text) {
+      var ck = cellKeyFromMarkXY(text.getAttribute('x'), text.getAttribute('y'));
+      text.querySelectorAll('tspan').forEach(function (sp) {
+        var d = sp.getAttribute('data-val');
+        if (d) present.add(ck + ',' + d);
+      });
+    });
+    var dropped = false;
+    Object.keys(validatorHilite.byName).forEach(function (n) {
+      var e = validatorHilite.byName[n];
+      var gone = [];
+      e.set.forEach(function (k) {
+        if (present.has(k)) return;
+        if (valued.has(k.slice(0, k.lastIndexOf(',')))) return;   // masked by a value, not removed
+        gone.push(k);
+      });
+      if (!gone.length) return;
+      gone.forEach(function (k) { e.set.delete(k); });
+      dropped = true;
+      if (e.set.size === 0) delete validatorHilite.byName[n];
+    });
+    if (!dropped) return;
+    validatorHiliteRebuildKeys();
+    validatorHiliteWatch();   // last flag gone (and no ↻ on) ⇒ nothing left to watch for
+    // Menu state can flip ("Clear all highlights" greys out) when the last flag goes.
+    if (!validatorHiliteAny() && document.getElementById('sp-validate-menu')) rebuildValidateMenu();
   }
   // The board changed: every flag is now a snapshot of an older board. The orange
   // STAYS (a highlight lives until the player clears it) but stops counting as proof
