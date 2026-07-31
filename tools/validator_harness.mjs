@@ -102,8 +102,10 @@ const NAMES = [
   'COUNTCIRCLE_CONTAINER_RE', 'COUNTCIRCLE_ADJFIRST_RE',
   'COUNTCIRCLE_TRIGGER_RE', 'COUNTCIRCLE_NEG_RE', 'COUNTCIRCLE_COLOR_RE',
   'COUNTCIRCLE_DEFERRED_RE', 'COUNTCIRCLE_ANTI_RE', 'COUNTCIRCLE_SEMI_RE',
+  'CC_BUDGET_MS', 'CC_SUBSET_NODES', 'CC_PAIR_NODES',
   'countingCircleSelfRef', 'countingCircleClause', 'hasCountingCircleCue',
-  'countingCircleSums', 'countingCircleFill', 'countingCircleSupport',
+  'countingCircleSums', 'countingCircleModel', 'countingCircleFill',
+  'countingCircleSeatable', 'countingCircleSupport',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
   // geometry / chains
@@ -1365,43 +1367,93 @@ check('cc sums: 14 over 0-8 admits 3+4+7 (blobz/hippo-birdie)',
   sums(14, [0, 1, 2, 3, 4, 5, 6, 7, 8]).includes('3+4+7'), true);
 
 // ── seating the circles (complete support) ───────────────────────────────────
-// Three circles in one ROW, so all three must differ → the only subset that seats is
-// 1+2 … which needs two cells, not three. 3 alone needs three 3s in one row.
-const rowKeys = ['0,0', '1,0', '2,0'];
 const allNine = new Set(D9);
-const md = (a, b) => { if (a === b) return false; const p = a.split(','), q = b.split(','); return p[0] === q[0] || p[1] === q[1]; };
-const seat = (keys, doms, S) => F.countingCircleFill(keys, doms, S, md, -1, 0, { n: 200000 });
-check('cc fill: three circles in one row cannot all hold 3',
-  seat(rowKeys, rowKeys.map(() => allNine), [3]), null);
-checkTrue('cc fill: 1+2 cannot seat three cells either',
-  seat(rowKeys, rowKeys.map(() => allNine), [1, 2]) === null);
+const box = (k) => { const [c, r] = k.split(',').map(Number); return Math.floor(r / 3) * 3 + Math.floor(c / 3); };
+const md = (a, b) => {
+  if (a === b) return false;
+  const p = a.split(','), q = b.split(',');
+  return p[0] === q[0] || p[1] === q[1] || box(a) === box(b);
+};
+const ctl = () => ({ nodes: 2000000, deadline: Date.now() + 5000 });
+const mdl = (keys, doms) => F.countingCircleModel(keys, doms || keys.map(() => allNine), md);
+const seat = (keys, doms, S) => F.countingCircleFill(mdl(keys, doms), S, -1, 0, ctl());
+const sup = (keys, doms, n) => F.countingCircleSupport(mdl(keys, doms),
+  doms || keys.map(() => allNine), F.countingCircleSums(D9, n || keys.length), ctl());
+
+// Three circles in one ROW, so all three must differ → neither 3-subset can seat.
+const rowKeys = ['0,0', '1,0', '2,0'];
+check('cc fill: three circles in one row cannot all hold 3', seat(rowKeys, null, [3]), null);
+check('cc fill: 1+2 cannot seat three cells in one row either', seat(rowKeys, null, [1, 2]), null);
 // Spread across three boxes/rows/columns, three 3s seat fine (repeats are legal
 // wherever no unit forbids them).
 const freeKeys = ['0,0', '4,4', '8,8'];
-checkTrue('cc fill: three mutually non-conflicting circles CAN all hold 3',
-  JSON.stringify(seat(freeKeys, freeKeys.map(() => allNine), [3])) === JSON.stringify([3, 3, 3]));
+check('cc fill: three mutually non-conflicting circles CAN all hold 3',
+  seat(freeKeys, null, [3]), [3, 3, 3]);
 // The deduction the validator exists to make. THREE circles admits two subsets —
 // {3} (three 3s) and {1,2} (one 1 and two 2s) — so 4-9 are all impossible in ANY of
 // them. Six of the nine candidates go from every circle without a single pencilmark
 // being needed, which is the whole point of the sum equation.
-const sup3 = F.countingCircleSupport(freeKeys, freeKeys.map(() => allNine),
-  F.countingCircleSums(D9, 3), md, { n: 200000 });
+const sup3 = sup(freeKeys);
 check('cc support: 3 free circles ⇒ only 1, 2, 3 survive anywhere',
   sup3.sup.map((s) => Array.from(s).sort((a, b) => a - b)), [[1, 2, 3], [1, 2, 3], [1, 2, 3]]);
-check('cc support: both 3-subsets are seatable', sup3.feasible, 2);
+check('cc support: both 3-subsets are seatable', sup3.proved, 2);
 // …and with a mark already narrowed, the count still has to add up: two circles can
 // only be 1+? — no subset of distinct digits sums to 2 except {2}, needing two 2s.
 const twoKeys = ['0,0', '4,4'];
-const sup2 = F.countingCircleSupport(twoKeys, twoKeys.map(() => allNine),
-  F.countingCircleSums(D9, 2), md, { n: 200000 });
 check('cc support: 2 free circles ⇒ both are 2s',
-  sup2.sup.map((s) => Array.from(s)), [[2], [2]]);
+  sup(twoKeys).sup.map((s) => Array.from(s)), [[2], [2]]);
 // A cell whose marks exclude the forced digit makes the whole set unseatable — a real
 // mark contradiction (the noValidComboMsg path), not a structural one.
-const sup2bad = F.countingCircleSupport(twoKeys, [new Set([5]), allNine],
-  F.countingCircleSums(D9, 2), md, { n: 200000 });
 check('cc support: a mark that blocks the forced digit leaves no support',
-  sup2bad.feasible, 0);
+  sup(twoKeys, [new Set([5]), allNine]).feasible, 0);
+
+// ── the v3.177.1 freeze, and the two bugs behind it ──────────────────────────
+// `dGL3DgJgJd` "Circles and Thermos" — 26 circles. The published solution puts
+// 1×1, 3×3, 4×4, 5×5, 6×6, 7×7 in them, so {1,3,4,5,6,7} IS seatable. The v3.177
+// CELL-major search could not find it in five million nodes and froze the tab; the
+// digit-major one seats it in ~55. Anchor the search's competence, not its speed.
+const DGL = ['8,0', '0,2', '2,2', '4,2', '6,2', '1,3', '3,3', '5,3', '0,4', '2,4',
+  '4,4', '6,4', '1,5', '3,5', '5,5', '0,6', '2,6', '4,6', '6,6', '1,7', '3,7', '5,7',
+  '0,8', '2,8', '4,8', '6,8'];
+const dglCtl = { nodes: 20000, deadline: Date.now() + 5000 };
+checkTrue('cc fill: dGL3DgJgJd seats its real subset 1+3+4+5+6+7 well inside one subset budget',
+  F.countingCircleFill(mdl(DGL), [1, 3, 4, 5, 6, 7], -1, 0, dglCtl) !== null);
+checkTrue('cc fill: …and cheaply (< 2000 nodes; measured 55)', 20000 - dglCtl.nodes < 2000);
+// On a fully pencilled grid it proves exactly ONE of the 21 candidate subsets is
+// seatable — the one the solution uses — so 2, 8 and 9 leave every circle.
+const dglSup = sup(DGL);
+check('cc support: dGL3DgJgJd pins the counting set to 1,3,4,5,6,7',
+  Array.from(dglSup.sup[0]).sort((a, b) => a - b), [1, 3, 4, 5, 6, 7]);
+check('cc support: …and exactly one subset is seatable', dglSup.proved, 1);
+
+// The CLIQUE-COVER bound: max independent set ≤ number of cliques, so a digit needing
+// more copies than that is refused before a node is explored. dGL3DgJgJd's 26 circles
+// occupy 8 rows, so nothing needing nine mutually non-conflicting cells can fit.
+check('cc model: dGL3DgJgJd covers to 8 cliques (8 occupied rows)', mdl(DGL).maxIndep, 8);
+check('cc fill: a 9 is refused outright when maxIndep is 8',
+  F.countingCircleFill(mdl(DGL), [9, 8, 6, 3], -1, 0, ctl()), null);
+check('cc model: three mutually non-conflicting cells cover to 3 cliques', mdl(freeKeys).maxIndep, 3);
+check('cc model: three cells in one row are ONE clique', mdl(rowKeys).maxIndep, 1);
+
+// SOUNDNESS DIRECTION. A subset we merely failed to settle in time must stay LIVE —
+// dropping it shrinks `allowed` and removes digits the puzzle permits, which is the
+// over-removal the contract forbids. Starve the budget and check nothing is removed.
+const starved = { nodes: 1, deadline: 0 };
+const starvedSeat = F.countingCircleSeatable(mdl(DGL), F.countingCircleSums(D9, 26), starved);
+check('cc seatable: a starved budget proves NOTHING infeasible', starvedSeat.proved, 0);
+checkTrue('cc seatable: …and keeps every subset live', starvedSeat.live.length > 0);
+const starvedSup = F.countingCircleSupport(mdl(DGL), DGL.map(() => allNine),
+  F.countingCircleSums(D9, 26), { nodes: 1, deadline: 0 });
+// It still removes the 9 — but from PROOF, not from having run out of time: the
+// clique bound is mark-independent, so starvation cannot take it away. Everything
+// that needed an actual search survives untouched, and no cell is ever emptied.
+check('cc support: a starved run falls back to exactly the clique-bound answer',
+  starvedSup.sup.map((s) => Array.from(s).sort((a, b) => a - b))
+    .every((a) => JSON.stringify(a) === JSON.stringify([1, 2, 3, 4, 5, 6, 7, 8])), true);
+checkTrue('cc support: a starved run never empties a cell',
+  starvedSup.sup.every((s) => s.size > 0));
+checkTrue('cc support: starvation costs eliminations, never invents them',
+  starvedSup.sup.every((s, i) => Array.from(dglSup.sup[i]).every((d) => s.has(d))));
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);

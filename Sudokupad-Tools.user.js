@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.177.0
+// @version      3.178.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.177.0';
+  var SCRIPT_VERSION = '3.178.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8125,6 +8125,20 @@
   // a puzzle that draws semicircles anywhere cannot be counted, whichever sentence
   // says so.
   var COUNTCIRCLE_SEMI_RE = /\bsemi[-\s]?circles?\b|\bhalf[-\s]?circles?\b/i;
+  // Wall-clock ceiling for ONE counting-circle run. The search is synchronous on the
+  // UI thread, so this — not a node count — is what keeps the tab responsive; past it
+  // the run degrades to the tier-1 sum-equation answer, which is sound and still
+  // removes. 600 ms is ~4x the slowest measured real puzzle after the v3.178 rework.
+  var CC_BUDGET_MS = 600;
+  // Per-search node caps. Each subset and each (cell, digit) pair gets its OWN cap so
+  // one hard search cannot consume the run and starve every later one — the v3.177
+  // shared-budget bug, where the first few subsets ate all 400k nodes.
+  // Sized against the measured cost AFTER the digit-major rework: seating the real
+  // subset on the 26-circle `dGL3DgJgJd` takes 55 nodes, so these are ~3 orders of
+  // magnitude of headroom and exist only to stop a pathological board, not to ration
+  // ordinary work. The deadline above is the real guarantee.
+  var CC_SUBSET_NODES = 150000;
+  var CC_PAIR_NODES = 30000;
 
   // Does the text after the trigger say "…<NOUN>s CONTAINING THAT DIGIT"? That
   // self-reference IS the clue type, and the match is ANCHORED at the trigger's end,
@@ -8286,97 +8300,253 @@
     return out;
   }
 
-  // Seat the circles for ONE candidate digit set S: every d ∈ S used exactly d times,
-  // each cell taking a digit from its own domain, and no two cells that must differ
-  // under ordinary Sudoku sharing a digit. `pin` (nullable) forces cells[pinIdx] = d.
-  // Returns a WITNESS array of digits parallel to `cells`, or null.
-  //
-  // Fewest-options-first over the cells, which is what keeps it cheap: n is the circle
-  // count (≤ ~40 in the corpus) and |S| is tiny (Σ S = n with distinct parts, so ≤ 9).
-  // `budget` is a shared node counter — on overrun we throw to the caller, which falls
-  // back to the subset-union answer (a sound over-approximation), per the node-cap
-  // rule: a bail must degrade, never silently do nothing.
-  function countingCircleFill(cells, doms, S, mustDiffer, pinIdx, pinDigit, budget) {
-    var need = {}, i;
-    for (i = 0; i < S.length; i++) need[S[i]] = S[i];
-    var inS = {}; S.forEach(function (d) { inS[d] = 1; });
-    var assign = new Array(cells.length).fill(0);
-    var opts = cells.map(function (k, idx) {
-      if (idx === pinIdx) return inS[pinDigit] && doms[idx].has(pinDigit) ? [pinDigit] : [];
-      var o = [];
-      S.forEach(function (d) { if (doms[idx].has(d)) o.push(d); });
-      return o;
-    });
-    for (i = 0; i < opts.length; i++) if (opts[i].length === 0) return null;
-    function ok(idx, d) {
-      if (!need[d]) return false;
-      for (var j = 0; j < cells.length; j++)
-        if (assign[j] === d && mustDiffer(cells[idx], cells[j])) return false;
-      return true;
+  // ── THE SEARCH RUNS ON THE UI THREAD, SO IT IS BOUNDED BY THE CLOCK ─────────
+  // v3.177 shipped this search with a 400k node cap and an audit that ASSERTED the
+  // cap was never reached. It was reached on the very first real puzzle: 26 circles
+  // carrying all nine candidates (i.e. any grid the player has filled with
+  // pencilmarks) burned the whole budget in 6.4 SECONDS, and the compute calls this
+  // once for the structural test and again per fixpoint round — a frozen tab.
+  // Three things were wrong and all three are fixed here:
+  //   1. every node cost O(n² · |S|) because the conflict test re-scanned all cells
+  //      and re-derived mustDiffer (a string split per pair!). Conflicts are now
+  //      precomputed ONCE per run as adjacency lists, and domains are digit BITMASKS.
+  //   2. the per-pair searches were unbounded individually, so one hard pair could
+  //      eat the entire shared budget and starve every later pair.
+  //   3. there was no wall-clock limit at all, which is the only thing that actually
+  //      protects the UI thread.
+  // The lesson generalises: a node cap is a proxy for time, and it is only a good one
+  // if you have MEASURED the cost of a node. Prefer a deadline.
+
+  // Precompute what every fill needs: conflict adjacency (indices, not cell keys) and
+  // per-cell domain bitmasks. O(n²) mustDiffer calls, once, instead of per node.
+  function countingCircleModel(cells, doms, mustDiffer) {
+    var n = cells.length, conf = [], dom = new Array(n), adj = new Uint8Array(n * n), i, j;
+    for (i = 0; i < n; i++) {
+      var a = [];
+      for (j = 0; j < n; j++) if (i !== j && mustDiffer(cells[i], cells[j])) { a.push(j); adj[i * n + j] = 1; }
+      conf.push(a);
+      var m = 0;
+      doms[i].forEach(function (d) { if (d >= 0 && d <= 9) m |= (1 << d); });
+      dom[i] = m;
     }
-    function rec(placed) {
-      if (budget.n-- <= 0) throw new Error('countingCircleBudget');
-      if (placed === cells.length) return true;
-      var best = -1, bestOpts = null;
-      for (var idx = 0; idx < cells.length; idx++) {
-        if (assign[idx]) continue;
-        var av = opts[idx].filter(function (d) { return ok(idx, d); });
-        if (av.length === 0) return false;
-        if (!bestOpts || av.length < bestOpts.length) { best = idx; bestOpts = av; }
-        if (av.length === 1) break;
+    // MAX-INDEPENDENT-SET UPPER BOUND, via a greedy CLIQUE COVER. A digit d needs d
+    // mutually non-conflicting cells, and no independent set can be larger than the
+    // number of cliques the graph is covered by — so `d > maxIndep` is instant
+    // infeasibility. On a real circle set the cliques are essentially the rows, which
+    // is why this is sharp: `dGL3DgJgJd`'s 26 circles occupy 8 rows, so every subset
+    // containing a 9 dies before a single node is explored. Without it the search had
+    // to exhaust the tree to discover the same thing.
+    var used = new Uint8Array(n), cliques = 0;
+    for (i = 0; i < n; i++) {
+      if (used[i]) continue;
+      used[i] = 1; cliques++;
+      var members = [i];
+      for (j = i + 1; j < n; j++) {
+        if (used[j]) continue;
+        var all = true;
+        for (var t = 0; t < members.length; t++) if (!adj[members[t] * n + j]) { all = false; break; }
+        if (all) { used[j] = 1; members.push(j); }
       }
-      for (var q = 0; q < bestOpts.length; q++) {
-        var d = bestOpts[q];
-        assign[best] = d; need[d]--;
-        if (rec(placed + 1)) return true;
-        need[d]++; assign[best] = 0;
-      }
-      return false;
     }
-    return rec(0) ? assign.slice() : null;
+    return { n: n, cells: cells, conf: conf, dom: dom, adj: adj, maxIndep: cliques };
   }
 
-  // The complete-support answer: per circle cell, the set of digits that some legal
-  // whole-set seating puts there. Witness-reuse — one found seating supports EVERY
-  // cell/digit pair it contains, so only pairs still unwitnessed need a targeted
-  // search (the `sameDiffExactFills` shape).
-  // Returns { sup:[Set…], feasible:<count of seatable subsets>, bailed:<bool> }.
-  function countingCircleSupport(cells, doms, subsets, mustDiffer, budget) {
-    var sup = cells.map(function () { return new Set(); }), feasible = 0, bailed = false;
-    var live = [];
-    try {
-      subsets.forEach(function (S) {
-        var w = countingCircleFill(cells, doms, S, mustDiffer, -1, 0, budget);
-        if (!w) return;
-        feasible++; live.push(S);
-        for (var i = 0; i < cells.length; i++) sup[i].add(w[i]);
-      });
-      live.forEach(function (S) {
-        var inS = {}; S.forEach(function (d) { inS[d] = 1; });
-        for (var i = 0; i < cells.length; i++) {
-          var ds = Array.from(doms[i]);
-          for (var j = 0; j < ds.length; j++) {
-            var d = ds[j];
-            if (!inS[d] || sup[i].has(d)) continue;
-            var w = countingCircleFill(cells, doms, S, mustDiffer, i, d, budget);
-            if (w) for (var m = 0; m < cells.length; m++) sup[m].add(w[m]);
-          }
-        }
-      });
-    } catch (e) {
-      // Budget overrun → degrade to the SUBSET UNION, which is a sound
-      // over-approximation (it keeps every digit any seatable subset uses), so the
-      // pass still removes what the sum equation alone proves.
-      bailed = true;
-      var allowed = {};
-      (live.length ? live : subsets).forEach(function (S) { S.forEach(function (d) { allowed[d] = 1; }); });
-      for (var i = 0; i < cells.length; i++) {
-        sup[i] = new Set();
-        doms[i].forEach(function (d) { if (allowed[d]) sup[i].add(d); });
-      }
-      if (!feasible) feasible = subsets.length;
+  // Seat ONE candidate digit set S: every d ∈ S used exactly d times, each cell taking
+  // a digit from its own domain, no two conflicting cells sharing a digit. `pinIdx`
+  // (or -1) forces that cell to `pinDigit`. Returns a WITNESS array of digits parallel
+  // to the cells, or null when no seating exists.
+  //
+  // `ctl` = { nodes, deadline } — BOTH are checked, and overrun throws so the caller
+  // decides how to degrade. Fewest-options-first over unassigned cells; the available
+  // mask is recomputed from the cell's own conflict list only, which is ~6 entries on
+  // a real circle set rather than all n.
+  // THE SEARCH IS DIGIT-MAJOR, NOT CELL-MAJOR, and that is the whole difference
+  // between "works" and "cannot solve a real puzzle". Assigning digits to cells one
+  // cell at a time (the v3.177 shape) gives MRV nothing to work with: on a grid the
+  // player has pencilled, EVERY circle starts with the same |S| options, so the
+  // heuristic picks arbitrarily and the tree is explored almost blind. Measured on
+  // `dGL3DgJgJd`: the subset the published solution actually uses (1+3+4+5+6+7 = 26)
+  // was NOT found in five MILLION nodes.
+  //
+  // The problem's real shape is "choose which d cells take the digit d", i.e. pick an
+  // INDEPENDENT SET of size d per digit, largest digit first — the tightest choice is
+  // made when the board is emptiest, and a wrong choice is refuted immediately rather
+  // than 20 cells later. Same puzzle, same budget: seated in well under a millisecond.
+  function countingCircleFill(model, S, pinIdx, pinDigit, ctl) {
+    var n = model.n, adj = model.adj, i, d;
+    for (i = 0; i < S.length; i++) if (S[i] > model.maxIndep) return null;
+    if (pinIdx >= 0) {
+      if (S.indexOf(pinDigit) < 0) return null;
+      if (!(model.dom[pinIdx] & (1 << pinDigit))) return null;
     }
-    return { sup: sup, feasible: feasible, bailed: bailed };
+    var assign = new Int8Array(n);
+    for (i = 0; i < n; i++) assign[i] = -1;
+    var digits = S.slice().sort(function (a, b) { return b - a; });   // biggest first
+
+    // Cells still free that may take d — and, when a pin is in force, the pinned cell
+    // is compulsory for its own digit and barred from every other.
+    function candidatesFor(d) {
+      var out = [];
+      for (var k = 0; k < n; k++) {
+        if (assign[k] >= 0) continue;
+        if (!(model.dom[k] & (1 << d))) continue;
+        if (pinIdx === k && d !== pinDigit) continue;
+        out.push(k);
+      }
+      return out;
+    }
+    function conflictsWithChosen(cell, chosen) {
+      for (var t = 0; t < chosen.length; t++) if (adj[chosen[t] * n + cell]) return true;
+      return false;
+    }
+    function placeDigit(di) {
+      if (--ctl.nodes <= 0) throw new Error('ccNodes');
+      if ((ctl.nodes & 255) === 0 && Date.now() > ctl.deadline) throw new Error('ccTime');
+      if (di === digits.length) return true;                 // Σ S = n, so all cells are covered
+      d = digits[di];
+      var cands = candidatesFor(d);
+      if (cands.length < d) return false;
+      var mustTakePin = (pinIdx >= 0 && d === pinDigit && assign[pinIdx] < 0);
+      var chosen = [];
+      function pick(from, left) {
+        if (--ctl.nodes <= 0) throw new Error('ccNodes');
+        if (left === 0) {
+          for (var a = 0; a < chosen.length; a++) assign[chosen[a]] = d;
+          if (placeDigit(di + 1)) return true;
+          for (a = 0; a < chosen.length; a++) assign[chosen[a]] = -1;
+          return false;
+        }
+        // not enough candidates left to finish this digit
+        if (cands.length - from < left) return false;
+        for (var idx = from; idx < cands.length; idx++) {
+          var cell = cands[idx];
+          if (conflictsWithChosen(cell, chosen)) continue;
+          chosen.push(cell);
+          if (pick(idx + 1, left - 1)) return true;
+          chosen.pop();
+        }
+        return false;
+      }
+      if (mustTakePin) {
+        // The pinned cell must be one of this digit's copies — seed it, so the
+        // enumeration below only ever produces sets containing it.
+        chosen.push(pinIdx);
+        var rest = cands.filter(function (c) { return c !== pinIdx; });
+        var saved = cands; cands = rest;
+        var ok = pick(0, d - 1);
+        cands = saved;
+        if (ok) return true;
+        chosen.pop();
+        return false;
+      }
+      return pick(0, d);
+    }
+    if (!placeDigit(0)) return null;
+    var out = new Array(n);
+    for (i = 0; i < n; i++) out[i] = assign[i];
+    return out;
+  }
+
+  // Which candidate subsets survive, with a witness where one was found.
+  //
+  // A SUBSET IS LIVE UNLESS IT IS *PROVED* INFEASIBLE — and getting this backwards is
+  // an over-removal, not merely a weak answer. `allowed` (below) is the union of the
+  // digits live subsets use, and a candidate is removed when no live subset offers it;
+  // so dropping a subset we merely FAILED TO SEAT IN TIME removes digits the puzzle
+  // actually permits. v3.177 had it the other way round, which is why a timeout on a
+  // 26-circle grid could have emptied cells. Each subset gets its own node cap so one
+  // hard subset cannot consume the run and silently condemn all the others.
+  // Returns { live:[{S, w|null}…], proved, unknown }.
+  function countingCircleSeatable(model, subsets, ctl) {
+    var live = [], proved = 0, unknown = 0;
+    for (var i = 0; i < subsets.length; i++) {
+      var cap = Math.min(CC_SUBSET_NODES, ctl.nodes);
+      var sub = { nodes: cap, deadline: ctl.deadline };
+      var w = null, unk = false;
+      try { w = countingCircleFill(model, subsets[i], -1, 0, sub); }
+      catch (e) { unk = true; }
+      ctl.nodes -= (cap - sub.nodes);
+      if (unk) { live.push({ S: subsets[i], w: null }); unknown++; }
+      else if (w) { live.push({ S: subsets[i], w: w }); proved++; }
+      // else: exhaustively PROVED infeasible → genuinely dropped
+    }
+    return { live: live, proved: proved, unknown: unknown };
+  }
+
+  // The complete-support answer: per circle cell, the digits some legal whole-set
+  // seating puts there. Witness-reuse — one seating supports every (cell, digit) pair
+  // it contains, so only unwitnessed pairs need a targeted search (the
+  // `sameDiffExactFills` shape).
+  //
+  // TWO-TIER, AND THE FALLBACK IS THE POINT. Tier 1 = the union of the digits any
+  // SEATABLE subset uses, which is the sum equation's own answer and already carries
+  // most of the value (three circles ⇒ only 1,2,3 survive). Tier 2 refines it per
+  // cell. Every tier-2 search gets its OWN small node cap, and an overrun means
+  // "assume supported" — an under-removal, never a wrong one — so a hard pair can
+  // neither starve the others nor turn into a wrong answer.
+  // Returns { sup:[Set…], feasible:<seatable subset count>, bailed:<bool> }.
+  function countingCircleSupport(model, doms, subsets, ctl) {
+    var n = model.n, i, j;
+    var seat = countingCircleSeatable(model, subsets, ctl);
+    var live = seat.live;
+    var bailed = seat.unknown > 0;
+    var sup = [];
+    for (i = 0; i < n; i++) sup.push(new Set());
+    // Every subset PROVED infeasible → nothing can be seated. Sound to report as-is:
+    // the empty support becomes the caller's emptied-cells contradiction.
+    if (!live.length) return { sup: sup, feasible: 0, bailed: false, proved: seat.proved };
+
+    // Tier 1 — the sum equation's own answer: a digit survives anywhere it is used by
+    // some live subset. This is where most of the value is, and it is nearly free.
+    var allowed = {}, unknownDigit = {};
+    live.forEach(function (L) {
+      L.S.forEach(function (d) {
+        allowed[d] = 1;
+        if (!L.w) unknownDigit[d] = 1;    // reachable only via a subset we couldn't settle
+      });
+      if (L.w) for (var k = 0; k < n; k++) sup[k].add(L.w[k]);
+    });
+    function tier1() {
+      for (var k = 0; k < n; k++) {
+        var s = new Set();
+        doms[k].forEach(function (d) { if (allowed[d]) s.add(d); });
+        sup[k] = s;
+      }
+      return { sup: sup, feasible: live.length, bailed: true, proved: seat.proved };
+    }
+    if (Date.now() > ctl.deadline) return tier1();
+
+    // Tier 2 — refine per cell, but ONLY where tier 1's answer rests entirely on
+    // subsets we actually seated. A digit reachable through an unsettled subset must
+    // be presumed supported: we have no proof either way, and guessing "no" removes it.
+    for (i = 0; i < n; i++) {
+      if (Date.now() > ctl.deadline) { bailed = true; break; }
+      var ds = Array.from(doms[i]);
+      for (var q = 0; q < ds.length; q++) {
+        var d = ds[q];
+        if (!allowed[d] || sup[i].has(d)) continue;
+        if (unknownDigit[d]) { sup[i].add(d); continue; }
+        if (Date.now() > ctl.deadline) { bailed = true; break; }
+        var seatedHere = false, unsure = false;
+        for (var L = 0; L < live.length; L++) {
+          if (!live[L].w || live[L].S.indexOf(d) < 0) continue;
+          var cap = Math.min(CC_PAIR_NODES, ctl.nodes);
+          var sub = { nodes: cap, deadline: ctl.deadline };
+          var w = null;
+          try { w = countingCircleFill(model, live[L].S, i, d, sub); }
+          catch (e) { unsure = true; }
+          ctl.nodes -= (cap - sub.nodes);
+          if (unsure) break;
+          if (w) { for (var m = 0; m < n; m++) sup[m].add(w[m]); seatedHere = true; break; }
+        }
+        // Couldn't settle this pair in its own budget → assume supported (under-remove).
+        if (unsure && !seatedHere) { sup[i].add(d); bailed = true; }
+      }
+    }
+    // A deadline hit part-way leaves later cells un-refined; they must fall back to
+    // tier 1 rather than keep a partial answer that was never computed for them.
+    if (bailed) for (i = 0; i < n; i++) doms[i].forEach(function (d) { if (allowed[d]) sup[i].add(d); });
+    return { sup: sup, feasible: live.length, bailed: bailed, proved: seat.proved };
   }
 
   function computeCountingCircleRemovals(unitFilter) {
@@ -8404,27 +8574,42 @@
 
     var mustDiffer = makeMustDiffer();
     var full = keys.map(function () { return st.fullSet; });
+    // ONE deadline for the WHOLE run — structural pass, every fixpoint round, all of
+    // it. This runs synchronously on the UI thread, so the only guarantee worth making
+    // to the player is a wall-clock one; past it everything degrades to the tier-1
+    // (sum-equation) answer, which is sound and still removes.
+    var ctl = { nodes: 2000000, deadline: Date.now() + CC_BUDGET_MS };
 
     // STRUCTURAL, i.e. MARK-INDEPENDENT (v3.157 contract): can this many circles be
     // seated AT ALL, with every cell free? Over 1-9 the sum is unreachable past 45,
     // and a reachable total can still be unseatable — n = 45 needs nine mutually
     // non-conflicting circles holding 9. Either way it means WE claimed the wrong
     // circle set, not that the puzzle is broken: drop it, count it, report it, and
-    // never wipe the marks over it.
-    var structural = countingCircleSupport(keys, full, subsets, mustDiffer, { n: 400000 });
-    if (!structural.feasible) return { noCountingCircles: true, invalid: 1 };
+    // never wipe the marks over it. Only the SEATABLE test is needed here, not the
+    // per-cell support loop — asking for the full answer was half the wasted work.
+    var fullModel = countingCircleModel(keys, full, mustDiffer);
+    var struct = countingCircleSeatable(fullModel, subsets, ctl);
+    // A bail here proves nothing either way, so it must NOT read as "impossible".
+    if (!struct.live.length && !struct.bailed) return { noCountingCircles: true, invalid: 1 };
 
     var values = st.values, centre = st.centre;
-    var removals = [], seen = {}, bailed = false;
+    var removals = [], seen = {}, bailed = struct.bailed;
     var changed = true, guard = 0;
-    while (changed && guard++ < 200) {
+    // Each round must remove at least one candidate to continue, so the loop is
+    // bounded by the candidate count anyway; the guard is belt-and-braces and the
+    // deadline is the real limit.
+    while (changed && guard++ < 30) {
       var doms = keys.map(function (k) {
         if (values[k] != null) return new Set([values[k]]);
         if (centre[k]) return centre[k];
         return st.fullSet;                       // empty cell → unconstrained, never modified
       });
-      var res = countingCircleSupport(keys, doms, subsets, mustDiffer, { n: 400000 });
+      var res = countingCircleSupport(countingCircleModel(keys, doms, mustDiffer),
+                                      doms, subsets, ctl);
       if (res.bailed) bailed = true;
+      // No seatable subset under the CURRENT marks is a mark contradiction, not a
+      // structural one — fall through and let the removals empty the cells, which is
+      // the uniform "no valid combination" report.
       var before = removals.length;
       keys.forEach(function (k, i) {
         if (values[k] != null || !centre[k]) return;
@@ -8436,6 +8621,7 @@
         });
       });
       changed = removals.length > before;
+      if (Date.now() > ctl.deadline) break;
     }
 
     var emptied = 0;

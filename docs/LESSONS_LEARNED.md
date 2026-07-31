@@ -143,6 +143,38 @@ confirmed against the puzzles' own published solutions.
   turquoise *same-difference* lines. Same trap as `vd0mn9xqjw`'s green whispers; the DOM outranks
   `cp.thermos` (v3.169) for good reason.
 
+## A NODE CAP IS A PROXY FOR TIME — measure what a node costs, or use a deadline (v3.178)
+
+The counting-circle validator (v3.177) shipped with a 400k node cap and a docs row saying the cap was
+"not reached on any catalog puzzle". **That was asserted, not measured, and it was false.** The first
+real use — a 26-circle grid with every candidate pencilled, i.e. any grid a player has filled in —
+burned the whole budget in **6.4 seconds**, and the compute called it once for the structural test
+and again per fixpoint round. The tab froze until reload.
+
+- ✅ **Bound UI-thread work by the CLOCK, not by node count.** A node cap only means something once
+  you know what a node costs; here each node was `O(n²·|S|)` because the conflict test re-scanned
+  every cell and re-derived `mustDiffer` (a *string split per pair*). One wall-clock deadline for the
+  whole run is the guarantee actually worth making to the player.
+- ✅ **Give each search its OWN cap, never one shared budget.** With a shared budget the first few
+  hard subsets ate all 400k nodes and every later subset was starved — and, because of the bug below,
+  silently condemned.
+- 🔑 **CHECK WHICH DIRECTION A TIMEOUT PUSHES THE ANSWER.** This is the one that could have corrupted
+  a grid rather than merely hanging. The support answer is "the union of digits over *seatable*
+  subsets", so a subset dropped for timing out **shrinks** that union and removes digits the puzzle
+  allows. The rule has to be *live unless PROVED infeasible*, so that running out of time can only
+  cost eliminations, never invent them. Same shape as the between/lockout `interiorsFeasible` cap
+  (answer FEASIBLE on overrun) — worth checking explicitly for any new search.
+- 🔑 **MRV is blind when every variable has the same domain.** Assigning digits to cells one cell at a
+  time looked like the obvious formulation, but on a pencilled grid every circle starts with the same
+  options, so the heuristic picks arbitrarily. The subset the published solution uses on `dGL3DgJgJd`
+  was **not found in 5,000,000 nodes**. Reformulating the same problem digit-major — *choose which `d`
+  cells take the digit `d`*, largest digit first — found it in **55**. When a search thrashes, suspect
+  the formulation before the heuristics: pick the axis where the choices are genuinely constrained.
+- ✅ **A clique cover bounds the max independent set for free**, and the bound is mark-independent. "d
+  copies of a digit need d mutually non-conflicting cells, and no independent set exceeds the number
+  of cliques covering the graph" refuses whole subsets before a single node — on a circle set the
+  cliques are essentially the occupied rows.
+
 ## Region / shaded-region geometry
 
 - ✅ **`path.cage-extraregion` only ever means a *checked* region (digit-uniqueness enforced), never cosmetic shading.** Verified via `window.convertedPuzzle.cages`: those paths come from cages with `style:"extraregion", unique:true, sum:45` (a real 1-9 no-repeat constraint). The cage `style` tally on a normal puzzle is `region` (the 9 boxes), `rowcol` (rows+cols), and `extraregion`. Purely decorative grey shading lives in a **separate `cosmetic` array** and renders through a different path — it does NOT get the `cage-extraregion` class. So scoping Easy Shade to `path.cage-extraregion` is safe: it never colours non-constraint decoration. (`window.convertedPuzzle` is the handy decoded-puzzle global; the `/api/puzzle/<id>` response is `fpuz…` = LZString-compressed f-puzzles, not directly readable.)

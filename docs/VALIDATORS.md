@@ -440,18 +440,47 @@ trip it (which is also why `df7B2RJ4gB`'s 5 black dots are irrelevant there).
 `nmhixakego` (player draws the markers), `hqa07qdm2h` (all circles outside the grid), `n4FR3FtL4D`
 (letters), `pbz4ij1joh` (card suits). `< 2` circles → `none`, so the row is simply not listed.
 
-### Algorithm
+### Algorithm — and the v3.177 freeze that reshaped it
 
-`countingCircleSums` enumerates every positive-digit subset summing to `n` (at most ~30 over 1-9 —
-no cap needed). `countingCircleFill` seats one subset by fewest-options-first backtracking under
-`makeMustDiffer`, returning a **witness**. `countingCircleSupport` reuses witnesses: one seating
-supports every `(cell, digit)` pair it contains, so only unwitnessed pairs need a targeted search —
-the `sameDiffExactFills` shape. Iterated to a fixpoint, since a removal can kill a subset outright.
+`countingCircleSums` enumerates every positive-digit subset summing to `n` (≤ ~30 over 1-9, no cap
+needed). `countingCircleModel` precomputes, once per run, the conflict adjacency, per-cell domain
+**bitmasks**, and `maxIndep`. `countingCircleFill` seats one subset and returns a **witness**;
+`countingCircleSeatable` classifies every subset; `countingCircleSupport` reuses witnesses (one
+seating supports every `(cell, digit)` pair it contains) and only searches for unwitnessed pairs.
+Iterated to a fixpoint.
 
-**Structural test runs first, mark-free** (`st.fullSet` in every cell): if no subset is seatable at
-all, the clue is dropped and reported as `invalid` — our misread, not the puzzle's error. A set that
-is seatable in principle but not under the current marks is a real contradiction and goes down the
-normal emptied-cells red-error path.
+**v3.177 froze the tab on the first real puzzle**, and fixing it changed three things that are each
+worth keeping in mind for any future search:
+
+1. **THE SEARCH IS DIGIT-MAJOR, NOT CELL-MAJOR.** Assigning digits to cells one cell at a time gives
+   MRV nothing to work with: on a pencilled grid every circle starts with the same `|S|` options, so
+   the heuristic picks arbitrarily and the tree is explored almost blind. On `dGL3DgJgJd` the subset
+   the published solution uses (`1+3+4+5+6+7 = 26`) was **not found in five million nodes**. The
+   problem's real shape is *"choose which `d` cells take the digit `d`"* — an independent set per
+   digit, **largest digit first**, so the tightest choice is made when the board is emptiest and a
+   wrong one is refuted at once. Same puzzle, same budget: **55 nodes**.
+2. **A CLIQUE-COVER BOUND (`maxIndep`) refuses whole subsets before any search.** No independent set
+   is larger than the number of cliques covering the graph, so a digit `d > maxIndep` is instantly
+   impossible. On real circle sets the cliques are essentially the occupied rows — `dGL3DgJgJd`'s 26
+   circles span 8 rows, so every subset containing a 9 dies for free. It is also **mark-independent**,
+   so it survives a starved run (the harness asserts exactly that).
+3. **A SUBSET IS LIVE UNLESS *PROVED* INFEASIBLE — the soundness direction, which v3.177 had
+   backwards.** `allowed` is the union of digits over live subsets and a candidate is removed when no
+   live subset offers it, so dropping a subset we merely *failed to seat in time* removes digits the
+   puzzle permits. Now a timeout leaves the subset live (and any digit reachable only through an
+   unsettled subset is presumed supported), so **starvation can only cost eliminations, never invent
+   them**. Per-search caps are per-subset and per-pair rather than one shared budget, so a single
+   hard search can't starve every later one.
+
+Costs are bounded by one 600 ms wall-clock deadline (`CC_BUDGET_MS`) covering the structural pass and
+every fixpoint round together — the search is synchronous on the UI thread, so that, not a node
+count, is the guarantee worth making. Measured after the rework: 14 circles < 1 ms, 15 circles ~1 ms,
+26 circles 16 ms, 36 circles 3 ms.
+
+**Structural test runs first, mark-free** (`st.fullSet` in every cell): if every subset is *proved*
+infeasible, the clue is dropped and reported as `invalid` — our misread, not the puzzle's error. A
+bail proves nothing and must never read as impossible. A set seatable in principle but not under the
+current marks is a real contradiction and goes down the normal emptied-cells red-error path.
 
 ## Menu behaviour (v3.66 rework: toggle popup, detection-gated items, selection-only, fog gate)
 
@@ -781,7 +810,7 @@ pencilmarks and real conflict matrices against a 60M-node reference:**
 | **Ten line** (`lineSupport`) | every complete fill, digits REPEAT | **11 open cells** | **was broken** → `tenLineTilingSupport` fallback (v3.155). |
 | **Region sum** (`enumSegment`) | every distinct-cell ordering | **7-cell segment** | **was broken** → `regionSumSegmentSupport`, subsets + matching (v3.156). |
 | **Same difference** (`sameDiffExactFills`, 200k) | every fill at one difference `d`; branches ≤2 per cell (`prev±d`) | not reached on any real line — only runs when the line has internal conflicts or is a loop, stops as soon as every arc-consistent value is witnessed | **safe by CONSTRUCTION** (v3.159) — a bail falls back to the arc-consistent domains, which are a sound over-approximation, so it keeps every elimination the chain relation alone proves. A cap whose bail still removes is a different animal from one that gives up on the clue. |
-| **Counting circle** (`countingCircleFill`, 400k shared across the whole support pass) | one seating of the WHOLE circle set per candidate subset | not reached on any catalog puzzle — the largest circle set measured is 36 (`i9wx9vdy41`), subsets are ≤ 9 distinct digits, and fewest-options-first plus exact per-digit counts prune hard | **safe by DEGRADATION** (v3.177) — a bail falls back to the union of the digits any seatable subset uses, which is the sum equation's own answer and a sound over-approximation, so the pass still removes what `Σ S = n` alone proves. Same shape as `sameDiffExactFills`: the cap costs the extra eliminations the conflict matrix would have added, never the whole clue |
+| **Counting circle** (`countingCircleFill`; per-subset 150k, per-pair 30k, **plus a 600 ms wall-clock deadline for the whole run**) | one seating of the WHOLE circle set per candidate subset, digit-major | **v3.177 shipped this row as "not reached on any catalog puzzle" — the claim was ASSERTED, not measured, and it was false.** A 26-circle grid with every candidate pencilled exhausted the whole budget in 6.4 s and froze the tab. Measured after the v3.178 rework: 26 circles = **16 ms**, 36 = 3 ms, and the subset the published solution uses seats in **55 nodes** (it was unreachable in 5,000,000) | **safe by DEGRADATION + a DEADLINE** (v3.178) — see the counting-circle section. A cap or deadline hit leaves the subset *live*, so the run falls back to the sum-equation answer and can only remove less. **A node cap is a proxy for time and is only a good one once you have measured what a node costs — prefer a deadline.** |
 | **Between + Lockout** (`interiorsFeasible`, 20k) | ONE seating of the interiors, not all of them | not reached on any real line — interiors are ≤ ~15 cells over ≤ 9 digits and repeats are legal unless conflicting, so a solution is found greedily | **safe by SHAPE** (v3.120, shared v3.167) — it seeks a single witness and answers FEASIBLE on overrun, i.e. under-remove. Lockout's memo keys on `(lo, hi)` plus the one forced cell, and an infeasible base interval short-circuits before any forced search runs, so the exhaustive-failure case is bounded by the distinct-interval count (≤ ~15), not by pairs × cells × digits. |
 
 The pattern: a cap is fine when the **pruning strength tracks the constraint strength** (both
