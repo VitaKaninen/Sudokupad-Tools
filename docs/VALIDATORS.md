@@ -242,7 +242,21 @@ is a decoy. Inferring sums from cage-corner text would fire this validator on a 
 eliminate correct candidates. Only `cage.sum` / `cage.value` counts. Such a cage is nonetheless
 COUNTED by `countSumlessKillerCages` so the menu row still appears — see below.
 
-## Solution-refuted clues — mute, never announce (v3.182)
+## Solution-refuted clues — mute, never announce (v3.182) — ⚰️ DELETED v3.189
+
+> **`muteSolutionRefuted` no longer exists.** Kept below as the record of what was built and
+> measured. VALIDATOR_POLICY.md §5: the solution may certify a puzzle and identify a ruleset, but it
+> **may never silence a check** — a muted clue came back inside a green "checked 29 cages, nothing to
+> remove", which diagnoses (P2) and lies (P3). All six call sites are gone and no validator adds
+> muted clues back into its count; the harness asserts both, so the shape cannot come back quietly.
+>
+> **What survives.** Point 1 below (detection means "is one DRAWN") is still right — sum-less cages
+> keep the Cages row listed. What changed is that they are now reported **UNCHECKED** rather than
+> counted as checked, and they *are* explained: the "no explanatory note" rule in point 1 was
+> overruled, because a player told "nothing was checked" has learnt nothing about *why*, while being
+> silently told "all clear" is the far worse failure. The 17.1% measurement stands and now argues for
+> the §6 multi-ruleset cage reading rather than for going quiet. `solutionDigitsFor` is deliberately
+> kept, unused, for that work.
 
 **The menu was an oracle.** A validator was listed iff its clue was *checkable*, so on a puzzle
 with decoy clues the dropdown told the player which drawings were real — earlier and more

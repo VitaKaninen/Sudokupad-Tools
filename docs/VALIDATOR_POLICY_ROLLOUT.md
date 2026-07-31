@@ -75,7 +75,21 @@ VALIDATOR banner item 1 and `VALIDATORS.md` "The third outcome".
 
 **Ship it.** Bump, harness green, commit. Nothing below is safe until this exists.
 
-## Phase 2 — delete the mute
+## Phase 2 — delete the mute — ✅ LANDED v3.189.0
+
+**What shipped.** `muteSolutionRefuted` and all six call sites deleted; every `count + mute.muted`
+add-back removed. Sum-less cages moved off the checked total onto Phase 1's `unchecked` channel
+("we could not read a total for them" — a reason that names *our* limit, not the puzzle's trick).
+`cagesShown` now holds only the zero-combination cages, still folded into the count — Phase 3's job.
+The probe, `probeInfo`, `probeSystematic` and `buildSolutionProbeState` all stay (trap 2), and
+`solutionDigitsFor` is kept unused for §6. Harness: the 11 mute cases were **replaced**, not
+repaired (trap 1) — they now assert the deletion holds, so reintroducing the mute or any add-back
+turns the harness red. 451 pass.
+
+**Expected regression, do not "fix" (trap 4 territory).** Decoy clues now fail loudly instead of
+passing silently — that is the point (`yiaonocy5d`, `bH8FJtL3F3`). On variant-cage puzzles with a
+published solution the per-cage mute is gone, so those cages get checked as sums and fail; §6 is the
+real cure.
 
 - Delete `muteSolutionRefuted` (≈7872) and all six call sites: Kropki (≈7913), XV (≈8143),
   difference dot (≈8409), cage (≈9172), thermo (≈13766), arrow (≈14099).

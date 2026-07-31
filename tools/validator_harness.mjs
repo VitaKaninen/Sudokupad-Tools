@@ -119,9 +119,10 @@ const NAMES = [
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
   'sanitizeDigitSet', 'entropicBands', 'modularBands',
-  // solution-refuted clue muting (getPuzzleSolution itself is Framework/DOM-bound,
-  // so the factory injects a shim for it and these two are tested against it)
-  'solutionDigitsFor', '_solutionProbe', 'muteSolutionRefuted',
+  // solution reading (getPuzzleSolution itself is Framework/DOM-bound, so the
+  // factory injects a shim for it). muteSolutionRefuted was extracted here until
+  // v3.189 deleted it — see "the solution may never silence a check" below.
+  'solutionDigitsFor', '_solutionProbe',
   // wrogn / liar declarations + the clue-type-named test (v3.186)
   'WROGN_DECLARED_RE', 'TYPE_CHOICE_RE', 'rulesDeclareUnreliable',
   // the third outcome — UNCHECKED reporting (v3.188, VALIDATOR_POLICY.md §3)
@@ -1501,52 +1502,51 @@ checkTrue('cc support: a starved run never empties a cell',
 checkTrue('cc support: starvation costs eliminations, never invents them',
   starvedSup.sup.every((s, i) => Array.from(dglSup.sup[i]).every((d) => s.has(d))));
 
-// ── solution-refuted clue muting (v3.182) ────────────────────────────────────
-// Anchored to yiaonocy5d ("...What?"), the troll 6x6 that forced this: its cage
-// is drawn and labelled 16 by a COSMETIC underlay, while the puzzle's own
-// solution puts 14 there. See docs/VALIDATORS.md, "Solution-refuted clues".
+// ── the solution may never silence a check (v3.189) ──────────────────────────
+// This block USED to prove that muteSolutionRefuted worked: that yiaonocy5d's
+// cosmetic "16" was dropped, and that the dropped clue was added back into the
+// reported count "so the unit count shows no gap". Those cases encoded the OLD
+// policy, and VALIDATOR_POLICY.md §5 deletes the behaviour they protected — a
+// muted clue came back as part of a green all-clear, which diagnoses (P2) and
+// lies (P3). The cases are therefore REPLACED, not repaired.
+//
+// They now guard the deletion instead. Reintroducing the mute — or any of its
+// six count add-backs — turns this red, which is the point: restoring code to
+// make a red test green is the single most likely way this rollout gets
+// silently reverted.
 {
   const sol = '426153315264163542254631542316631425', N = 6, grid = {};
   for (let i = 0; i < N * N; i++) grid[(i % N) + ',' + Math.floor(i / N)] = +sol[i];
   const K = ['0,4', '1,4', '2,4', '3,4'];          // r5c1-r5c4, the labelled cage
-  // The cage predicate as computeCageRemovals states it: distinct digits summing
-  // to the total. Kept in step with the shipping copy by construction — both read
-  // solutionDigitsFor and nothing else.
-  const cageHolds = (cage, g) => {
-    const d = F.solutionDigitsFor(cage.keys, g);
-    if (!d) return null;
-    let s = 0; const seen = {};
-    for (const x of d) { if (seen[x]) return false; seen[x] = 1; s += x; }
-    return s === cage.sum;
-  };
-  const keptCount = (units, holds) => F.muteSolutionRefuted(units, holds).kept.length;
 
+  // Matches a declaration or a call, not the prose that explains the deletion —
+  // the comments naming it are the record of WHY and must survive.
+  checkFalse('solution: muteSolutionRefuted is gone and stays gone (policy §5)',
+    /muteSolutionRefuted\s*\(/.test(src));
+  // The add-backs were the actual lie: `count + mute.muted` reported a skipped
+  // clue as a checked one. No validator may reconstruct that shape.
+  checkFalse('solution: no validator adds muted clues back into its checked count',
+    /Mute\.muted/.test(src));
+  checkFalse('solution: no validator keeps a mute partition at all',
+    /Mute\.kept/.test(src));
+
+  // solutionDigitsFor SURVIVES the deletion and is deliberately kept unused: §6
+  // needs exactly this to identify which ruleset a cage is using — the solution
+  // making a validator stronger, which is a permitted use. Still tested so it
+  // cannot rot while it waits.
   harnessSolution.grid = grid;
-  check('mute: solutionDigitsFor reads cells in the clue\'s own order',
+  check('solution: solutionDigitsFor reads cells in the clue\'s own order',
     F.solutionDigitsFor(K, grid), [5, 4, 2, 3]);
-  check('mute: an off-grid cell yields no digits (never scored either way)',
+  check('solution: an off-grid cell yields no digits (never scored either way)',
     F.solutionDigitsFor(['9,9'], grid), null);
-  check('mute: the cosmetic "16" is refuted by the solution\'s 14',
-    keptCount([{ keys: K, sum: 16 }], cageHolds), 0);
-  check('mute: the true total is kept',
-    keptCount([{ keys: K, sum: 14 }], cageHolds), 1);
-  check('mute: a cage we cannot read is kept, not scored',
-    keptCount([{ keys: ['9,9', '1,4'], sum: 5 }], cageHolds), 1);
-  check('mute: only the refuted units go, the honest one stays',
-    F.muteSolutionRefuted([{ keys: K, sum: 16 }, { keys: K, sum: 14 }, { keys: K, sum: 99 }],
-      cageHolds).muted, 2);
-  check('mute: muted count is reported so the unit count shows no gap',
-    F.muteSolutionRefuted([{ keys: K, sum: 16 }], cageHolds).muted, 1);
-  // FAIL OPEN is the safety property: without a trustworthy solution, or when the
-  // predicate itself breaks, behaviour must be byte-identical to pre-v3.182.
-  check('mute: a throwing predicate keeps the unit',
-    keptCount([{ keys: K, sum: 16 }], () => { throw new Error('boom'); }), 1);
-  check('mute: an undecided (null) predicate keeps the unit',
-    keptCount([{ keys: K, sum: 16 }], () => null), 1);
+  check('solution: an empty key list decides nothing',
+    F.solutionDigitsFor([], grid), null);
+  // The fact the old mute acted on, kept as a fact: yiaonocy5d's cage really is
+  // 14, not the 16 its cosmetic underlay draws. Under the new policy that cage is
+  // CHECKED as a 16 and FAILS, which is how the troll teaches the player.
+  check('solution: the cosmetic "16" really is a 14 — now a loud failure, not a mute',
+    F.solutionDigitsFor(K, grid).reduce((a, b) => a + b, 0), 14);
   harnessSolution.grid = null;
-  check('mute: no solution -> nothing is muted, however hostile the predicate',
-    keptCount([{ keys: K, sum: 16 }, { keys: K, sum: 14 }], () => false), 2);
-  check('mute: an empty unit list is safe', keptCount([], cageHolds), 0);
 }
 
 // ── the third outcome: UNCHECKED reporting (v3.188) ──────────────────────────
