@@ -84,6 +84,26 @@ Every clue a validator touches lands in exactly one of three buckets:
 | **CHECKED — VIOLATED** | read under a rule we trust; candidates lack support | eliminations / highlights, **loud** |
 | **UNCHECKED** | we could not read it under any rule we trust | **counted separately and named**, never green |
 
+**Only the third pile is new.** CLEAN and VIOLATED are the two the code already has and they work;
+they are listed to define the space, not because they need building. The entire change is that
+UNCHECKED stops being folded into CLEAN.
+
+**CLEAN and VIOLATED are not different colours, and shouldn't be.** Both mean "the validator did its
+job"; finding a violation *is* the tool succeeding, not a warning. The player already sees which one
+happened — there are orange marks or removed digits on the board, or there aren't. Recolouring the
+toast on top of that is redundant. The colour axis carries something else entirely: **how much of
+the run you can trust.**
+
+| colour | when | example |
+|---|---|---|
+| **green** (`success`) | run completed, **every** clue checked — with or without violations found | *"14 cages checked, nothing to remove."* / *"Removed 6 candidates across 14 cages."* |
+| **amber** (`warning`) | run completed but **qualified** — some clues unchecked, or clues holding cells with no candidates | *"12 of 14 cages checked… 2 cages were not checked."* |
+| **red** (`error`) | a genuine error — a cell was left with **zero** candidates (contradiction), or a clue is **structurally impossible** as read (our misread, v3.157) | existing `noValidComboHighlightMsg`, `invalidClueMsg` |
+
+This is not a new scheme. `okType()` already returns `'warning'` when the missing-candidates check
+fires and `'success'` otherwise, and the emptied-cell path is already `'error'`. UNCHECKED joins the
+existing amber bucket alongside them — same precedent, one more reason to reach for it.
+
 An UNCHECKED clue is not a failure and not a pass. It is an abstention, and the toast must say so:
 
 > *"Cages — 12 of 14 checked, nothing to remove. 2 cages were not checked (their corner number is
@@ -237,25 +257,33 @@ message.
 > "I did not intend to completely disable the validators, just make it so that hovering over the
 > eyeball icon had no effect other than to explain the reason why it was disabled." — 2026-07-23
 
-Three separate rules:
+Three rules:
 
 1. **The 👁 preview is disabled on any fogged puzzle**, with a tooltip saying why. It isn't a run —
    it draws *every* clue of the type, including ones still under fog, so it leaks directly.
-2. **A whole-puzzle run skips any clue with a cell still fogged** (`combineFogFilter`). Validating a
-   half-hidden clue tells the player where the rest of it is.
-3. **A selection run may proceed even on fogged cells.** The player chose those cells; deducing over
-   what they can see is exactly what solving the puzzle requires of them anyway.
+   *(Already true.)*
+2. **A clue is only ever validated when every one of its cells is revealed** — `combineFogFilter`
+   requires `keys.every(k => !isFogged(k))` and ANDs that into the selection filter, so it holds in
+   **every** mode including selection. Validating a half-hidden clue would tell the player where the
+   rest of it is. *(Already true, and stricter than previously described here.)*
+3. **Every validator row is greyed on a fogged puzzle**, forcing the player through "Validate
+   selection only" — they pick the clue they want checked. **This is a change from current code**,
+   where fog puzzles list and run rows normally.
 
-> "if they want to validate something on their own, even if it is fogged, then that is absolutely
-> something that they would need to be able to do anyway to solve the puzzle." — 2026-08-01
+Rule 3 is what makes fog need no special reporting rule. A whole-puzzle run would have to say
+*"5 of 12 cages checked"*, and the 12 is itself fogged content — but **a selection run reports only
+what was selected**, with no denominator (`cagesShown` skips the whole-puzzle sweep whenever
+`unitFilter` is set). Select two cages and it says two cages, not two of twenty. So §3's
+name-the-unchecked-count rule applies unchanged under fog; there is no exception to carve out.
 
-Rule 3 is a **change from current code** — `combineFogFilter` skips fogged clues in every mode.
+> "I want to make sure that this means that all the validators are always grayed out as well, so
+> that they must use the selector check box … This already solves the issue of revealing the number
+> of clues of that type in the puzzle." — 2026-08-01
 
-**Fog is the one place UNCHECKED is not named (§3).** "5 of 12 cages checked" would reveal that
-there are 12 cages, which is the fogged content itself. Under fog the count is reported silently.
-This is the single exception to the never-a-false-green rule, and it is defensible only because the
-player already knows the board is hiding things from them — the reading "I checked everything" isn't
-available to them the way it is on a clear board.
+**Left as-is deliberately:** rule 2 means a partly-fogged clue can't be validated even by explicit
+selection. That reading is what the code does today and it matches *"I don't want the validator to
+run under the fog when the player does not know where the rest of the clue is"*. Revisit only if it
+bites in play.
 
 ---
 
@@ -366,7 +394,7 @@ Every item below is a place where shipped behaviour contradicts this document.
 | `computeCageRemovals` zero-combination path (v3.183, ≈9194) | silently drops the cage | UNCHECKED with an honest, non-diagnostic reason |
 | v3.184 whole-puzzle cage gate | one impossible cage disables cage validation puzzle-wide, silently — 14 honest puzzles lose their cage validator at the measured 83% precision | remove. It pays a Road A price (silent loss on honest puzzles) to tidy a Road B case the player was already told about (§4). Replaced by per-cage UNCHECKED + §6 ruleset identification |
 | `validatorTrust` (≈14963) | `ok` means *live but neutered*; `drop` fires on probe + `validatorTypeNamedInRules` | `ok` must mean **fully live**. **Delete the `drop` branch** — a probe refutation is not a positive identification (§4), so it may not remove a row. `grey` via `rulesDeclareUnreliable` stays |
-| fog handling | `combineFogFilter` skips fogged clues in every mode; the 👁 is disabled | keep 1 and 2; **let a selection run proceed on fogged cells** (§4). Suppress the UNCHECKED count under fog |
+| fog handling | 👁 disabled and `combineFogFilter` are both correct; but rows list and run normally | **grey every row on a fogged puzzle** (§4 rule 3). Keep `combineFogFilter` exactly as it is. No special reporting rule needed — selection runs carry no denominator |
 | toast/summary text | says "nothing to remove" when clues went unchecked | three-bucket reporting per §3 |
 
 `probeInfo` / `buildSolutionProbeState` / `probeSystematic` are **kept** — the probe is the
