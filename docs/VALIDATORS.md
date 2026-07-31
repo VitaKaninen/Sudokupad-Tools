@@ -1,5 +1,12 @@
 # Validate Constraints — the validator subsystem
 
+> ⚠️ **POLICY IS NOT SET HERE.** [`VALIDATOR_POLICY.md`](VALIDATOR_POLICY.md) governs when a
+> validator may speak, stay silent, or disappear, and it **overrides this file wherever they
+> disagree**. Specifically superseded (2026-07-31): the v3.182 solution mute, the v3.183 silent
+> zero-combination cage, the v3.184 whole-puzzle cage gate, and the reading of v3.186's `ok` trust
+> as "row present but neutered". Those sections are kept below as the record of what was built and
+> measured — not as the design.
+
 *Split out of [PROJECT_SUMMARY.md](PROJECT_SUMMARY.md) on 2026-07-19 — it had grown to ~60% of that
 file. Same role: current state + architecture. Hard-won do/don't knowledge stays in
 [LESSONS_LEARNED.md](LESSONS_LEARNED.md); the in-code "ADDING A VALIDATOR" banner above
