@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.187.0
+// @version      3.188.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.187.0';
+  var SCRIPT_VERSION = '3.188.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -14668,7 +14668,17 @@
   // cross-cutting feature the others already carry, or it silently ships half-built
   // (e.g. no hover eyeball). When you ADD a validator, do ALL of these:
   //   1. A `compute(unitFilter)` fn returning { removals, emptiedCells, <unitCount>,
-  //      unsupported?, <none>?, invalid? }. `invalid` = how many clues were
+  //      unsupported?, <none>?, invalid?, unchecked?, uncheckedWhy? }.
+  //      <unitCount> is the CHECKED count and nothing else — never pad it with a
+  //      clue you skipped, muted or couldn't read.
+  //      `unchecked` = how many clues you DECLINED to check, with `uncheckedWhy`
+  //      naming the reason (see uncheckedMsg for the full contract and wording
+  //      rules). Return BOTH on EVERY exit path including the <none> one. This is
+  //      the third outcome, and it exists because folding "couldn't read it" into
+  //      "checked, nothing to remove" is a FALSE ALL-CLEAR: the player cannot tell
+  //      the two apart and acts on the first reading. Declining is fine and costs
+  //      only a convenience; pretending costs the solve.
+  //      `invalid` = how many clues were
   //      STRUCTURALLY IMPOSSIBLE (see invalidClueMsg): work out the loosest
   //      mark-independent bound your rule implies — a length the digit set can't
   //      supply, a total the cells can't reach — DROP those clues, count them, and
@@ -15502,6 +15512,54 @@
     if (!res.invalid) return null;
     return invalidClueMsg(res.invalid, def.unitNoun) + (msg ? ' — ' + msg : '');
   }
+  // ── THE THIRD OUTCOME: UNCHECKED (docs/VALIDATOR_POLICY.md §3) ─────────────
+  // A validator's job is to check the clue and say what it found. It may DECLINE
+  // to check. It may never PRETEND to have checked. So every clue a run touches
+  // lands in exactly one of THREE buckets, not two:
+  //   CHECKED-CLEAN     read under a rule we trust, every candidate supported
+  //   CHECKED-VIOLATED  read under a rule we trust, candidates removed/flagged
+  //   UNCHECKED         we could not read it under any rule we trust
+  // Only the third is new. Folding it into the first is the FALSE ALL-CLEAR this
+  // whole design exists to prevent: the player cannot tell "I checked it and it's
+  // fine" from "I checked nothing", and they act on the first reading.
+  //
+  // CLEAN AND VIOLATED ARE NOT DIFFERENT COLOURS. Both mean the validator did its
+  // job — finding a violation IS the tool succeeding — and the player already sees
+  // which one happened (there are orange marks or removed digits, or there aren't).
+  // The colour axis carries something else entirely: HOW MUCH OF THE RUN YOU CAN
+  // TRUST.
+  //   green   run completed, EVERY clue checked (with or without violations found)
+  //   amber   run completed but QUALIFIED — some clue unchecked, or a clue holds a
+  //           cell with no candidates left (the pre-existing mcWarn case)
+  //   red     a genuine error — a cell emptied (contradiction), or a clue
+  //           STRUCTURALLY impossible as read (invalidClueMsg, our misread)
+  //
+  // THE CONTRACT. A compute() returns `unchecked` (a count) and `uncheckedWhy`
+  // (the reason) on EVERY exit path including the <none> ones; absent means 0,
+  // i.e. "everything found was checked". The <unit>Count key stays the CHECKED
+  // count and must never absorb an unchecked clue.
+  //
+  // WORDING (VALIDATOR_POLICY.md §8 q2): state arithmetic the player could verify
+  // themselves, NEVER a diagnosis. "their corner number is not a sum of different
+  // digits" ✅ — "they are decoys" ❌ (that is the answer, and diagnosing is the
+  // solver's job). Naming a count does point at those clues; that leak was weighed
+  // and accepted, because it happens often enough on ordinary puzzles — our
+  // detection is not perfect — that it tips nobody off.
+  //
+  // `why` is one lowercase clause with no trailing stop, so it reads inside the
+  // parentheses. A selection run carries no denominator (compute filters first),
+  // so this needs no fog-specific variant.
+  function uncheckedMsg(n, unitNoun, why) {
+    return n + ' ' + pluralUnit(unitNoun, n) + (n === 1 ? ' was' : ' were') +
+           ' not checked' + (why ? ' (' + why + ')' : '') + '.';
+  }
+  // "12 of 14 cages" as soon as anything went unchecked, plain "14 cages" when
+  // nothing did — so a qualified run can never read as a whole-puzzle all-clear.
+  function checkedPhrase(count, unchecked, unitNoun) {
+    if (!unchecked) return count + ' ' + pluralUnit(unitNoun, count);
+    var total = count + unchecked;
+    return count + ' of ' + total + ' ' + pluralUnit(unitNoun, total);
+  }
   function validateAbortToast(reverted) {
     if (reverted) showRemoveInvalidToast('Stopped validating — unexpected change. Everything was reverted.', 'warning');
     else showRemoveInvalidToast('CRITICAL — unexpected change while validating, revert failed. Press Ctrl+Z until the puzzle looks right.', 'error');
@@ -15964,7 +16022,8 @@
     // would then read as "was already blank".
     var mcWarn = missingCandidatesWarning([{ def: def, mc: countCluesMissingCandidates(def, unitFilter) }]);
     function withWarn(msg) { return mcWarn ? mcWarn + ' ' + msg : msg; }
-    function okType() { return mcWarn ? 'warning' : 'success'; }
+    // Amber the moment the run is QUALIFIED — see okType in runSingleValidator.
+    function okType(unchecked) { return (mcWarn || unchecked) ? 'warning' : 'success'; }
     var comp;
     try { comp = def.compute(unitFilter); }
     catch (e) {
@@ -15974,15 +16033,22 @@
     }
     var note = comp.note || null;
     function withNote(msg) { return note ? msg + ' ' + note : msg; }
+    // The third outcome (see uncheckedMsg): clues found but declined, never folded
+    // into the checked count and never dropped from a message.
+    var unchecked = comp.unchecked || 0;
+    var uncMsg = unchecked ? uncheckedMsg(unchecked, def.unitNoun, comp.uncheckedWhy) : null;
+    function withUnchecked(msg) { return uncMsg ? msg + ' ' + uncMsg : msg; }
     if (comp.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
     if (comp[def.noneKey]) {
       if (comp.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + label + '" again.', 'warning'); return; }
       if (comp.wholeClue) { showRemoveInvalidToast(wholeClueMsg(def, comp.wholeClue), 'warning'); return; }
+      // Clues found, none of them read — the abstention IS the result here.
+      if (uncMsg) { showRemoveInvalidToast(withNote(uncMsg), 'warning'); return; }
       showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), note ? 'warning' : 'success');
       return;
     }
     var count    = comp[def.countKey] || 0;
-    var checked  = count + ' ' + pluralUnit(def.unitNoun, count);
+    var checked  = checkedPhrase(count, unchecked, def.unitNoun);
     var removals = comp.removals || [];
     var before   = markedCellKeys();          // cells that still had a usable candidate
     validatorHiliteSet(def.name, removals);   // …flagging makes them unusable, so diff after
@@ -15990,14 +16056,14 @@
     // no cell text changed, so the board observer will never notice. Kick them.
     scheduleAutoValidators();
     rebuildValidateMenu();
-    if (removals.length === 0) { showRemoveInvalidToast(withWarn(withNote('Checked ' + checked + ' — no invalid candidates to highlight.')), okType()); return; }
+    if (removals.length === 0) { showRemoveInvalidToast(withWarn(withNote(withUnchecked('Checked ' + checked + ' — no invalid candidates to highlight.'))), okType(unchecked)); return; }
     var emptied = countEmptiedSince(before);
-    if (emptied > 0) { showRemoveInvalidToast(noValidComboHighlightMsg(checked, removals.length, emptied), 'error'); return; }
+    if (emptied > 0) { showRemoveInvalidToast(withUnchecked(noValidComboHighlightMsg(checked, removals.length, emptied)), 'error'); return; }
     var tail = validatorAutoOn(def.name)
       ? ' Auto-update (↻) is on.'
       : ' Press "Clear all highlights" to remove them, or ↻ to keep them updated.';
-    showRemoveInvalidToast(withWarn(withNote('Highlighted ' + removals.length + ' invalid candidate' +
-      (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail)), okType());
+    showRemoveInvalidToast(withWarn(withNote(withUnchecked('Highlighted ' + removals.length + ' invalid candidate' +
+      (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail))), okType(unchecked));
   }
 
   // Highlight mode has NO run-all (v3.143): the bottom button is "Clear all
@@ -16035,20 +16101,25 @@
     // Structurally impossible clues (see invalidClueMsg): dropped, never validated,
     // and carried on EVERY outcome so they can't vanish behind an all-clear.
     var invalid = comp.invalid || 0;
+    // comp.unchecked / comp.uncheckedWhy = the THIRD outcome (see uncheckedMsg):
+    // clues we found but declined to read. Carried on EVERY outcome for the same
+    // reason as `invalid` — folding them into the checked count is the false green.
+    var unchecked = comp.unchecked || 0;
+    var uncheckedWhy = comp.uncheckedWhy || null;
     // comp.wholeClue = this clue is a WHOLE-PUZZLE count whose variant we can't read
     // (counting circles), so unlike needSelection there is nothing the player can
     // select to enable it — the string says which variant it is.
-    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, wholeClue: comp.wholeClue || null, note: note, invalid: invalid };
+    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, wholeClue: comp.wholeClue || null, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
     var count = comp[def.countKey] || 0;
     var removals = comp.removals || [];
-    if (removals.length === 0) return { present: true, removed: 0, count: count, note: note, invalid: invalid };
+    if (removals.length === 0) return { present: true, removed: 0, count: count, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
     var preSnap = snapshotPencilmarks();
     var r = await _removeCandidatesInternal(removals);
     if (r.aborted) {
       var reverted = await revertToSnapshot(preSnap, 12);
-      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, note: note, invalid: invalid };
+      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
     }
-    return { present: true, removed: r.removed, count: count, note: note, invalid: invalid };
+    return { present: true, removed: r.removed, count: count, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
   }
 
   // Run a single validator (a menu pick): lock, compute+apply once, toast.
@@ -16061,16 +16132,27 @@
     // Counted against the PRE-run board: a removal can take a cell's last mark.
     var mcWarn = missingCandidatesWarning([{ def: def, mc: countCluesMissingCandidates(def, unitFilter) }]);
     function withWarn(msg) { return mcWarn ? mcWarn + ' ' + msg : msg; }
-    function okType() { return mcWarn ? 'warning' : 'success'; }
+    // Amber the moment the run is QUALIFIED — a missing-candidates clue, or any
+    // clue we declined to check. Green means "all of it, checked".
+    function okType(unchecked) { return (mcWarn || unchecked) ? 'warning' : 'success'; }
     applyOneValidator(def, unitFilter).then(function (res) {
       function withNote(msg) { return res.note ? msg + ' ' + res.note : msg; }
+      // The unchecked sentence rides on EVERY outcome, errors included — an
+      // abstention may not vanish behind a louder result.
+      var unchecked = res.unchecked || 0;
+      var uncMsg = unchecked ? uncheckedMsg(unchecked, def.unitNoun, res.uncheckedWhy) : null;
+      function withUnchecked(msg) { return uncMsg ? msg + ' ' + uncMsg : msg; }
       if (res.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
       if (!res.present) {
         if (res.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + (validatorLabel(def)) + '" again.', 'warning'); return; }
         if (res.wholeClue) { showRemoveInvalidToast(wholeClueMsg(def, res.wholeClue), 'warning'); return; }
         // Every clue was impossible as read → that IS the result, not "none found".
         var noneInv = withInvalid(res, def, null);
-        if (noneInv) { showRemoveInvalidToast(withNote(noneInv), 'error'); return; }
+        if (noneInv) { showRemoveInvalidToast(withUnchecked(withNote(noneInv)), 'error'); return; }
+        // Clues WERE found, we just declined to read any of them. Saying "no cages
+        // found in this puzzle" here would be the false all-clear in its purest
+        // form, so the abstention stands alone as the whole result.
+        if (uncMsg) { showRemoveInvalidToast(withNote(uncMsg), 'warning'); return; }
         // A note explains WHY nothing was checkable (e.g. bulbless thermos) —
         // that deserves the player's attention, so it warns instead of green.
         showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), res.note ? 'warning' : 'success'); return;
@@ -16078,7 +16160,7 @@
       if (res.aborted) { validateAbortToast(res.reverted); return; }
       // A removal made changes → offer a post-run Undo (one native-undo group).
       if (res.removed > 0) validatorArmUndo(1, preSnap);
-      var checked = res.count + ' ' + pluralUnit(def.unitNoun, res.count);
+      var checked = checkedPhrase(res.count, unchecked, def.unitNoun);
       var emptied = countEmptiedSince(before);
       var body = res.removed === 0
         ? 'Checked ' + checked + ' — no invalid candidates to remove.'
@@ -16086,10 +16168,10 @@
           ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
       // An impossible clue outranks every other outcome except a mark contradiction,
       // which is reported on its own terms (it blames the marks, not the clue).
-      if (emptied > 0) { showRemoveInvalidToast(withNote(noValidComboMsg(checked, res.removed, emptied)), 'error'); return; }
+      if (emptied > 0) { showRemoveInvalidToast(withUnchecked(withNote(noValidComboMsg(checked, res.removed, emptied))), 'error'); return; }
       var inv = withInvalid(res, def, body);
-      if (inv) { showRemoveInvalidToast(withNote(inv), 'error'); return; }
-      showRemoveInvalidToast(withWarn(withNote(body)), okType());
+      if (inv) { showRemoveInvalidToast(withUnchecked(withNote(inv)), 'error'); return; }
+      showRemoveInvalidToast(withWarn(withNote(withUnchecked(body))), okType(unchecked));
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -16114,11 +16196,16 @@
       return { def: d, mc: countCluesMissingCandidates(d, unitFilter) };
     }));
     function withWarn(msg) { return mcWarn ? mcWarn + ' ' + msg : msg; }
-    function okType() { return mcWarn ? 'warning' : 'success'; }
+    // Amber the moment the run is QUALIFIED — see okType in runSingleValidator.
+    function okType(unchecked) { return (mcWarn || unchecked) ? 'warning' : 'success'; }
     (async function () {
       var totalRemoved = 0, undoSteps = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
       var notes = {};   // informational notes (e.g. bulbless thermos), deduped across passes
       var invalid = {}; // validator name → impossible-clue count (see invalidClueMsg)
+      // validator name → clues we declined to check (see uncheckedMsg). Aggregated
+      // PER CLUE TYPE, because run-all is otherwise a brand-new false-green channel:
+      // one validator's abstention would disappear into another's clean result.
+      var unchecked = {};
       var changed = true, guard = 0;
       while (changed && guard++ < 50) {
         changed = false;
@@ -16127,6 +16214,7 @@
           if (res.note) notes[res.note] = 1;
           // Same clues every pass, so take the count rather than accumulating it.
           if (res.invalid) invalid[defs[i].name] = { n: res.invalid, unitNoun: defs[i].unitNoun };
+          if (res.unchecked) unchecked[defs[i].name] = { n: res.unchecked, unitNoun: defs[i].unitNoun, why: res.uncheckedWhy };
           if (res.unsupported) { unsupported = true; break; }
           if (res.aborted) { aborted = true; reverted = res.reverted; break; }
           if (res.present) present[defs[i].name] = { count: res.count, unitNoun: defs[i].unitNoun };
@@ -16135,7 +16223,7 @@
         passes++;
         if (unsupported || aborted) break;
       }
-      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, notes: Object.keys(notes), invalid: invalid };
+      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, notes: Object.keys(notes), invalid: invalid, unchecked: unchecked };
     })().then(function (s) {
       function withNotes(msg) { return s.notes.length ? msg + ' ' + s.notes.join(' ') : msg; }
       // One combined sentence per clue type that came back structurally impossible.
@@ -16143,26 +16231,37 @@
       var invMsg = invNames.length
         ? invNames.map(function (nm) { return invalidClueMsg(s.invalid[nm].n, s.invalid[nm].unitNoun); }).join(' ')
         : null;
+      // …and one per clue type we declined to check, appended to every outcome.
+      var uncNames = Object.keys(s.unchecked);
+      var uncMsg = uncNames.length
+        ? uncNames.map(function (nm) { var u = s.unchecked[nm]; return uncheckedMsg(u.n, u.unitNoun, u.why); }).join(' ')
+        : null;
+      function withUnchecked(msg) { return uncMsg ? msg + ' ' + uncMsg : msg; }
       if (s.unsupported) { showRemoveInvalidToast('Validation needs a numeric digit set (0–9) — set it in Settings → Action buttons.', 'warning'); return; }
       if (s.aborted) { validateAbortToast(s.reverted); return; }
       if (s.totalRemoved > 0) validatorArmUndo(s.undoSteps, preSnap);
       var names = Object.keys(s.present);
       if (names.length === 0) {
-        if (invMsg) { showRemoveInvalidToast(withNotes(invMsg), 'error'); return; }
+        if (invMsg) { showRemoveInvalidToast(withUnchecked(withNotes(invMsg)), 'error'); return; }
+        // Clues were found and all of them declined — never "none found".
+        if (uncMsg) { showRemoveInvalidToast(withNotes(uncMsg), 'warning'); return; }
         var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
         showRemoveInvalidToast(withNotes(noneFoundMsg(nouns, !!unitFilter)), s.notes.length ? 'warning' : 'success');
         return;
       }
-      var checked = names.map(function (nm) { var p = s.present[nm]; return p.count + ' ' + pluralUnit(p.unitNoun, p.count); }).join(' and ');
+      var checked = names.map(function (nm) {
+        var p = s.present[nm], u = s.unchecked[nm];
+        return checkedPhrase(p.count, u ? u.n : 0, p.unitNoun);
+      }).join(' and ');
       var emptied = countEmptiedSince(before);
       var body = s.totalRemoved === 0
         ? 'Checked ' + checked + ' — no invalid candidates to remove.'
         : 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
           ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
           ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
-      if (emptied > 0) { showRemoveInvalidToast(withNotes(noValidComboMsg(checked, s.totalRemoved, emptied)), 'error'); return; }
-      if (invMsg) { showRemoveInvalidToast(withNotes(invMsg + ' — ' + body), 'error'); return; }
-      showRemoveInvalidToast(withWarn(withNotes(body)), okType());
+      if (emptied > 0) { showRemoveInvalidToast(withUnchecked(withNotes(noValidComboMsg(checked, s.totalRemoved, emptied))), 'error'); return; }
+      if (invMsg) { showRemoveInvalidToast(withUnchecked(withNotes(invMsg + ' — ' + body)), 'error'); return; }
+      showRemoveInvalidToast(withWarn(withNotes(withUnchecked(body))), okType(uncNames.length));
     }).finally(function () { actionInProgress = false; });
   }
 

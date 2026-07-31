@@ -49,10 +49,17 @@ wrong reason string.
 
 ---
 
-## Phase 1 — reporting first (do not reorder)
+## Phase 1 — reporting first (do not reorder) — ✅ LANDED v3.188.0
 
 **Why first:** phases 2–4 all produce clues that went unchecked. If the reporting can't say so, they
 turn silent over-removals into green all-clears — strictly worse than today.
+
+**What shipped.** `uncheckedMsg` / `checkedPhrase` next to `invalidClueMsg`; `unchecked` +
+`uncheckedWhy` carried on every `applyOneValidator` exit path and consumed by all three runners
+(`runSingleValidator`, `runValidatorHighlight`, `runAllValidators`, the last aggregating per clue
+type). `okType(unchecked)` ambers a qualified run. The channel has **no producers yet** — that is
+phases 2–5 — so behaviour is unchanged until they land. Contract documented in the ADDING A
+VALIDATOR banner item 1 and `VALIDATORS.md` "The third outcome".
 
 - Add a third per-clue outcome alongside removed/not-removed. Every `compute()` already returns a
   unit count (`cageCount`, `thermoCount`, `dotCount`, …); add an **unchecked count plus a reason**

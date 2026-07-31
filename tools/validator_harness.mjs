@@ -124,6 +124,8 @@ const NAMES = [
   'solutionDigitsFor', '_solutionProbe', 'muteSolutionRefuted',
   // wrogn / liar declarations + the clue-type-named test (v3.186)
   'WROGN_DECLARED_RE', 'TYPE_CHOICE_RE', 'rulesDeclareUnreliable',
+  // the third outcome — UNCHECKED reporting (v3.188, VALIDATOR_POLICY.md §3)
+  'pluralUnit', 'uncheckedMsg', 'checkedPhrase',
 ];
 
 const decls = NAMES.map((n) => ({ name: n, ...extractDecl(n) }))
@@ -1546,6 +1548,38 @@ checkTrue('cc support: starvation costs eliminations, never invents them',
     keptCount([{ keys: K, sum: 16 }, { keys: K, sum: 14 }], () => false), 2);
   check('mute: an empty unit list is safe', keptCount([], cageHolds), 0);
 }
+
+// ── the third outcome: UNCHECKED reporting (v3.188) ──────────────────────────
+// docs/VALIDATOR_POLICY.md §3. A validator may decline to check; it may never
+// pretend to have checked. These two helpers are the whole player-visible
+// difference between the two, so they are pinned here: an unchecked clue must
+// never be absorbed into the checked count, and a qualified run must never be
+// able to render as a plain all-clear.
+check('unchecked: one clue reads singular, and names the reason',
+  F.uncheckedMsg(1, 'cage', 'its corner number is not a sum of different digits'),
+  '1 cage was not checked (its corner number is not a sum of different digits).');
+check('unchecked: several clues read plural',
+  F.uncheckedMsg(2, 'cage', 'their corner numbers are not sums of different digits'),
+  '2 cages were not checked (their corner numbers are not sums of different digits).');
+check('unchecked: a missing reason degrades to a bare, still-honest count',
+  F.uncheckedMsg(3, 'thermometer', null),
+  '3 thermometers were not checked.');
+// The denominator is the point: "12 of 14" is what stops a partial run reading
+// as a whole-puzzle all-clear (the false green that opened this review).
+check('checked: nothing unchecked → no denominator at all',
+  F.checkedPhrase(14, 0, 'cage'), '14 cages');
+check('checked: any unchecked clue forces the denominator',
+  F.checkedPhrase(12, 2, 'cage'), '12 of 14 cages');
+check('checked: the total is pluralised, not the checked count',
+  F.checkedPhrase(1, 1, 'cage'), '1 of 2 cages');
+check('checked: a lone checked clue stays singular',
+  F.checkedPhrase(1, 0, 'cage'), '1 cage');
+check('checked: zero checked still reports the population it came from',
+  F.checkedPhrase(0, 3, 'cage'), '0 of 3 cages');
+// Absent counts mean "everything found was checked" — the contract's default, and
+// what every validator that has not yet been swept still returns.
+check('checked: an undefined unchecked count behaves as zero',
+  F.checkedPhrase(5, undefined, 'dot'), '5 dots');
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);

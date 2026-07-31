@@ -983,6 +983,41 @@ uniform contradiction signal; the post-run Undo button restores the marks. Itera
 fixpoint. Only centre marks are removed; nothing is ever added. Variable targets (arrow circle,
 region-sum S) are part of the enumeration, not fixed inputs.
 
+### The third outcome — UNCHECKED (v3.188, the reporting half of the contract)
+
+The paragraph above says "ambiguous detection → skip the clue". **Skipping is allowed; skipping
+*quietly* is not.** Through v3.187 a skipped clue had nowhere to go but the checked total, so
+"couldn't read it" surfaced to the player as "checked it, nothing to remove" — a false all-clear,
+and the failure [`VALIDATOR_POLICY.md`](VALIDATOR_POLICY.md) §3 exists to prevent. Every clue a run
+touches now lands in exactly one of three buckets:
+
+| outcome | meaning | reported as |
+|---|---|---|
+| CHECKED — CLEAN | read under a rule we trust; every candidate supported | counts toward the green total |
+| CHECKED — VIOLATED | read under a rule we trust; candidates removed / flagged | eliminations, loud |
+| **UNCHECKED** | we could not read it under any rule we trust | **counted separately and named**, never green |
+
+**Contract.** `compute()` returns `unchecked` (a count) and `uncheckedWhy` (the reason) on **every**
+exit path, the `<none>` ones included; absent means 0. `<unit>Count` is the **checked** count and
+never absorbs an unchecked clue. `uncheckedWhy` is one lowercase clause, no trailing stop — it
+renders inside parentheses.
+
+**Colour tracks how much of the run you can trust, not what it found.** CLEAN and VIOLATED are both
+the tool succeeding and share the green; the player already sees which happened from the board.
+Green = every clue checked. Amber = qualified (something unchecked, or the pre-existing
+missing-candidates case). Red = a real error (an emptied cell, or `invalid` — structurally
+impossible as read).
+
+**Wording** (policy §8 q2): state arithmetic the player could verify themselves, never a diagnosis.
+*"their corner number is not a sum of different digits"* ✅; *"they are decoys"* ❌ — that is the
+answer, and diagnosing is the solver's job. The count does point at those clues; the leak was
+weighed and accepted because it happens often enough on ordinary puzzles to tip nobody off.
+
+Runners: `uncheckedMsg` / `checkedPhrase` build the strings (`"12 of 14 cages"` appears as soon as
+anything goes unchecked, so a partial run cannot render as a whole-puzzle all-clear).
+`runAllValidators` aggregates **per clue type** — otherwise one validator's abstention would
+disappear into another's clean result, a brand-new false-green channel.
+
 ### NEVER INVENT A SUDOKU UNIT — regions may not exist yet (v3.162)
 
 Rows and columns are free: every puzzle has them, and two cells sharing one must differ. **Regions

@@ -31,6 +31,8 @@ Detection/validators, colour-rendering, and object-shading highlight are **paral
 ### Version bumps
 Bump `@version` in the `==UserScript==` header for every change — semver minor increments (e.g. 2.119.0 → 2.120.0). **Also bump the internal `SCRIPT_VERSION` constant (≈line 209) to match** — it drives `window.spdrVersion`, the only reliable "which build is live" signal in-browser. It silently drifted (stuck at 3.11.0 while the header advanced); keep them identical. A PostToolUse hook (`.claude/hooks/check_version_sync.py`) now blocks any edit that leaves them out of sync — so the drift can't recur silently.
 
+**Make the two version edits sequential, never parallel.** The sync hook runs after *each* edit, so issuing both in one parallel tool block trips it on the transient mismatch (header bumped, constant not yet). Both edits still land, but the hook reports a blocking error that reads like a real failure. One edit, then the other.
+
 ### Distribution & dev environment
 - These userscripts are hosted on public GitHub for **cross-machine update propagation** — that's a second reason the `@version` bump above is mandatory: a stale `@version` means no update is pushed to the user's other machines.
 - Keep the `@updateURL` / `@downloadURL` headers pointing at the **raw GitHub URLs** so the managers can poll for updates.
