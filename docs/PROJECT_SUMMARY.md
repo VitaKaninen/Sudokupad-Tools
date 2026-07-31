@@ -1062,6 +1062,14 @@ shrink-to-fit width — see `applyControlsWidthCap`) and makes UI work look corr
   signal that its reading regressed. Caveat: its per-type readers are re-implementations, not the
   shipping detectors — trust the **cage** numbers (identical `r1c2` parsing, no geometry) far more
   than the geometric ones, whose rates are dominated by the harness's own coordinate guesses.
+- **Cage-variant scoring:** `python tools/cage_variants.py [--detail] [--id <id>]` — asks what a
+  killer cage's corner number *actually* means (distinct sum / repeats-allowed sum / product /
+  difference / digit list / partial list), scored against each puzzle's own solution, and reports
+  two things a cage change turns on: how often the reading is **separable** from arithmetic alone
+  (badly — 38% of unreadable cages narrow to one candidate reading, right 58% of the time) and how
+  many cages the validator **runs on but the solution refutes** (9.6%, over 17% of puzzles). Built
+  to decide v3.185's whole-puzzle cage gate; re-run it before touching `computeCageRemovals`.
+  Full numbers + the rejected classifier in [VALIDATORS.md](VALIDATORS.md).
 
 ## Puzzle catalog (pull examples by rule type / predict broad-change side effects)
 The catalog is **`C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog\classify\`** (part
