@@ -189,6 +189,11 @@ way so it stays low-maintenance.
   their constraints in the raw payload (`PuzzleLoader.cache` → `decompressPuzzleId`, synchronous, no
   fetch); every classifier consults it FIRST, and `cp.thermos` is VETOED whenever a payload exists.
   Full detail: [VALIDATORS.md](VALIDATORS.md) "Layer 0".
+- **Injected glyphs must be DRAWN, not typed (v3.186):** `powerIcon` builds the master switch's
+  power symbol as an SVG path. U+23FB POWER SYMBOL is absent from the default Windows/Chrome font
+  stack and rendered as a tofu box on the very first build. Any icon we inject that isn't in a
+  guaranteed font has to be geometry — and built with `createElementNS` + attributes, never
+  `innerHTML`, so it survives a Trusted-Types CSP.
 - **Settings & lifecycle:** `loadSettings` / `saveSettings` (localStorage `sp-darkreader-fix`),
   `buildCSS` (generates the injected stylesheet), `rebuildStyleTag`, `applySettings` (re-applies
   everything), `waitForDRAndSVG` (startup gate), `buildAllUI` (orchestrates UI on load),
@@ -503,7 +508,23 @@ way so it stays low-maintenance.
   (v3.182: silently drop clues the puzzle's own `metadata.solution` contradicts — variant rules and
   decoys alike; fails open when there is no trustworthy solution) / `countSumlessKillerCages`
   (v3.182: a drawn-but-unreadable cage still lists its menu row, because an absent row is a
-  spoiler) / `countCluesMissingCandidates` (v3.151: clues holding a cell with no
+  spoiler) /
+  **the solution PROBE + trust policy (v3.186): `buildSolutionProbeState` / `probeInfo` /
+  `probeSystematic` / `validatorTrust` / `rulesDeclareUnreliable` (`WROGN_DECLARED_RE` +
+  `TYPE_CHOICE_RE` + `SELF_DEDUCTION_RE`) / `validatorTypeNamedInRules` (`RULES_MENTION`)** — asks
+  whether a validator's RULE is the rule this puzzle uses, by pinning every cell to its solution
+  digit and running `def.compute` **verbatim** (a correct reading removes nothing). Three one-line
+  hooks make that work — `readValidatorBoardState` returns the synthetic state, `getFogTester`
+  returns null, `muteSolutionRefuted` goes inert — and the `_solutionProbe` module flag is what they
+  all read. Verdict is a RATIO (`bad`/`total` clues via `validatorClueCellGroups`), not a boolean,
+  because one bad cage of 29 is a decoy and 16 of 19 is a different rule. Outcome per validator, on
+  `def.trust`: `ok` (unchanged — including "refuted but the rules never name this clue type", the
+  cryptic case where saying anything spoils it), `grey` (rules DECLARE liars/a type choice →
+  disabled, selection-only rescue, excluded from run-all and ↻), `drop` (systematic + the rules name
+  the type → removed from the menu; the one deliberate exception to "an absent row is a spoiler").
+  Cached per puzzle in `_probeCache`; costs nothing on the ~46% of puzzles with no solution. Scored
+  by `python tools/cage_variants.py --policy`; full rationale in [VALIDATORS.md](VALIDATORS.md) /
+  `countCluesMissingCandidates` (v3.151: clues holding a cell with no
   candidates are checked only weakly — an empty cell reads as the full digit set — so the result
   toast leads with an amber warning naming how many). Single toggle:
   `showValidateButton` (the per-validator enable keys were

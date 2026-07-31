@@ -256,6 +256,49 @@ def classify(entry):
     return recs
 
 
+# ── the v3.186 trust policy, scored on the one clue type we can read faithfully ──
+# The shipping policy probes EVERY validator by running its own compute against the
+# solution; that cannot be reproduced here. Cages can, exactly (identical `r1c2`
+# parsing, no geometry), so this scores the policy's three-way split on them and
+# stands in for the rest.
+def policy_report(corpus):
+    import cue_recall
+    R = cue_recall.js_regexes()
+    W, T, S = R['WROGN_DECLARED_RE'], R['TYPE_CHOICE_RE'], R['SELF_DEDUCTION_RE']
+    named = re.compile(r'\bcages?\b|\bkiller\b')
+
+    def unreliable(b):
+        return bool(W.search(b) or T.search(b) or S.search(b))
+
+    grey, drop, keep, total = [], [], [], 0
+    for e in corpus:
+        recs = [r for r in classify(e) if not r.get('nonnumeric')]
+        if not recs:
+            continue
+        total += 1
+        bad = [r for r in recs if 'distinct_sum' not in r['true']]
+        if not bad:
+            continue
+        blob = rules_blob(e)
+        row = (e.get('id'), (e.get('title') or '')[:34], len(bad), len(recs),
+               len(bad) / len(recs))
+        if unreliable(blob):
+            grey.append(row)
+        elif row[4] >= 0.5 and named.search(blob):
+            drop.append(row)
+        else:
+            keep.append(row)
+
+    print('puzzles with readable cages AND a solution: %d' % total)
+    print('  GREY (rules declare liars / a type choice):        %3d' % len(grey))
+    print('  DROP (systematic refutation + cages named):        %3d' % len(drop))
+    print('  keep (decoy, partial, or cages never named):       %3d' % len(keep))
+    for title, rows in (('GREY', grey), ('DROP', drop), ('keep', keep)):
+        print('\n── %s ──' % title)
+        for pid, t, b, n, frac in sorted(rows, key=lambda x: -x[4])[:25]:
+            print('  %-32s %-34s %2d/%-3d %.2f' % (pid, t, b, n, frac))
+
+
 def main():
     for s in (sys.stdout, sys.stderr):
         try:
@@ -266,9 +309,15 @@ def main():
     ap.add_argument('--detail', action='store_true')
     ap.add_argument('--id')
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--policy', action='store_true',
+                    help='score the v3.186 grey/drop/keep trust policy on cages')
     a = ap.parse_args()
 
     corpus = json.load(open(CORPUS, encoding='utf-8'))
+
+    if a.policy:
+        policy_report(corpus)
+        return
 
     if a.id:
         for e in corpus:

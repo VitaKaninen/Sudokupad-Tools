@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.185.0
+// @version      3.186.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.185.0';
+  var SCRIPT_VERSION = '3.186.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -86,12 +86,41 @@
   }
   // The switch itself. One builder for both hosts — the gear holder while we run,
   // a fixed corner button while we don't — so the two can't drift apart.
+  // The power symbol as DRAWN GEOMETRY, not a character. U+23FB POWER SYMBOL is
+  // missing from the default Windows/Chrome font stack (and from plenty of others),
+  // so `textContent = '⏻'` renders as a tofu box — reported on the very first
+  // build. A glyph we draw ourselves cannot depend on what fonts a machine has, so
+  // this is the version that behaves the same for everyone.
+  //
+  // Built with createElementNS + attributes: no innerHTML, so it survives a
+  // Trusted-Types CSP (see the Monkey Scripts standing rules). `currentColor`
+  // inherits the button's own colour, which is what carries the on/off green/red.
+  function powerIcon(px) {
+    var NS = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('width', px); svg.setAttribute('height', px);
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2.4');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.style.display = 'block';
+    svg.style.pointerEvents = 'none';       // clicks belong to the button
+    // Ring, centred (12,13) r=7, open across the top (±40° from vertical), drawn
+    // the long way round; then the stem from the gap to just past the centre.
+    var ring = document.createElementNS(NS, 'path');
+    ring.setAttribute('d', 'M16.5 7.64 A7 7 0 1 1 7.5 7.64');
+    var stem = document.createElementNS(NS, 'path');
+    stem.setAttribute('d', 'M12 3.6 V 11');
+    svg.appendChild(ring); svg.appendChild(stem);
+    return svg;
+  }
   function buildMasterSwitch(size) {
     var on = masterEnabled();
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.id = 'sp-master-btn';
-    btn.textContent = '⏻';
+    btn.appendChild(powerIcon(Math.round(size * 0.62)));
     btn.title = on
       ? 'Sudoku Tools is ON. Click to disable everything this script does — the dark theme, all rendering fixes, the validators and every button. The page reloads; this switch stays so you can turn it back on.'
       : 'Sudoku Tools is OFF. Click to re-enable it. The page reloads.';
@@ -7604,6 +7633,11 @@
   // empty set and is dropped → treated as an unconstrained/blank cell, the safe
   // permissive direction (never forces a removal), same as an unmarked cell.
   function readValidatorBoardState() {
+    // A solution PROBE substitutes a synthetic board for the real one (see
+    // buildSolutionProbeState). Every compute reads the board through here, so this
+    // one line is what lets the probe reuse each validator VERBATIM instead of
+    // re-implementing its rule.
+    if (_solutionProbe) return _solutionProbe;
     var digitChars = (settings.digitSet || '').split('');
     if (digitChars.length === 0 || !digitChars.every(function (c) { return /^[0-9]$/.test(c); })) return null;
     var uni = {};
@@ -7723,6 +7757,112 @@
     return out;
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  //  THE SOLUTION PROBE — does our READING of a clue type survive the answer?
+  //  (v3.186)
+  // ════════════════════════════════════════════════════════════════════════════
+  //  v3.182 asks this per CLUE and mutes the ones that fail. That is the right
+  //  move for a decoy among honest clues, but it is silent by design, so it can
+  //  neither warn the player nor change what the menu offers. The question the
+  //  menu needs is one level up: *is this validator's rule the rule this puzzle is
+  //  actually using?*
+  //
+  //  ⚠️ NO NEW PER-CLUE PREDICATES. The probe swaps in a synthetic board where
+  //  every cell's only candidate is its SOLUTION digit, then runs the validator's
+  //  own compute() unchanged. A correct reading removes nothing — the answer
+  //  supports itself. A reading the answer contradicts finds the solution digit
+  //  unsupported and removes it. So "our reading of thermos is wrong here" is
+  //  measured BY THE THERMO VALIDATOR, and a validator added tomorrow is probed
+  //  correctly without anyone remembering to write its predicate. That is the same
+  //  FOOLPROOF PRINCIPLE the eyeball preview follows.
+  //
+  //  Three hooks make it work, all of them one line: readValidatorBoardState
+  //  returns the synthetic state, getFogTester goes blind (a probe asks about the
+  //  finished grid, where nothing is hidden), and muteSolutionRefuted goes inert
+  //  (muting the failing clues is precisely what would hide the answer).
+  //
+  //  Verdicts: 'ok' (reading survives), 'refuted' (it does not), 'unknown' (no
+  //  trustworthy solution, or the validator declined to run). Only 'refuted' ever
+  //  changes behaviour, and never on its own — see validatorTrust.
+  var _solutionProbe = null;
+  var _probeCache = null;          // { key, byName: { <def.name>: verdict } }
+
+  // Every cell pencilled with exactly its solution digit, nothing placed. Pinning
+  // them as CENTRE marks rather than values is what makes a refutation visible:
+  // a placed value is not a candidate, so nothing could ever be removed from it
+  // and every validator would report a clean bill of health.
+  function buildSolutionProbeState() {
+    var grid = getPuzzleSolution();
+    if (!grid) return null;
+    var base = readValidatorBoardState();
+    if (!base) return null;
+    var N = detectGridSize();
+    if (!N) return null;
+    var centre = {};
+    for (var r = 0; r < N; r++) {
+      for (var c = 0; c < N; c++) {
+        var k = c + ',' + r, d = grid[k];
+        // A digit outside this puzzle's digit set means the solution and the set
+        // disagree; probing on that would be nonsense. Bail rather than guess.
+        if (typeof d !== 'number' || !base.uni[d]) return null;
+        centre[k] = new Set([d]);
+      }
+    }
+    return { uni: base.uni, fullSet: base.fullSet, values: {}, centre: centre };
+  }
+
+  // ⚠️ HOW MANY of this validator's clues the answer refutes, not just whether any
+  // does — because the two mean opposite things. ONE bad cage among 29 (`bH8FJtL3F3`
+  // "Killer Sudoku") is a decoy, and v3.182 already mutes it correctly; MOST of them
+  // bad (`ay6r6mmu5w` "Close Enough", 16 of 19) means the rule itself is not ours.
+  // Treating the first like the second would delete the Cages row from an otherwise
+  // ordinary killer puzzle. Clue groups come from validatorClueCellGroups — the same
+  // reader the missing-candidates warning uses, so this can't drift from what runs.
+  //
+  // Returns { verdict, bad, total }: verdict 'ok' | 'refuted' | 'unknown'.
+  function probeInfo(def) {
+    var key = location.pathname + '|' + detectGridSize();
+    if (!_probeCache || _probeCache.key !== key) _probeCache = { key: key, byName: {} };
+    if (def.name in _probeCache.byName) return _probeCache.byName[def.name];
+    var out = { verdict: 'unknown', bad: 0, total: 0 };
+    var st = buildSolutionProbeState();
+    if (st) {
+      var prev = _solutionProbe;
+      _solutionProbe = st;
+      try {
+        var res = def.compute(null);
+        if (res && !res.unsupported) {
+          var hit = {};
+          (res.removals || []).forEach(function (rm) { if (rm && rm.cellKey) hit[rm.cellKey] = 1; });
+          var groups = validatorClueCellGroups(def);
+          out.total = groups.length;
+          groups.forEach(function (keys) {
+            if (keys.some(function (k) { return hit[k]; })) out.bad++;
+          });
+          // Removals with no clue group to attribute them to still prove the reading
+          // wrong — count the whole validator as refuted rather than lose the signal.
+          if (out.total === 0 && (res.removals || []).length > 0) { out.bad = 1; out.total = 1; }
+          out.verdict = out.bad > 0 ? 'refuted' : 'ok';
+        }
+      } catch (e) {
+        out = { verdict: 'unknown', bad: 0, total: 0 };   // a compute that throws proves nothing
+      } finally {
+        _solutionProbe = prev;
+      }
+    }
+    _probeCache.byName[def.name] = out;
+    return out;
+  }
+  // "The rules are stating a different rule for this clue type", as opposed to
+  // "this puzzle hides a decoy among honest clues". Half is a deliberately blunt
+  // line: the real distribution is bimodal (43 of the catalog's 99 refuted-cage
+  // puzzles refute EVERY cage; most of the rest refute one or two), so nothing
+  // hinges on the exact threshold.
+  var PROBE_SYSTEMATIC = 0.5;
+  function probeSystematic(p) {
+    return p.total > 0 && p.bad / p.total >= PROBE_SYSTEMATIC;
+  }
+
   // Drop the units this puzzle's own solution refutes. `holds(unit, digits)`
   // returns false ONLY when the finished grid definitely breaks the clue as read;
   // anything else (true, null, undefined, a thrown error) keeps the unit, so a
@@ -7730,6 +7870,10 @@
   // Returns { kept, muted } — `muted` is added back to the reported count so the
   // player sees no gap where the clue used to be.
   function muteSolutionRefuted(units, holds) {
+    // Inert during a solution PROBE (below): the probe's whole question is whether
+    // our raw reading survives the solution, and muting the clues that fail is
+    // exactly what would hide the answer.
+    if (_solutionProbe) return { kept: units || [], muted: 0 };
     var grid = getPuzzleSolution();
     if (!grid || !units || !units.length) return { kept: units || [], muted: 0 };
     var kept = [], muted = 0;
@@ -10085,6 +10229,54 @@
   // the third trigger. Catalog-checked: matches 1cwnilmrp0 + 3DrNDGMDnG, spares the
   // other two line-tagged puzzles that carry the loose phrase.
   var SELF_DEDUCTION_RE = /\bambiguous\s+lines?\b|\blines?\b[^.]{0,40}\b(?:is|are|be)\s+(?:exactly\s+)?(?:one|two)\s+of\b|(?:exactly|either)\s+(?:one|two)\s+of\b[^.]{0,80}(?:modular|entropic|parity|whisper|renban|region[- ]?sum|zipper|palindrome|nabner)/;
+
+  // ── "SOME OF THESE CLUES ARE NOT WHAT THEY LOOK LIKE" — SAID OUT LOUD ────────
+  // The rules DECLARE that clues lie, or that a clue's type is the solver's to
+  // pick. That is a different situation from a cryptic puzzle: the player already
+  // knows, so greying the affected validator tells them nothing they weren't told,
+  // and leaving it live would let it eliminate against a rule the puzzle disowned.
+  // Used ONLY to interpret a probe refutation (see validatorTrust) — on its own it
+  // changes nothing, so a false positive here costs nothing on an honest puzzle.
+  //
+  // Deliberately name-based and tight. "wrogn" is the genre's own (mis)spelling.
+  // The noun a setter attaches "false"/"wrong" to is not always "clue" — it is just
+  // as often the total, the sum or the cage itself ("exactly one of the cage totals
+  // is false"), so both the adjective-first and the noun-first branch share this set.
+  // (Kept a single-line literal on purpose: tools/cue_recall.py parses these out of
+  // the source and validator_harness.mjs extracts them by name — both require it.)
+  var WROGN_DECLARED_RE = /\bwrogn\b|\bliars?\b|\blies\b|\blying\b|(?:is|are|be)\s+(?:a\s+)?lie\b|(?:false|fake|untrue|incorrect|wrong)\s+(?:clues?|constraints?|totals?|sums?|cages?|numbers?)|(?:clues?|constraints?|totals?|sums?|cages?|numbers?)\s+(?:is|are|may\s+be|might\s+be|could\s+be)\s+(?:false|fake|untrue|incorrect|wrong)|not\s+all\s+(?:of\s+)?(?:the\s+)?(?:clues?|constraints?|totals?|sums?)\s+are\s+true|exactly\s+one\s+of\s+[^.]{0,40}\b(?:is|are)\s+(?:false|wrong|incorrect|a\s+lie)/;
+  // The rules hand the CLUE TYPE to the solver ("the number is either the sum or
+  // the product"). SELF_DEDUCTION_RE already covers the line-validator form of
+  // this; these are the non-line phrasings, chiefly cages.
+  // The last branch is the general form and the strongest: a rule that tells the
+  // solver to WORK OUT which kind of clue this is has declared the ambiguity in so
+  // many words ("Solvers must deduce whether each cage is a sum cage or a product
+  // cage" — `5kx4d90kcm` "Sigma or Pi").
+  var TYPE_CHOICE_RE = /(?:sums?|totals?)\s+or\s+(?:the\s+)?products?|products?\s+or\s+(?:the\s+)?(?:sums?|totals?)|either\s+sums?\s+or\s+multipl|(?:may|might|could|can)\s+be\s+(?:either|any)\s+(?:one\s+)?of|(?:deduce|determine|work\s+out|figure\s+out|decide)\s+(?:whether|which|if)\b/;
+  function rulesDeclareUnreliable(blob) {
+    return WROGN_DECLARED_RE.test(blob) || TYPE_CHOICE_RE.test(blob) || SELF_DEDUCTION_RE.test(blob);
+  }
+  // Does the rules text NAME this clue type at all? Name-based and tight on
+  // purpose: the answer only matters for a validator the probe already refuted,
+  // and there "no" is the CONSERVATIVE branch (keep the row, stay quiet), so a
+  // regex that under-matches errs the safe way.
+  var RULES_MENTION = {
+    'Kropki':          /kropki|black\s+dots?|white\s+dots?/,
+    'cage':            /\bcages?\b|\bkiller\b/,
+    'little killer':   /little\s+killer/,
+    'thermo':          /thermo/,
+    'XV':              /\bxv\b|roman\s+numeral/,
+    'counting circle': /\bcircles?\b/,
+    'difference dot':  /\bdots?\b/,
+    'sum arrow':       /\barrows?\b/,
+  };
+  // A cue-classified LINE validator is only in the menu because its own cue fired,
+  // i.e. the rules already named it — so those need no entry above.
+  function validatorTypeNamedInRules(def) {
+    if (def.classify) return true;
+    var re = RULES_MENTION[def.name];
+    return re ? re.test(getPuzzleRulesBlob()) : false;
+  }
   // ── WE DO NOT DIAGNOSE A CLUE'S VALIDITY — that is the solver's job (v3.166) ─
   // v3.165 added a LINE_MORPH_RE guard that forced every cue validator AMBIGUOUS
   // when the rules could override a line's stated type ("a completely wet line
@@ -14736,11 +14928,56 @@
     } catch (e) {}
     return (typeof def.menuLabel === 'string' && def.menuLabel) || def.name;
   }
+  // ── WHAT TO DO WHEN THE ANSWER SAYS OUR RULE IS THE WRONG RULE (v3.186) ──────
+  // Three outcomes, and which one applies turns on what the RULES TEXT says —
+  // because the cost we are managing is not correctness, it is INFORMATION. A row
+  // that changes state tells the player something, and on a puzzle whose whole
+  // point is a hidden twist, that is the spoiler.
+  //
+  //   'ok'   — probe clean, no solution to probe with, or (the interesting case)
+  //            the probe refuted us but the rules never NAME this clue type. That
+  //            is the cryptic puzzle: a thermo is drawn, the rules say only
+  //            "circles are odd, lines are German whispers, and those are the only
+  //            rules", so the thermo is really a circle plus a line. Saying so
+  //            would hand the player the twist, so the row behaves normally and
+  //            v3.182's per-clue mute quietly keeps it from eliminating anything.
+  //            Under-informing on purpose.
+  //   'grey'  — the rules DECLARE that clues lie or that a clue's type is the
+  //            solver's to pick. The player already knows, so greying tells them
+  //            nothing new — and leaving it live would eliminate against a rule
+  //            the puzzle disowned. Still runnable on a hand-selection, which is
+  //            exactly the affordance such a puzzle wants once the player has
+  //            worked out which clue is which.
+  //   'drop'  — the rules DO name this clue type, and our reading of it still
+  //            contradicts the answer. Then the rules are stating a DIFFERENT rule
+  //            for it (`ay6r6mmu5w` "Close Enough", sums that are near-misses;
+  //            `5kx4d90kcm` "Sigma or Pi"). The validator does not apply to this
+  //            puzzle at all, so it is removed rather than greyed: a greyed row
+  //            invites a click, and here there is nothing to offer. This is the
+  //            ONE deliberate exception to v3.182's "an absent row is a spoiler" —
+  //            it is not a spoiler when the rules themselves already said it.
+  //
+  // Every branch needs a trustworthy solution to reach at all (probeVerdict is
+  // 'unknown' without one), so on the ~46% of puzzles that publish none, nothing
+  // here fires and the menu is exactly what it was.
+  function validatorTrust(def) {
+    var p = probeInfo(def);
+    if (p.verdict !== 'refuted') return 'ok';
+    if (rulesDeclareUnreliable(getPuzzleRulesBlob())) return 'grey';
+    // A refutation the rules never hinted at, or one confined to a clue or two, is
+    // a decoy among honest clues — v3.182 mutes those individually and the row goes
+    // on behaving normally. Only a SYSTEMATIC refutation of a clue type the rules
+    // actually name says "this validator is not the rule here".
+    if (!probeSystematic(p)) return 'ok';
+    return validatorTypeNamedInRules(def) ? 'drop' : 'ok';
+  }
   function detectedValidators() {
     return constraintValidators().filter(function (v) {
       try {
-        if (v.classify) { v.cls = v.classify(); return v.cls.mode !== 'none'; }
-        return v.detect();
+        if (v.classify) { v.cls = v.classify(); if (v.cls.mode === 'none') return false; }
+        else if (!v.detect()) return false;
+        v.trust = validatorTrust(v);
+        return v.trust !== 'drop';
       } catch (e) { return false; }
     });
   }
@@ -15144,6 +15381,7 @@
   // does NOT — the holes make it over-count). Coordinates are the svgrenderer
   // user space (same as the DOM thermo/bulb scan), cell = getGridCellSize().
   function getFogTester() {
+    if (_solutionProbe) return null;   // a probe asks about the finished grid: nothing is hidden
     var g = document.getElementById('fog-path');
     var path = g ? g.querySelector('path') : null;
     if (!path || !(path.getAttribute('d') || '').trim()) return null;
@@ -15567,7 +15805,10 @@
     return true;
   }
   function runAutoValidatorsNow() {
-    var defs = detectedValidators().filter(function (d) { return validatorAutoOn(d.name); });
+    // A 'grey' validator (v3.186 — the rules say clues may lie here) is manual-only,
+    // so it must not auto-run either: the ↻ path would put back exactly the
+    // eliminations the greying exists to prevent.
+    var defs = detectedValidators().filter(function (d) { return validatorAutoOn(d.name) && d.trust !== 'grey'; });
     if (!defs.length) return;
     var hadAny = validatorHiliteAny();
     var filter = combineFogFilter(null);   // fog gate only; selection-only can't be on here
@@ -15838,7 +16079,10 @@
   // stays out of the loop entirely.
   function runAllValidators(unitFilter) {
     if (actionInProgress) return;
-    var defs = detectedValidators();
+    // Run-all is the whole-puzzle sweep, so it takes only the validators this
+    // puzzle vouches for: a 'grey' one (v3.186) is reachable by hand-selection
+    // only, never by a blanket run.
+    var defs = detectedValidators().filter(function (d) { return d.trust !== 'grey'; });
     if (defs.length === 0) { showRemoveInvalidToast('No supported constraints detected.', 'warning'); return; }
     actionInProgress = true;
     var before = markedCellKeys();
@@ -16254,6 +16498,22 @@
         // a constraint the puzzle never did — so the row stays disabled either way and
         // `ambiguousTip` explains what it actually is.
         var rescuable = amb && !def.noSelectionRescue;
+        // 'grey' (v3.186): the answer refutes our reading AND the rules say clues
+        // lie or are the solver's to type. Greyed like an ambiguous row and
+        // rescued the same way — tick "Validate selection only" and select the
+        // clue you have worked out. Takes precedence over the ambiguity tip
+        // because it is the stronger statement about the same row.
+        if (def.trust === 'grey') {
+          var gtip = selOnly
+            ? 'Select the ' + noun + '\'s cells, then click. Only selected cells change.'
+            : 'Disabled — this puzzle\'s rules say a clue may not be what it looks like, and '
+              + 'checking ' + noun + 's against the standard rule disagrees with this puzzle. '
+              + 'Tick "Validate selection only", then select the cells of a ' + noun
+              + ' you have worked out.';
+          addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
+                  { disabled: !selOnly, title: gtip, eyeDef: def });
+          return;
+        }
         var tip = '';
         if (amb && def.ambiguousTip)
           tip = typeof def.ambiguousTip === 'function' ? def.ambiguousTip(def.cls) : def.ambiguousTip;

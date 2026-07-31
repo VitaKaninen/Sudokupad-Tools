@@ -121,7 +121,9 @@ const NAMES = [
   'sanitizeDigitSet', 'entropicBands', 'modularBands',
   // solution-refuted clue muting (getPuzzleSolution itself is Framework/DOM-bound,
   // so the factory injects a shim for it and these two are tested against it)
-  'solutionDigitsFor', 'muteSolutionRefuted',
+  'solutionDigitsFor', '_solutionProbe', 'muteSolutionRefuted',
+  // wrogn / liar declarations + the clue-type-named test (v3.186)
+  'WROGN_DECLARED_RE', 'TYPE_CHOICE_RE', 'rulesDeclareUnreliable',
 ];
 
 const decls = NAMES.map((n) => ({ name: n, ...extractDecl(n) }))
@@ -293,6 +295,27 @@ checkFalse('zipper clause: bare "equidistant" in a legend is not the zipper line
   F.ZIPPER_CLAUSE_RE.test('grey lines, whose digits are equidistant from the centre and identical'));
 checkTrue('zipper clause: the fold phrasing plus a sum still pins the line',
   F.ZIPPER_CLAUSE_RE.test('purple lines: digits an equal distance from the center sum to the same total'));
+// Wrogn / liar declarations (v3.186). These never act alone — they only decide
+// what to DO about a validator the puzzle's own solution has already refuted — so
+// a false positive on an honest puzzle costs nothing. The cases that matter are
+// the genre's own vocabulary and the "you work out which clue this is" phrasings.
+checkTrue('wrogn cue: the genre spells it that way',
+  F.rulesDeclareUnreliable('wrogn fogn: some of the clues are wrogn.'));
+checkTrue('wrogn cue: liar (dj4ini56n0 "Liar Zone Sudoku", e17gyr3lnj "Liar Killer")',
+  F.rulesDeclareUnreliable('one cage in each zone is a liar cage.'));
+checkTrue('wrogn cue: a stated false clue',
+  F.rulesDeclareUnreliable('exactly one of the cage totals is false.'));
+checkTrue('type-choice cue: sum or product (5kx4d90kcm "Sigma or Pi")',
+  F.rulesDeclareUnreliable('digits in a cage may not repeat, and they either sum or multiply to the '
+    + 'indicated number. solvers must deduce whether each cage is a sum cage or a product cage.'));
+checkTrue('type-choice cue: "must deduce whether" is the general form',
+  F.rulesDeclareUnreliable('you must deduce whether each line is a renban or a whisper.'));
+checkFalse('wrogn cue: an ordinary killer puzzle declares nothing',
+  F.rulesDeclareUnreliable('normal sudoku rules apply. digits in a cage sum to the small number '
+    + 'in its corner and may not repeat.'));
+checkFalse('wrogn cue: a DIFFERENT stated rule is not a declared liar (ay6r6mmu5w "Close Enough")',
+  F.rulesDeclareUnreliable('cage clues show the sum of the digits in that cage, rounded to the '
+    + 'nearest multiple of 5.'));
 // Palindrome (v3.164). Catalog-measured: 132/132 scoreable tagged puzzles fire.
 // The named form is trivial; the load-bearing branch is the 8 setters who only
 // DESCRIBE it, and the anti guards the two rules that borrow the same words.

@@ -360,7 +360,89 @@ digits) and names no cage. Contrast v3.157's "⛔ impossible", which pointed str
 
 **Still open:** the 29 puzzles with no arithmetic tip-off at all (`0zhq0og7uz`, `ay6r6mmu5w`,
 `5kx4d90kcm` "Sigma or Pi") and no solution. Nothing available to us distinguishes those from an
-honest killer puzzle.
+honest killer puzzle. *(Where a solution DOES exist, the v3.186 probe below now catches them.)*
+
+## The solution probe, and what to do about a refuted validator (v3.186)
+
+v3.182 asks "does the answer satisfy this CLUE?" and mutes the ones that fail. The menu needs the
+question one level up: **is this validator's rule the rule the puzzle is actually using?**
+
+### The probe — no new per-clue predicates
+
+`buildSolutionProbeState` builds a synthetic board where every cell's only candidate is its
+**solution digit**, then `probeInfo(def)` runs `def.compute(null)` **unchanged**. A correct reading
+removes nothing — the answer supports itself. A reading the answer contradicts finds the solution
+digit unsupported and removes it. So "our reading of thermos is wrong here" is decided *by the
+thermo validator*, and a validator added tomorrow is probed correctly with no one remembering to
+write its predicate — the same FOOLPROOF PRINCIPLE the eyeball preview follows.
+
+Three one-line hooks: `readValidatorBoardState` returns the synthetic state, `getFogTester` goes
+blind (a probe asks about the finished grid, where nothing is hidden), and `muteSolutionRefuted`
+goes **inert** (muting the failing clues is precisely what would hide the answer).
+
+**Pin the digits as CENTRE marks, not values.** A placed value is not a candidate, so nothing could
+ever be removed from it and every validator would report a clean bill of health.
+
+### Magnitude, not a boolean
+
+`probeInfo` returns `{verdict, bad, total}` — how many of the validator's **clues** the answer
+refutes, grouped by `validatorClueCellGroups` (the same reader the missing-candidates warning uses).
+One bad cage among 29 (`bH8FJtL3F3` "Killer Sudoku") is a decoy that v3.182 already mutes correctly;
+16 of 19 (`ay6r6mmu5w` "Close Enough") means the rule itself is not ours. `probeSystematic` splits
+them at half — a blunt line, and nothing hinges on it: the real distribution is bimodal (43 of the
+99 refuted-cage puzzles refute **every** cage).
+
+### The three-way policy — `validatorTrust`
+
+The cost being managed is not correctness, it is **information**: a row that changes state tells the
+player something, and on a puzzle whose point is a hidden twist that is the spoiler.
+
+| trust | when | what the menu does |
+|---|---|---|
+| **ok** | probe clean, no solution — **or** refuted but the rules never NAME this clue type, or the refutation isn't systematic | nothing changes; v3.182's per-clue mute quietly keeps it from eliminating |
+| **grey** | refuted **and** the rules DECLARE that clues lie or that a clue's type is the solver's to pick (`rulesDeclareUnreliable`) | disabled, rescued by "Validate selection only"; excluded from run-all **and** from ↻ auto-update |
+| **drop** | refuted systematically **and** the rules DO name this clue type (`validatorTypeNamedInRules`) | removed from the menu |
+
+**The `ok` row is the interesting one.** A thermo is drawn; the rules say only *"circles are odd,
+lines are German whispers, and those are the only rules"* — so the thermo is really a circle plus a
+line. Saying anything would hand the player the twist, so the row behaves completely normally and
+the per-clue mute silently ensures it eliminates nothing. **Deliberate under-informing.**
+
+**`drop` is the ONE exception to v3.182's "an absent row is a spoiler".** It is not a spoiler when
+the rules themselves already said it: `ay6r6mmu5w` "Close Enough" states outright that cage clues
+are sums *rounded to the nearest multiple of 5*. A greyed row invites a click; here there is nothing
+to offer.
+
+Everything needs a trustworthy solution to reach at all (`probeInfo` is `unknown` without one), so
+on the ~46% of puzzles that publish none, **nothing here fires and the menu is exactly what it was.**
+
+### The cues
+
+`WROGN_DECLARED_RE` (the genre's own "wrogn", liar/lies, "false clue", "exactly one of … is false")
+and `TYPE_CHOICE_RE` ("sum or product", "either sum or multiply", and the general form
+**"must deduce whether"** — `5kx4d90kcm` "Sigma or Pi"), OR'd with the existing `SELF_DEDUCTION_RE`
+for the line-validator form.
+
+**These cues never act alone** — they only interpret a refutation the solution has already
+delivered — so a false positive on an honest puzzle costs *nothing*. Measured over the 3,688
+solution-bearing puzzles with rules text: the cue fires on 1.9%, of which the 49 on puzzles where
+nothing is refuted never reach the branch at all. That property is the design, and it is why a
+standalone precision figure for this cue would be meaningless.
+
+### Measured on cages (`python tools/cage_variants.py --policy`)
+
+Cages are the one clue type reproducible outside the browser (identical `r1c2` parsing, no
+geometry), so they stand in for the rest. Of 653 puzzles with readable cages and a solution:
+
+| outcome | puzzles | |
+|---|---|---|
+| **grey** | 17 | "Liar Zone Sudoku", "Liar Killer", "Wrogn Fogn" ×2, "Escape the Foggy Liar", "Sigma or Pi", "TomTom Sudoku" — the genre, cleanly |
+| **drop** | 104 | Zone Sudoku ×6, "Semikiller", "Knapp Daneben Killer", "Max Cage Sudoku", "Modular Cages", "Round Off Sudoku", "Count Different Sudoku", "The Devil is in the Details" (product), "Leap Day" (repeats). Nearly all at ratio **1.00** — every cage refuted |
+| **keep** | 16 | the partials: `bH8FJtL3F3` "Killer Sudoku" at 1/29, `blobz/orchard` at 4/11 — decoys, correctly left to the per-clue mute |
+
+The thin case is a puzzle with a single refuted cage and cages named in the rules (`67rr7DMJDh`
+"121", 1/1): ratio 1.00 on a sample of one, so it drops. There is no evidence available to tell
+that apart from a systematic variant, and the cost is one menu row.
 
 **Relationship to v3.157 (fail loudly).** A *structurally* impossible clue is still reported via
 `invalidClueMsg` — that is a detection bug we want to hear about. A *solution-refuted* clue is
