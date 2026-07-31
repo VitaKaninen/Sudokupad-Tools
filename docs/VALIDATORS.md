@@ -601,6 +601,19 @@ is forced on **once** and the flag remembers that it happened — a later delibe
      `scheduleAutoValidators()` after flagging. Its new orange is a new "this digit is impossible"
      for every ↻-on validator, but it changes no cell text, so the observer would never see it.
    - The observer stays connected while any ↻ is on, not only while a flag is fresh.
+   - **AUTO-FILL CATCH-UP (v3.180)** — `validatorAutoCatchUp()` runs the pass *now*, skipping both
+     the 150 ms debounce and the `actionInProgress` deferral (`runAutoValidators` = guards +
+     `runAutoValidatorsNow`; the catch-up calls the latter). It exists because Auto-fill
+     (`fillSingleCandidates`) holds the lock for its whole cascade **and** stales every flag with
+     the first digit it places, while `fsScanValid` trusts only *fresh* flags — so mid-run the
+     cascade went blind to the validators, stopped early, and the deferred pass then woke up and
+     produced the very single it needed, forcing the player to press the button again and again.
+     Auto-fill now catches up before its pre-run gate and, crucially, **before accepting "stuck"**:
+     no singles ⇒ catch up ⇒ re-analyse ⇒ only then give up. No infinite loop, because continuing
+     requires a new single and every single consumes an empty cell. Never place the catch-up in
+     the *per-placement* path — a full fixpoint per digit is the thrash the debounce exists to
+     prevent, and the stale-flag blindness only ever costs progress, never a wrong placement (a
+     stale-ignored candidate makes a cell look like it has MORE options, so it just isn't a single).
    - **Disabled while "Validate selection only" is ticked** (an auto re-run would keep re-reading a
      selection the player has since moved): `validatorAutoAllowed()` returns false, the icons render
      greyed with a tooltip saying why, and ticking the checkbox calls `validatorAutoClearAll()`. Also

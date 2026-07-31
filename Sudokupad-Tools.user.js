@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.179.0
+// @version      3.180.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.179.0';
+  var SCRIPT_VERSION = '3.180.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -14587,7 +14587,7 @@
           : 'Auto-update is unavailable for this validator in this puzzle.')
       : (on
           ? 'Auto-update is ON — click to stop re-running this validator (its current highlight stays)'
-          : 'Run this validator again, and keep it updated: it re-runs on every change you make to the grid');
+          : 'Auto-update - Automatically rerun this validator on every change you make to the grid to keep it current');
     if (disabled) { ic.style.pointerEvents = 'none'; return ic; }
     ic.addEventListener('mouseenter', function () { ic.style.opacity = '1'; });
     ic.addEventListener('mouseleave', function () { ic.style.opacity = on ? '1' : '0.55'; });
@@ -15074,6 +15074,23 @@
     validatorAutoTimer = null;
     if (!validatorAutoAny()) return;
     if (actionInProgress) { validatorAutoTimer = setTimeout(runAutoValidators, 250); return; }
+    runAutoValidatorsNow();
+  }
+  // BRING THE ORANGE UP TO DATE RIGHT NOW (v3.180) — no debounce, no actionInProgress
+  // deferral. For a long-running action that READS the orange as it goes: Auto-fill holds
+  // the lock for its whole cascade, so the ordinary pass can't run until the cascade is
+  // already over, and its own placements stale every flag on the first digit it places.
+  // The effect was that Auto-fill went blind to the validators mid-run, stopped early, and
+  // only then did the validators wake up and hand it the next single — so the player had to
+  // press the button again and again. Callers use this to catch up and look once more.
+  // Returns whether a pass actually ran (i.e. any ↻ is on).
+  function validatorAutoCatchUp() {
+    if (!validatorAutoAny()) return false;
+    if (validatorAutoTimer) { clearTimeout(validatorAutoTimer); validatorAutoTimer = null; }
+    runAutoValidatorsNow();
+    return true;
+  }
+  function runAutoValidatorsNow() {
     var defs = detectedValidators().filter(function (d) { return validatorAutoOn(d.name); });
     if (!defs.length) return;
     var hadAny = validatorHiliteAny();
@@ -17972,6 +17989,10 @@
     var cellByKey = {};
     app.puzzle.cells.forEach(function (c) { cellByKey[c.col + ',' + c.row] = c; });
 
+    // Start from CURRENT orange, not whatever the ↻ validators last managed to compute
+    // (their pass is debounced, so an edit a moment ago may still be pending).
+    validatorAutoCatchUp();
+
     // Pre-run gate. When unmet, just (re-)show the explainer — it already states
     // the reason; do not start. (No separate toast → no double-stacking.)
     var a0 = fsAnalyse(app);
@@ -18007,6 +18028,17 @@
         var a = fsAnalyse(app);
         if (a.empties.length === 0) { finish('complete'); break; }
         if (a.zero.length > 0)      { finish('broken', a.zero[0]); break; }
+        // NOT STUCK UNTIL THE VALIDATORS AGREE (v3.180). Every digit we place stales the
+        // orange, and fsScanValid only trusts fresh flags — so "no single-candidate cell"
+        // may just mean the highlights are a few placements behind. Bring the ↻ validators
+        // up to date and look again; the digit they rule out is often exactly the one that
+        // makes the next cell a single, which is what keeps the cascade going instead of
+        // handing the player a "stuck" and making them press the button again.
+        if (a.singles.length === 0 && validatorAutoCatchUp()) {
+          a = fsAnalyse(app);
+          if (a.empties.length === 0) { finish('complete'); break; }
+          if (a.zero.length > 0)      { finish('broken', a.zero[0]); break; }
+        }
         if (a.singles.length === 0) { finish('stuck'); break; }
         var next = a.singles[0];
         app.deselect();
