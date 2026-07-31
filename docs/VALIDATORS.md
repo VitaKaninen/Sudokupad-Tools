@@ -273,6 +273,32 @@ by the v3.157 structural check: *Sigma or Pi* has a 4-cell cage marked 30 whose 
 PRODUCT, and 6+7+8+9=30 is a legal sum — so before v3.182 the validator eliminated against a rule
 the puzzle never stated.
 
+### Non-sum cage variants (v3.183) — a cage corner is not always a sum
+
+A killer-style cage's corner number can be a **product** (`26e1w4r81e` "The Devil is in the
+Details", 666 over 5–8 cells), a **difference** (`2mcr6exf3p` "Sub-Zero", corners of −1/−4/−7), a
+sum with **repeats allowed** (`36fnN33h7L` "Leap Day", 29 over a 14-cell cage), a **digit list** (a
+4-cell cage cornered "4456" = the digits it holds — and `Number('4456')` is a perfectly finite
+"total"), or a **partial list** (a lone "9" meaning "at least one 9 is in here"). `cage.unique ===
+false` does NOT identify these: the catalog sets it on just **51 cages in total**, so
+repeats-allowed cages overwhelmingly look standard to us.
+
+**What changed:** such a cage usually yields ZERO combinations, and used to be reported through
+v3.157's `invalidClueMsg` — "⛔ no arrangement of digits can satisfy it". For cages that message is
+alarming *and factually wrong* (a 666 product cage is perfectly satisfiable), it fires on **888
+cages across 172 catalogued puzzles**, and it points the player straight at the cage on a puzzle
+where the corner number is the joke. Zero-combination cages are now **counted with the other
+unusable cages and silent**. v3.157's loud path is untouched for every other clue type — for those,
+zero-combination really is the rare detection bug it was written for.
+
+**Residual gap, knowingly left open:** a variant whose corner also happens to be a legal
+distinct-digit sum (a 3-cell PRODUCT cage cornered 24, when 7+8+9 = 24) still validates as a killer
+cage. Only the solution mute catches it, so on a puzzle with no published solution the wrong
+eliminations remain. **A rules-cue detector was measured and rejected** — over the 651
+solution-bearing puzzles with readable cages it caught 43 variants, missed 81, and raised 29 false
+alarms (60% precision, 35% recall); greying out the validator on 29 honest killer puzzles costs
+more than the gap it closes. Revisit only with a much sharper cue.
+
 **Relationship to v3.157 (fail loudly).** A *structurally* impossible clue is still reported via
 `invalidClueMsg` — that is a detection bug we want to hear about. A *solution-refuted* clue is
 silent. The distinction: structural impossibility is mark- and solution-independent and always

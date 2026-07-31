@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.182.0
+// @version      3.183.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.182.0';
+  var SCRIPT_VERSION = '3.183.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -8926,22 +8926,40 @@
 
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
 
-    // Per-cage combination list. A cage with ZERO valid combinations (a total no
-    // combination of distinct digits can make, or a digit set that doesn't match the
-    // puzzle's) is IMPOSSIBLE as read: dropped rather than allowed to wipe out every
-    // candidate, and reported rather than silently skipped (see invalidClueMsg) —
-    // a peer-reviewed puzzle doesn't ship an unmakeable cage, so it means the total
-    // or the cage's cell list was misread.
-    var active = [], invalid = 0;
+    // Per-cage combination list. A cage with ZERO valid combinations is dropped —
+    // never allowed to wipe out every candidate.
+    //
+    // IT IS *NOT* REPORTED AS AN IMPOSSIBLE CLUE (changed v3.183). It used to go
+    // down the v3.157 invalidClueMsg path — "⛔ no arrangement of digits can satisfy
+    // it" — and for cages that message is both alarming and FACTUALLY WRONG. A cage
+    // corner is not always a distinct-digit sum. Measured over the catalog, 888
+    // cages across 172 puzzles yield zero combinations, and they are dominated by
+    // ordinary NON-SUM CAGE VARIANTS, not by misparses:
+    //   • product      — `26e1w4r81e` "The Devil is in the Details", 666 over 5-8 cells
+    //   • difference   — `2mcr6exf3p` "Sub-Zero", corners of -1 / -4 / -7
+    //   • repeats OK   — `36fnN33h7L` "Leap Day", 29 over a 14-cell cage
+    //   • digit LIST   — a 4-cell cage cornered "4456" = the digits it holds, and
+    //                    Number('4456') is a perfectly finite "total"
+    //   • partial list — a lone "9" meaning "at least one 9 lives here"
+    // `cage.unique === false` does not identify these: the catalog sets it on just
+    // 51 cages in total, so repeats-allowed cages overwhelmingly look standard.
+    //
+    // So a zero-combination cage means WE READ THE WRONG CLUE TYPE (exactly what
+    // v3.157 says), but for cages that is the common case rather than a detection
+    // bug worth shouting about — and shouting also points the player straight at a
+    // cage on a puzzle where the corner number is the puzzle's own joke. Count it
+    // with the other unusable cages and stay quiet. v3.157's loud path is untouched
+    // for every other clue type.
+    var active = [], unreadable = 0;
     cages.forEach(function (cage) {
       var combos = cageCombinations(digitList, cage.keys.length, cage.sum)
         .map(function (c) { return { arr: c, set: new Set(c) }; });
       if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
-      else invalid++;
+      else unreadable++;
     });
+    cagesShown += unreadable;
     if (active.length === 0)
-      return cagesShown ? { removals: [], cageCount: cagesShown, invalid: invalid }
-                        : { noCages: true, invalid: invalid };
+      return cagesShown ? { removals: [], cageCount: cagesShown } : { noCages: true };
 
     // Working copies of the player's centre marks (the only cells we may modify).
     var work = {};
@@ -8999,7 +9017,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, cageCount: active.length + cagesShown, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, cageCount: active.length + cagesShown, emptiedCells: emptied };
   }
 
   // ── Little-killer validator ───────────────────────────────────────────────
