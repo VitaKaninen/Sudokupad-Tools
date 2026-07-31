@@ -139,6 +139,74 @@ Run `python tools/cue_recall.py` as well on any cue change (keep UNREADABLE at 0
 **and** `SCRIPT_VERSION` together — a PostToolUse hook blocks the edit if they drift. Commit and push
 each phase separately; they are independently shippable and independently revertible.
 
+## Appendix — test set
+
+Every id below was confirmed against the catalog on 2026-08-01. When this file is deleted, move any
+that stay useful into `PROJECT_SUMMARY.md`'s test-puzzle list.
+
+### A. The false green (Phases 1–3)
+
+| puzzle | what it is | today → wanted |
+|---|---|---|
+| [`67rr7DMJDh`](https://sudokupad.app/67rr7DMJDh) "121" | ONE cage: 36 cells, total 121, honest repeats-allowed sum | green all-clear **and** row dropped → checked as repeats, or UNCHECKED with the cells>digits reason |
+| [`26e1w4r81e`](https://sudokupad.app/26e1w4r81e) "The Devil is in the Details" | 4 product cages cornered 666 | silent, counted → UNCHECKED, named |
+| [`36fnN33h7L`](https://sudokupad.app/36fnN33h7L) "Leap Day" | 29 over a 14-cell cage | silent, counted → UNCHECKED, named |
+
+### B. The mute (Phase 2) — decoys must fail loudly
+
+| puzzle | what it is | today → wanted |
+|---|---|---|
+| [`yiaonocy5d`](https://sudokupad.app/yiaonocy5d) "...What?" | 6×6 troll; 5 of 7 drawings are decoys (cage, thermo, arrow, quad, difference dot) | muted/neutered, green → every row live and fully functional; the fake thermo/quad/dot **fail** when run |
+| [`bH8FJtL3F3`](https://sudokupad.app/bH8FJtL3F3) "Killer Sudoku" | 1 decoy cage among 29 honest ones | decoy muted, "29 checked" → 29 checked for real, the decoy fails |
+
+### C. `drop` removed (Phase 4) — rows come back
+
+| puzzle | what it is | today → wanted |
+|---|---|---|
+| [`ay6r6mmu5w`](https://sudokupad.app/ay6r6mmu5w) "Close Enough" | 20 cages, sums rounded to nearest 5 | row dropped → **live** (no cue recognises rounding), runs and fails |
+| [`rd2kn6vy6d`](https://sudokupad.app/rd2kn6vy6d) "Regional Heatwave" | region-sum segments *strictly increase* along the line | — → **live**, runs, fails. The tool not fitting the job |
+
+### D. Grey (c) — two readings we support
+
+| puzzle | what it is | wanted |
+|---|---|---|
+| [`5kx4d90kcm`](https://sudokupad.app/5kx4d90kcm) "Sigma or Pi" | *"solvers must deduce whether each cage is a sum cage or a product cage"* | **grey**, not drop. Selection rescues; a sum-run failing teaches the player it's a product cage |
+
+### E. Grey (a) — can't locate or disambiguate
+
+| puzzle | why |
+|---|---|
+| [`NbqQ2HhP4P`](https://sudokupad.app/NbqQ2HhP4P) "Miracle-Once Again" | counting-circle rules, no circles drawn — player places them |
+| [`nmhixakego`](https://sudokupad.app/nmhixakego) "Campfire Whispers" | the "circles" are tents the player draws |
+| [`k18i652bjj`](https://sudokupad.app/k18i652bjj) "Within and without" | between lines present but not locatable; lockout lines on the same puzzle ARE found |
+| [`1cwnilmrp0`](https://sudokupad.app/1cwnilmrp0) "Two Out of Three Ain't Bad" | line type is the solver's choice — the original grey case (v3.90) |
+
+### F. Partial detection — live, with an unchecked subset
+
+| puzzle | why |
+|---|---|
+| [`xgmmht4odf`](https://sudokupad.app/xgmmht4odf) "The Buddy System" | circles shared between between-lines and palindromes; some count, some don't. Must stay **live**, check what it can, and name the rest |
+
+### G. Fog (Phase 4) — every row greyed
+
+| puzzle | why |
+|---|---|
+| [`26w1k7rwci`](https://sudokupad.app/26w1k7rwci) "The Fourth Killer" | fog + killer cages |
+| [`FMGPBBt24p`](https://sudokupad.app/FMGPBBt24p) "Lines in the Fog" | fog + region-sum lines |
+
+Check all three fog rules: 👁 disabled, every row greyed, selection run works and reports no
+denominator (select 2 cages → "2 cages", never "2 of 20").
+
+### H. Control — nothing may change
+
+| puzzle | why |
+|---|---|
+| [`0qbt11p1jt`](https://sudokupad.app/0qbt11p1jt) "Mar. 17, 2025: Killer Sudoku" (clover!) | 20 plain cages, solution published, probes clean |
+| [`179dze6yfh`](https://sudokupad.app/179dze6yfh) "July 13, 2025: Killer Sudoku" (clover!) | 16 plain cages, solution published, probes clean |
+
+**Run these first and last.** They are the 82% case, and if either changes behaviour at any phase,
+something in the shared machinery broke.
+
 ## Stop and ask
 
 - A phase would require showing the player something derived from the solution.
