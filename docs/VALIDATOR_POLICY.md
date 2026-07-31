@@ -115,8 +115,8 @@ weighing any future "but it would over-remove" objection.
 | state | when | behaviour |
 |---|---|---|
 | **live** | **the default, and the overwhelming majority.** A clue of this shape is drawn and nothing in the *rules text* says our rule isn't the puzzle's rule | normal row, normal run, full loudness |
-| **grey** | (a) we cannot determine **which** drawn clue this validator applies to, or where it is; **or** (b) the rules **declare** that clues lie, or hand the clue's type to the solver | listed, disabled, hover explains why; **rescued by "Validate selection only"**; excluded from run-all and from ↻ auto-update; eyeball stays live |
-| **drop** | the rules **plainly state a different rule** for this clue type — the corner is a product, sums are rounded to the nearest 5, etc. | removed from the menu |
+| **grey** | (a) we cannot determine **which** drawn clue this validator applies to, or where it is; (b) the rules **declare** that clues lie; or (c) the rules hand the clue's type to the solver **and we can check at least one of the offered readings** | listed, disabled, hover explains why; **rescued by "Validate selection only" — and that run is real, and may fail**; excluded from run-all and from ↻ auto-update; eyeball stays live |
+| **drop** | the rules state a rule we **cannot check at all** — sums rounded to the nearest multiple of 5, a cell's value differing from its digit | removed from the menu |
 
 Sources: grey semantics 2026-07-17; the (b) branch and `drop` 2026-07-31.
 
@@ -128,14 +128,52 @@ Sources: grey semantics 2026-07-17; the (b) branch and `drop` 2026-07-31.
 > the validator completely, and not gray it out. There is no reason for it to be available."
 > — 2026-07-31 (`ay6r6mmu5w` "Close Enough", `5kx4d90kcm` "Sigma or Pi")
 
-**These two quotes are not in conflict — check the provenance before reopening it.** The first
-(2026-07-31 12:02, session "Script on/off switch and puzzle validators") was answering a question
-scoped to a specific residue: the 29 catalogued puzzles with no arithmetic tip-off and no published
-solution, whose *rules state a rule that isn't ours*. Read in place, that turn separates the cases
-itself — rules declare a liar ⇒ grey; not spelled out ⇒ keep it available; rules plainly don't fit
-⇒ disable outright. The second (19:54, "Cage validation issue") is about the general case, where
-nothing in the rules contradicts us. **Default live; grey and drop are the narrow exceptions, and
-both need rules-text evidence.**
+### Two different reasons to leave the row out, and only one of them is delicate
+
+This is where the design was misread once already, so it is spelled out. Grey and drop get reached
+by two unrelated roads:
+
+**Road A — the puzzle hides something (leak concern, high stakes).** Wrogn puzzles, liar clues,
+cryptic omissions. Here the row's state is *itself* information, and getting it wrong spoils the
+puzzle. The policy is therefore conservative in one direction only: **stay live, behave normally,
+say nothing.** Grey is permitted here *only when the puzzle has already announced the mechanic
+itself* (branches b and c) — the player has been told, so a greyed row tells them nothing new.
+
+**Road B — the puzzle uses a rule we don't implement (capability, low stakes).** `ay6r6mmu5w`
+"Close Enough" (sums rounded to the nearest 5), `5kx4d90kcm` "Sigma or Pi" (sum *or* product,
+solver's choice). **These are not wrogn puzzles and there is nothing to leak** — the rules state the
+variant outright.
+
+> "I was not concerned about leaking information on the examples, since they were not cryptic clue
+> or wrogn puzzles, they just had a different ruleset from the standard cages. … It really is not a
+> big deal if it is present or not, since the user should have read the rules and realized that it
+> would not work there anyway." — 2026-08-01
+
+**Calibration, and it matters:** Road B decisions are cheap. Do not buy Road B precision with Road A
+costs, and do not spend heavy engineering on it. Getting a Road B row wrong costs a menu entry the
+player already knew was useless. That is the yardstick the v3.184 whole-puzzle cage gate fails (§7)
+— it disabled cage validation on 14 honest puzzles, silently, to tidy up a Road B case.
+
+**Worked example — `5kx4d90kcm` "Sigma or Pi" is grey, not drop.** We implement sum, which is one of
+the two readings the rules offer. So the row is greyed, and the player rescues it with "Validate
+selection only":
+
+> "In the current state of the script, it only worked on sum cages, so if they had narrowed down
+> some candidates in a cage, they could run it on the cage, and if it failed, then they would know
+> that this was a product cage." — 2026-08-01
+
+**That failure is the product, not a malfunction.** It is the same discovery mechanism as the troll
+cage in §2, reached through the checkbox instead of the plain click — which is why a greyed row's
+selection-run must be fully real and fully loud (§3). `ay6r6mmu5w` "Close Enough" drops instead,
+because rounded sums are a rule we cannot check under *any* reading, so there is nothing to offer.
+
+**Provenance, so this isn't reopened.** The two quotes above are not in conflict. The first
+(2026-07-31 12:02, session "Script on/off switch and puzzle validators") answered a question scoped
+to a specific residue — the 29 catalogued puzzles with no arithmetic tip-off and no published
+solution — and is a **Road B** statement throughout. Its "those types of puzzles are the only ones
+where I am concerned about leaking information" refers to **wrogn puzzles generally, not to those
+two examples** (clarified 2026-08-01). The second (2026-07-31 19:54, "Cage validation issue") is
+Road A. **Default live; grey and drop are narrow exceptions, and both need rules-text evidence.**
 
 ### What may be evidence for grey / drop
 
@@ -238,7 +276,7 @@ Every item below is a place where shipped behaviour contradicts this document.
 | `muteSolutionRefuted` (≈7872) + its 6 call sites (Kropki, XV, difference dot, cage, thermo, arrow) | silently drops solution-refuted clues, adds them back to the reported count | **delete the mute.** Refuted clues either get read correctly (§6) or are reported UNCHECKED (§3) |
 | `cagesShown = cageMute.muted + countSumlessKillerCages()` (≈9188) | inflates the checked count with clues that were never checked — the false green | count and name them separately; never fold into the clean total |
 | `computeCageRemovals` zero-combination path (v3.183, ≈9194) | silently drops the cage | UNCHECKED with an honest, non-diagnostic reason |
-| v3.184 whole-puzzle cage gate | one impossible cage disables cage validation puzzle-wide, silently, on 17% of honest puzzles too | remove. Replaced by per-cage UNCHECKED + §6 ruleset identification |
+| v3.184 whole-puzzle cage gate | one impossible cage disables cage validation puzzle-wide, silently — 14 honest puzzles lose their cage validator at the measured 83% precision | remove. It pays a Road A price (silent loss on honest puzzles) to tidy a Road B case the player was already told about (§4). Replaced by per-cage UNCHECKED + §6 ruleset identification |
 | `validatorTrust` (≈14963) | structure is **right** and stays | but `ok` must mean *fully live*, not *live-but-neutered*. Its dependence on the mute for the "quiet" behaviour goes away with the mute |
 | toast/summary text | says "nothing to remove" when clues went unchecked | three-bucket reporting per §3 |
 
