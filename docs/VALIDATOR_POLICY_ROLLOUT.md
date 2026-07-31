@@ -124,7 +124,30 @@ whose variant total is a legal sum. Accepted, recorded, not to be fixed here.
   repeats-allowed branch or mark it unchecked — but never call it clean.
 - Remove the v3.184 whole-puzzle gate and its `note` channel. See trap 4.
 
-## Phase 4 — menu states
+## Phase 4 — menu states — ✅ LANDED v3.191.0
+
+**What shipped.** `validatorTrust` returns `{state, why}` so a greyed row's tooltip can name the
+actual branch. The `drop` branch now reads `KNOWN_UNSUPPORTED_VARIANTS`, which is **empty** — nothing
+is dropped on a fresh checkout, and `validatorTypeNamedInRules` / `probeSystematic` survive unwired
+(both are §6 material; harness asserts neither reaches a drop). Grey branch (c) is
+`rulesHandTypeToSolver`, needing no probe. Fog greys every row via `puzzleHasFog()`, the thermo row
+included — it used to slip past the grey check entirely because `addThermoItem` returned early, so
+fog left it live while every other row greyed. Run-all is disabled with a real explanation when every
+row is grey, instead of claiming "No supported constraints detected".
+
+**Branch (c) is scoped to the clue type, and that was measured.** Firing on `TYPE_CHOICE_RE` alone
+would grey 12 of the catalog's 1,582 cage puzzles, and a hand-read says 6 of those are about letters,
+shaded sets, box multipliers or line types — not cages. Requiring the clue type within ±30 characters
+of the phrase gives 6/6 with zero false alarms (±40 loses that). All twelve are harness cases. 477 pass.
+
+**Two judgement calls worth knowing about.**
+1. **`puzzleHasFog()` over `getFogTester()`.** The latter is more precise — it goes null once
+   everything is revealed, so rows would come back at the end of a fog solve — but it also returns
+   null whenever the rendered `#fog-path` read fails, which would silently un-grey every row on
+   exactly the puzzle that needed it. Matching the 👁 lockout's model-based test keeps the two fog
+   rules from ever disagreeing. The cost is a small tax at the end of a fog solve.
+2. **Branch (b) keeps its probe gate.** §4 says (b) is "the rules declare *and* the probe refutes",
+   so `rulesDeclareUnreliable` is unchanged and still needs a refutation. Only (c) runs cue-only.
 
 - `validatorTrust` (≈14963): **delete the `drop` branch.** A probe refutation is not a positive
   identification, so it may not remove a row. Keep `grey` via `rulesDeclareUnreliable`. `ok` now

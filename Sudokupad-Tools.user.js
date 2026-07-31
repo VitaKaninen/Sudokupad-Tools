@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.190.0
+// @version      3.191.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.190.0';
+  var SCRIPT_VERSION = '3.191.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -7876,6 +7876,13 @@
   // line: the real distribution is bimodal (43 of the catalog's 99 refuted-cage
   // puzzles refute EVERY cage; most of the rest refute one or two), so nothing
   // hinges on the exact threshold.
+  //
+  // CURRENTLY UNUSED, DELIBERATELY KEPT (v3.191) — same standing as
+  // solutionDigitsFor. It was validatorTrust's `drop` gate until §4 established
+  // that a probe refutation is not a positive identification and may not remove a
+  // row. The magnitude question it answers is still the right one, and §6's cage
+  // work needs exactly it: "does ONE cage disagree, or do ALL of them" is how you
+  // tell a decoy from a puzzle-wide variant ruleset.
   var PROBE_SYSTEMATIC = 0.5;
   function probeSystematic(p) {
     return p.total > 0 && p.bad / p.total >= PROBE_SYSTEMATIC;
@@ -10295,10 +10302,51 @@
   };
   // A cue-classified LINE validator is only in the menu because its own cue fired,
   // i.e. the rules already named it — so those need no entry above.
+  //
+  // CURRENTLY UNUSED (v3.191): this was the second half of validatorTrust's `drop`
+  // gate, and "the rules name this type + the probe refutes it" is exactly the
+  // inference §4 rules out — it reads the answer as evidence about the puzzle's
+  // rule, which it cannot be. RULES_MENTION above is still live; it scopes grey
+  // branch (c) to the clue type (rulesHandTypeToSolver).
   function validatorTypeNamedInRules(def) {
     if (def.classify) return true;
     var re = RULES_MENTION[def.name];
     return re ? re.test(getPuzzleRulesBlob()) : false;
+  }
+  // ── GREY BRANCH (c): THE PUZZLE HANDS THIS CLUE'S RULESET TO THE SOLVER ─────
+  // §4: two or more readings could apply and the puzzle does not say which clue is
+  // which. Both validators get listed, BOTH greyed, and the solver picks per clue
+  // with "Validate selection only" — and that run is real and may fail, which is
+  // exactly how they find out (`5kx4d90kcm` "Sigma or Pi": run the sum validator
+  // on a cage, watch it fail, now you know it's a product cage).
+  //
+  // Needs NO probe and no published solution. The rules said it out loud, and a
+  // rules phrase we recognise IS the "reason we can name" the policy demands —
+  // unlike a probe refutation, which only ever says our reading didn't hold.
+  //
+  // THE PHRASE MUST NAME THIS CLUE TYPE. Measured over the catalog's 1,582 cage
+  // puzzles carrying rules text (2026-07-31): TYPE_CHOICE_RE on its own fires on
+  // 12, and a hand-read says only 6 are about the cage's ruleset at all. The other
+  // 6 are about letters ("determine which letter represents which digit"), shaded
+  // sets ("decide which of the sets is Fire"), box multipliers, or LINE types —
+  // and greying an honest puzzle's row is a Road A cost we may not pay for a Road
+  // B convenience. Requiring the clue type within ±30 characters of the phrase
+  // gives 6 of 6 with ZERO false alarms; ±40 lets the first one back in, so the
+  // window is deliberately tight rather than generous.
+  //
+  // Pure (blob + regex in, boolean out) so the harness can pin the window.
+  var TYPE_CHOICE_WINDOW = 30;
+  function rulesHandTypeToSolver(blob, typeRe) {
+    if (!typeRe || !blob) return false;
+    var flat = blob.replace(/\s+/g, ' ');
+    var re = new RegExp(TYPE_CHOICE_RE.source, 'g');
+    var m;
+    while ((m = re.exec(flat)) !== null) {
+      if (typeRe.test(flat.slice(Math.max(0, m.index - TYPE_CHOICE_WINDOW),
+                                 m.index + m[0].length + TYPE_CHOICE_WINDOW))) return true;
+      if (m.index === re.lastIndex) re.lastIndex++;      // zero-length match guard
+    }
+    return false;
   }
   // ── WE DO NOT DIAGNOSE A CLUE'S VALIDITY — that is the solver's job (v3.166) ─
   // v3.165 added a LINE_MORPH_RE guard that forced every cue validator AMBIGUOUS
@@ -14961,58 +15009,118 @@
     } catch (e) {}
     return (typeof def.menuLabel === 'string' && def.menuLabel) || def.name;
   }
-  // ── WHAT TO DO WHEN THE ANSWER SAYS OUR RULE IS THE WRONG RULE (v3.186) ──────
-  // Three outcomes, and which one applies turns on what the RULES TEXT says —
-  // because the cost we are managing is not correctness, it is INFORMATION. A row
-  // that changes state tells the player something, and on a puzzle whose whole
-  // point is a hidden twist, that is the spoiler.
+  // ── WHAT STATE A MENU ROW IS IN (v3.191, rewritten from v3.186) ─────────────
+  // Three states, and the bar for leaving 'ok' is POSITIVE IDENTIFICATION: we may
+  // only demote a row for a reason we can NAME. That falls out of a question with
+  // no other good answer — *how do we know we can't validate this?*
+  //   • From the solution? No. That route cannot tell "this puzzle uses a variant"
+  //     from "this puzzle is lying on purpose", so acting on it risks revealing a
+  //     wrogn puzzle. §5 forbids it.
+  //   • From the rules? Only for variants we already know exist. We cannot search
+  //     for what we don't know is out there.
+  // So: can we point at a specific rules phrase we recognise, or an arithmetic
+  // fact? If not, the row is LIVE and we run the standard reading.
   //
-  //   'ok'   — probe clean, no solution to probe with, or (the interesting case)
-  //            the probe refuted us but the rules never NAME this clue type. That
-  //            is the cryptic puzzle: a thermo is drawn, the rules say only
-  //            "circles are odd, lines are German whispers, and those are the only
-  //            rules", so the thermo is really a circle plus a line. Saying so
-  //            would hand the player the twist, so the row behaves normally and
-  //            v3.182's per-clue mute quietly keeps it from eliminating anything.
-  //            Under-informing on purpose.
-  //   'grey'  — the rules DECLARE that clues lie or that a clue's type is the
-  //            solver's to pick. The player already knows, so greying tells them
-  //            nothing new — and leaving it live would eliminate against a rule
-  //            the puzzle disowned. Still runnable on a hand-selection, which is
-  //            exactly the affordance such a puzzle wants once the player has
-  //            worked out which clue is which.
-  //   'drop'  — the rules DO name this clue type, and our reading of it still
-  //            contradicts the answer. Then the rules are stating a DIFFERENT rule
-  //            for it (`ay6r6mmu5w` "Close Enough", sums that are near-misses;
-  //            `5kx4d90kcm` "Sigma or Pi"). The validator does not apply to this
-  //            puzzle at all, so it is removed rather than greyed: a greyed row
-  //            invites a click, and here there is nothing to offer. This is the
-  //            ONE deliberate exception to v3.182's "an absent row is a spoiler" —
-  //            it is not a spoiler when the rules themselves already said it.
+  //   'ok'   — THE DEFAULT, and by a wide margin. Everything not positively
+  //            identified below. Includes the case that used to feel wrong: the
+  //            probe refutes us and the rules never name this clue type. That is
+  //            the cryptic puzzle — a thermo is drawn, the rules say only "circles
+  //            are odd, lines are German whispers, and those are the only rules".
+  //            The row stays LIVE AND FULLY FUNCTIONAL. It runs, it fails, and
+  //            that failure is how the player learns. It is not neutered (v3.189
+  //            deleted the mute that used to neuter it), and it is not removed.
+  //   'grey' — listed, disabled, hover explains why; RESCUED by "Validate
+  //            selection only", and that run is real and may fail. Three ways in:
+  //              (a) fog — every row greys, so the player must pick the clue (§4
+  //                  rule 3). Also: which clues exist is itself fogged content.
+  //              (b) the rules DECLARE that clues lie AND the probe refutes. The
+  //                  player was already told, so greying tells them nothing new.
+  //              (c) the rules hand THIS clue type's ruleset to the solver
+  //                  (`5kx4d90kcm` "Sigma or Pi"). No probe needed — the puzzle
+  //                  said it out loud. See rulesHandTypeToSolver.
+  //   'drop' — removed from the menu. ONLY for a variant we POSITIVELY RECOGNISE
+  //            and have chosen not to implement. The list starts EMPTY and grows
+  //            one entry at a time.
   //
-  // Every branch needs a trustworthy solution to reach at all (probeVerdict is
-  // 'unknown' without one), so on the ~46% of puzzles that publish none, nothing
-  // here fires and the menu is exactly what it was.
+  // ⚠️ A PROBE REFUTATION NO LONGER DROPS A ROW (v3.191). v3.186 dropped on
+  // "probe systematic + rules name the type", which reads the answer as evidence
+  // about the puzzle's RULE — and it cannot be, because it cannot separate a
+  // variant from a deliberate lie. `ay6r6mmu5w` "Close Enough" (rounded sums) and
+  // `rd2kn6vy6d` "Regional Heatwave" get their rows back and are expected to RUN
+  // AND FAIL. That is not an error state to engineer away: a validator that fails
+  // on a clue it wasn't built for is the tool working, and it is how the player
+  // learns they reached for the wrong one.
+  var KNOWN_UNSUPPORTED_VARIANTS = [];   // { validator, re, puzzle } — see below
+  // Variants we have MET, recognised from the rules, and decided not to implement.
+  // Empty on purpose. Adding an entry is a claim that we know this variant exists
+  // and cannot check it under ANY reading we support, so record which puzzle
+  // taught us. `ay6r6mmu5w` "Close Enough" is the shape a future entry would take
+  // (sums rounded to the nearest 5) — it is NOT listed, because dropping it needs
+  // a cue for "rounded sums" we have not built and cannot fake with a probe.
+  function validatorDropsForKnownVariant(def) {
+    if (KNOWN_UNSUPPORTED_VARIANTS.length === 0) return false;
+    var blob = getPuzzleRulesBlob();
+    return KNOWN_UNSUPPORTED_VARIANTS.some(function (v) {
+      return v.validator === def.name && v.re.test(blob);
+    });
+  }
+  // Returns { state, why }. `why` names WHICH branch greyed the row, so the
+  // tooltip can say something true — the three reasons are not interchangeable,
+  // and a fog row told "your rules say clues may lie" is a lie of its own.
   function validatorTrust(def) {
+    // (a) FOG. Every row greys, whatever else is true — a whole-puzzle run would
+    // have to state a denominator ("5 of 12 cages"), and that 12 is fogged content.
+    // A selection run carries no denominator, so this needs no reporting exception.
+    //
+    // puzzleHasFog(), not getFogTester(): the same MODEL-based test the eyeball
+    // lockout uses (rule 1), so the two fog rules can never disagree. getFogTester()
+    // reads the rendered #fog-path and returns null whenever that read fails, which
+    // would silently un-grey every row on exactly the puzzle that needed it. The
+    // cost is that a fully-revealed fog puzzle keeps its rows greyed to the end;
+    // that is a small tax, paid in the safe direction.
+    if (puzzleHasFog()) return { state: 'grey', why: 'fog' };
+    // (c) the rules hand this clue type's ruleset to the solver. No probe, no
+    // solution required — this is the branch that works on the 46% that publish none.
+    if (rulesHandTypeToSolver(getPuzzleRulesBlob(), def.classify ? null : RULES_MENTION[def.name]))
+      return { state: 'grey', why: 'typeChoice' };
+    // (b) the rules declare clues lie / are the solver's to type, AND the answer
+    // agrees our reading does not hold. Both halves are required: the rules alone
+    // may be about some other clue type, and the probe alone is not an identification.
     var p = probeInfo(def);
-    if (p.verdict !== 'refuted') return 'ok';
-    if (rulesDeclareUnreliable(getPuzzleRulesBlob())) return 'grey';
-    // A refutation the rules never hinted at, or one confined to a clue or two, is
-    // a decoy among honest clues — v3.182 mutes those individually and the row goes
-    // on behaving normally. Only a SYSTEMATIC refutation of a clue type the rules
-    // actually name says "this validator is not the rule here".
-    if (!probeSystematic(p)) return 'ok';
-    return validatorTypeNamedInRules(def) ? 'drop' : 'ok';
+    if (p.verdict === 'refuted' && rulesDeclareUnreliable(getPuzzleRulesBlob()))
+      return { state: 'grey', why: 'declaredUnreliable' };
+    return { state: validatorDropsForKnownVariant(def) ? 'drop' : 'ok', why: null };
   }
   function detectedValidators() {
     return constraintValidators().filter(function (v) {
       try {
         if (v.classify) { v.cls = v.classify(); if (v.cls.mode === 'none') return false; }
         else if (!v.detect()) return false;
-        v.trust = validatorTrust(v);
+        var t = validatorTrust(v);
+        v.trust = t.state;
+        v.greyWhy = t.why;
         return v.trust !== 'drop';
       } catch (e) { return false; }
     });
+  }
+  // The hover text for a greyed row, per branch. All three end the same way,
+  // because the rescue is the same: tick "Validate selection only", select the
+  // clue you want checked, and the run is REAL — it can and should fail.
+  function greyRowTip(def, selOnly) {
+    var noun = def.unitNoun || def.name;
+    if (selOnly) return 'Select the ' + noun + '\'s cells, then click. Only selected cells change.';
+    var head;
+    if (def.greyWhy === 'fog')
+      head = 'Disabled while fog is on — checking every ' + noun + ' at once would say how many '
+           + 'this puzzle has, and that is still hidden.';
+    else if (def.greyWhy === 'typeChoice')
+      head = 'Disabled — this puzzle\'s rules leave it to you which ' + noun
+           + ' follows which rule, so we will not guess.';
+    else
+      head = 'Disabled — this puzzle\'s rules say a clue may not be what it looks like, and '
+           + 'checking ' + noun + 's against the standard rule disagrees with this puzzle.';
+    return head + ' Tick "Validate selection only", then select the cells of a ' + noun
+         + ' you want checked — that run is a real check, and it may fail.';
   }
 
   // ── Validator-menu eyeball: preview the OBJECTS a click will validate ────────
@@ -15252,7 +15360,7 @@
       // with a fogged cell), so only the eyeball is disabled here, and it explains why
       // instead of silently doing nothing.
       if (puzzleHasFog()) {
-        spdrTip.show(e.clientX, e.clientY, 'Preview disabled — this puzzle has Fog of War, and highlighting the ' + (def.unitNoun || def.name) + 's would show you clues you haven’t uncovered yet. The validator itself still works: it only checks clues whose cells are all revealed.');
+        spdrTip.show(e.clientX, e.clientY, 'Preview disabled — this puzzle has Fog of War, and highlighting the ' + (def.unitNoun || def.name) + 's would show you clues you haven’t uncovered yet. The validator itself still works: tick "Validate selection only", select a clue whose cells are all revealed, and run it.');
         return;
       }
       // ISOLATE while hovered: this draw overwrites the pinned union, so the eye under
@@ -16185,10 +16293,19 @@
   function runAllValidators(unitFilter) {
     if (actionInProgress) return;
     // Run-all is the whole-puzzle sweep, so it takes only the validators this
-    // puzzle vouches for: a 'grey' one (v3.186) is reachable by hand-selection
-    // only, never by a blanket run.
-    var defs = detectedValidators().filter(function (d) { return d.trust !== 'grey'; });
-    if (defs.length === 0) { showRemoveInvalidToast('No supported constraints detected.', 'warning'); return; }
+    // puzzle vouches for: a 'grey' one is reachable by hand-selection only, never
+    // by a blanket run.
+    var allDetected = detectedValidators();
+    var defs = allDetected.filter(function (d) { return d.trust !== 'grey'; });
+    if (defs.length === 0) {
+      // "None detected" would be false when every row exists but is greyed —
+      // routinely the case under fog, where all rows grey (v3.191).
+      showRemoveInvalidToast(allDetected.length
+        ? 'Every validator here needs you to choose the clue. Tick "Validate selection only", '
+          + 'select a clue\'s cells, then run it from the list above.'
+        : 'No supported constraints detected.', 'warning');
+      return;
+    }
     actionInProgress = true;
     var before = markedCellKeys();
     var preSnap = snapshotPencilmarks();
@@ -16489,11 +16606,15 @@
     // the player for this puzzle/session (setThermoSlowOverride, never saved).
     // Clicking the checkbox toggles Slow only; clicking the rest of the row
     // runs the validator, same as a plain item.
-    function addThermoItem(def) {
+    // `disabled` (v3.191): a greyed thermo row keeps its Slow checkbox. That is the
+    // one control with nowhere else to live, and the player needs it set correctly
+    // BEFORE the selection-only run that rescues the row.
+    function addThermoItem(def, disabled, tip) {
       var row = document.createElement('div');
+      if (tip) row.title = tip;
       Object.assign(row.style, {
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-        padding: '6px 4px 6px 9px', borderRadius: '6px', cursor: 'pointer',
+        padding: '6px 4px 6px 9px', borderRadius: '6px', cursor: disabled ? 'default' : 'pointer',
         fontSize: '12px', fontWeight: '600',
         whiteSpace: 'normal', userSelect: 'none',
       });
@@ -16501,6 +16622,9 @@
       var lbl = document.createElement('span');
       lbl.textContent = validatorLabel(def);
       lbl.style.flex = '1';
+      // Dim the LABEL only — the Slow checkbox and the 👁 stay usable, same rule
+      // as addItem.
+      lbl.style.opacity = disabled ? '0.4' : '1';
       row.appendChild(lbl);
 
       var slowLbl = document.createElement('label');
@@ -16515,13 +16639,15 @@
       slowLbl.appendChild(cb);
       slowLbl.appendChild(document.createTextNode('Slow'));
       row.appendChild(slowLbl);
-      row.appendChild(makeValidatorIcons(def));
+      row.appendChild(makeValidatorIcons(def, disabled));
 
-      row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
-      row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
-      row.addEventListener('mousedown', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.22)', 'important'); });
-      row.addEventListener('mouseup', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
-      row.addEventListener('click', function (e) { e.stopPropagation(); onValidatorItemClick(def); });
+      if (!disabled) {
+        row.addEventListener('mouseenter', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+        row.addEventListener('mouseleave', function () { row.style.setProperty('background-color', 'transparent', 'important'); });
+        row.addEventListener('mousedown', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.22)', 'important'); });
+        row.addEventListener('mouseup', function () { row.style.setProperty('background-color', 'rgba(255,255,255,0.10)', 'important'); });
+      }
+      row.addEventListener('click', function (e) { e.stopPropagation(); if (!disabled) onValidatorItemClick(def); });
       menu.appendChild(row);
     }
 
@@ -16608,7 +16734,17 @@
       addNote('No supported constraints detected in this puzzle.');
     } else {
       detected.forEach(function (def) {
-        if (def.name === 'thermo') { addThermoItem(def); return; }
+        // 'grey' is decided BEFORE the per-validator row shapes (v3.191), so no
+        // row can slip past it — the thermo row used to, which meant fog left it
+        // live while every other row greyed.
+        if (def.trust === 'grey') {
+          var gtip = greyRowTip(def, selOnly);
+          if (def.name === 'thermo') addThermoItem(def, !selOnly, gtip);
+          else addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
+                       { disabled: !selOnly, title: gtip, eyeDef: def });
+          return;
+        }
+        if (def.name === 'thermo') { addThermoItem(def, false, null); return; }
         // Line validators carry their classification from detectedValidators()
         // (def.cls) — no re-classification here.
         var amb = !!(def.cls && def.cls.mode === 'ambiguous');
@@ -16620,22 +16756,6 @@
         // a constraint the puzzle never did — so the row stays disabled either way and
         // `ambiguousTip` explains what it actually is.
         var rescuable = amb && !def.noSelectionRescue;
-        // 'grey' (v3.186): the answer refutes our reading AND the rules say clues
-        // lie or are the solver's to type. Greyed like an ambiguous row and
-        // rescued the same way — tick "Validate selection only" and select the
-        // clue you have worked out. Takes precedence over the ambiguity tip
-        // because it is the stronger statement about the same row.
-        if (def.trust === 'grey') {
-          var gtip = selOnly
-            ? 'Select the ' + noun + '\'s cells, then click. Only selected cells change.'
-            : 'Disabled — this puzzle\'s rules say a clue may not be what it looks like, and '
-              + 'checking ' + noun + 's against the standard rule disagrees with this puzzle. '
-              + 'Tick "Validate selection only", then select the cells of a ' + noun
-              + ' you have worked out.';
-          addItem(validatorLabel(def), function () { onValidatorItemClick(def); },
-                  { disabled: !selOnly, title: gtip, eyeDef: def });
-          return;
-        }
         var tip = '';
         if (amb && def.ambiguousTip)
           tip = typeof def.ambiguousTip === 'function' ? def.ambiguousTip(def.cls) : def.ambiguousTip;
@@ -16666,11 +16786,16 @@
             : 'Nothing is highlighted right now. Click a validator above to highlight its invalid candidates.',
           { disabled: !anyHi });
       } else {
+        // Nothing to sweep when every row is greyed (fog, or a puzzle that hands
+        // its clue types to the solver) — the rescue is per-clue by design.
+        var anyLive = detected.some(function (d) { return d.trust !== 'grey'; });
         addButton('Run all above functions', onRunAllClick,
           selOnly
             ? 'Disabled while "Validate selection only" is ticked — run the validators one at a time from the list above.'
-            : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).',
-          { disabled: selOnly });
+            : !anyLive
+              ? 'Disabled — every validator above needs you to choose the clue it should check. Tick "Validate selection only", select a clue\'s cells, then run it from the list.'
+              : 'Run every validator listed above in a loop until no more candidates can be removed (removals from one constraint feed the others).',
+          { disabled: selOnly || !anyLive });
       }
     }
     addCheckbox('Validate selection only', 'validateSelectionOnly',

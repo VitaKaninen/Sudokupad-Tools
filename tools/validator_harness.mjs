@@ -125,6 +125,8 @@ const NAMES = [
   'solutionDigitsFor', '_solutionProbe',
   // wrogn / liar declarations + the clue-type-named test (v3.186)
   'WROGN_DECLARED_RE', 'TYPE_CHOICE_RE', 'rulesDeclareUnreliable',
+  // grey branch (c) — the rules hand this clue type's ruleset to the solver (v3.191)
+  'TYPE_CHOICE_WINDOW', 'rulesHandTypeToSolver',
   // the third outcome — UNCHECKED reporting (v3.188, VALIDATOR_POLICY.md §3)
   'pluralUnit', 'uncheckedMsg', 'checkedPhrase', 'cageUncheckedWhy',
 ];
@@ -1614,6 +1616,65 @@ check('cage why: all three reasons list with a serial comma-free join',
 // The v3.184 whole-puzzle gate is gone: one bad cage may not disable the rest.
 checkFalse('cage: no whole-puzzle gate survives (policy §4, Road B is cheap)',
   /wholePuzzleUnreadable/.test(src));
+
+// ── grey branch (c): the rules hand this clue type to the solver (v3.191) ────
+// Measured over the catalog's 1,582 cage puzzles with rules text: TYPE_CHOICE_RE
+// alone fires on 12 and only 6 are really about the cage's ruleset. Scoping it to
+// a ±30 window around the clue type gives 6/6 with zero false alarms; ±40 lets
+// the first false alarm back in. These cases pin BOTH sides of that window — a
+// wider one greys honest puzzles (a Road A cost), a narrower one loses real hits.
+{
+  const CAGE = /\bcages?\b|\bkiller\b/;
+  const at = (s) => F.rulesHandTypeToSolver(s.toLowerCase(), CAGE);
+
+  check('grey (c): window is the measured 30, not a round number', F.TYPE_CHOICE_WINDOW, 30);
+  checkFalse('grey (c): no rules text decides nothing', at(''));
+  checkFalse('grey (c): a validator with no clue-type regex never greys',
+    F.rulesHandTypeToSolver('solvers must deduce whether each cage is a sum cage', null));
+
+  // The six true positives, each in its own phrasing.
+  checkTrue('grey (c): 5kx4d90kcm "Sigma or Pi" — sum or product, solver deduces',
+    at('Digits in a cage may not repeat, and they either sum or multiply to the indicated number. Solvers must deduce whether each cage is a sum cage or a product cage.'));
+  checkTrue('grey (c): l46h4ydg2f "Zone or Killer?" — decide which cages are which',
+    at('a clue of "23" would mean that the cage contains both a 2 and a 3. You\'ll have to decide which cages are which!'));
+  checkTrue('grey (c): 782JMppRnf "Look, Don\'t Kill" — killer or look-and-say',
+    at('The cages in the grid are either killer cages or look-and-say cages (or both). It is up to the solver to determine which cage is which.'));
+  checkTrue('grey (c): 8H44MjMNTR "Coordinated Killers"',
+    at('the clue spells out the coordinates of a cell that is the sum of the digits in the cage. The solver must determine which cage is which.'));
+  checkTrue('grey (c): 2hw7t4w2lm "Project Africa" — which total goes in which cage',
+    at('The solver must decide which number goes in which cage: 352 (days on mission); 19 (million steps, at least)'));
+  checkTrue('grey (c): a9z92eaf6s "Slightly intoxicated" — drunken cages',
+    at('You must determine which boxes are intoxicated. Cages within those intoxicated boxes all use drunken math'));
+
+  // The six false alarms the unscoped cue produced. Each says "determine which"
+  // about something that is not a cage, and each must leave the row LIVE.
+  checkFalse('grey (c): 7613uxdt7g "Quad Code" — which LETTER is which digit',
+    at('each digit from 1-9 is represented by a letter from A-I. You must determine which letter represents which digit. When discovered, these can be entered into the orange boxes.'));
+  checkFalse('grey (c): kglg9thtij "Fire and Water" — which SET is fire',
+    at('it\'s not possible or required to decide which of the sets is Fire and which is water. Killer: In cages marked with a black dashed line digits must not repeat'));
+  checkFalse('grey (c): n528pv2c16 "Krazy Kropki" — which box MULTIPLIER',
+    at('the player must determine which of the two box multipliers to use for that dot.'));
+  checkFalse('grey (c): qJt66F2JG4 "Parity Lines" — which CIRCLE counts evens',
+    at('For each line, the solver must determine which circle counts the even digits and which counts the odd digits.'));
+  checkFalse('grey (c): los-tres-amigos — which LOOP is which line type',
+    at('One grey loop is Entropic, one is German Whisper, and one is Region Sum; the solver must determine which is which. Entropic: every 3 cells along the line contain one low digit'));
+  checkFalse('grey (c): 7nnwvn08yz — "either of the digits" inside a worked example',
+    at('Eg if the r2c3 cage contained digits summing to 8, neither of these digits could be either of the digits used in the r6c7 8 cage.'));
+
+  // Newlines in the rules must not change the window — the blob is not normalised
+  // upstream, so the helper flattens whitespace itself.
+  checkTrue('grey (c): a line-broken rules blob measures the same window',
+    at('Solvers must deduce\n   whether each\n   cage is a sum cage.'));
+}
+
+// A probe refutation may no longer remove a row (policy §4). `drop` survives only
+// for a known-unsupported variant list, and that list starts EMPTY — so on a fresh
+// checkout nothing is ever dropped. Adding an entry is a deliberate act that must
+// name the puzzle that taught us the variant.
+checkTrue('trust: the known-unsupported variant list starts empty',
+  /var KNOWN_UNSUPPORTED_VARIANTS = \[\];/.test(src));
+checkFalse('trust: no probe verdict reaches a drop (validatorTypeNamedInRules is unwired)',
+  /return validatorTypeNamedInRules\(def\) \? 'drop'/.test(src));
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);

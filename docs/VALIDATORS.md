@@ -429,9 +429,10 @@ digit unsupported and removes it. So "our reading of thermos is wrong here" is d
 thermo validator*, and a validator added tomorrow is probed correctly with no one remembering to
 write its predicate — the same FOOLPROOF PRINCIPLE the eyeball preview follows.
 
-Three one-line hooks: `readValidatorBoardState` returns the synthetic state, `getFogTester` goes
-blind (a probe asks about the finished grid, where nothing is hidden), and `muteSolutionRefuted`
-goes **inert** (muting the failing clues is precisely what would hide the answer).
+Two one-line hooks: `readValidatorBoardState` returns the synthetic state, and `getFogTester` goes
+blind (a probe asks about the finished grid, where nothing is hidden). A third was needed until
+v3.189 — `muteSolutionRefuted` had to go **inert**, since muting the failing clues is precisely what
+would have hidden the answer from the probe. Deleting the mute removed that hazard.
 
 **Pin the digits as CENTRE marks, not values.** A placed value is not a candidate, so nothing could
 ever be removed from it and every validator would report a clean bill of health.
@@ -440,41 +441,84 @@ ever be removed from it and every validator would report a clean bill of health.
 
 `probeInfo` returns `{verdict, bad, total}` — how many of the validator's **clues** the answer
 refutes, grouped by `validatorClueCellGroups` (the same reader the missing-candidates warning uses).
-One bad cage among 29 (`bH8FJtL3F3` "Killer Sudoku") is a decoy that v3.182 already mutes correctly;
-16 of 19 (`ay6r6mmu5w` "Close Enough") means the rule itself is not ours. `probeSystematic` splits
-them at half — a blunt line, and nothing hinges on it: the real distribution is bimodal (43 of the
-99 refuted-cage puzzles refute **every** cage).
+One bad cage among 29 (`bH8FJtL3F3` "Killer Sudoku") is a decoy — which is supposed to FAIL when the
+player runs the validator, since that failure is how they find out; 16 of 19 (`ay6r6mmu5w` "Close
+Enough") means the rule itself is not ours. `probeSystematic` splits them at half — a blunt line, and
+nothing hinges on it: the real distribution is bimodal (43 of the 99 refuted-cage puzzles refute
+**every** cage).
 
-### The three-way policy — `validatorTrust`
+`probeSystematic` is **currently unused and deliberately kept** (v3.191) — it was `drop`'s gate until
+§4 established that a probe refutation is not a positive identification. The magnitude question is
+still the right one, and §6 needs exactly it: "does one cage disagree, or all of them" is how you
+tell a decoy from a puzzle-wide variant ruleset.
 
-The cost being managed is not correctness, it is **information**: a row that changes state tells the
-player something, and on a puzzle whose point is a hidden twist that is the spoiler.
+### The three-way policy — `validatorTrust` (rewritten v3.191)
+
+**The bar for leaving `ok` is POSITIVE IDENTIFICATION: a row may only be demoted for a reason we can
+NAME** — a rules phrase we recognise, or an arithmetic fact. That falls out of a question with no
+other good answer, *how do we know we can't validate this?* Not from the solution: that route cannot
+tell "this puzzle uses a variant" from "this puzzle is lying on purpose", so acting on it risks
+revealing a wrogn puzzle. Not from the rules either, except for variants we already know exist — **we
+cannot search for what we don't know is out there.** So when unsure: live, standard reading, let it
+fail.
 
 | trust | when | what the menu does |
 |---|---|---|
-| **ok** | probe clean, no solution — **or** refuted but the rules never NAME this clue type, or the refutation isn't systematic | nothing changes; v3.182's per-clue mute quietly keeps it from eliminating |
-| **grey** | refuted **and** the rules DECLARE that clues lie or that a clue's type is the solver's to pick (`rulesDeclareUnreliable`) | disabled, rescued by "Validate selection only"; excluded from run-all **and** from ↻ auto-update |
-| **drop** | refuted systematically **and** the rules DO name this clue type (`validatorTypeNamedInRules`) | removed from the menu |
+| **ok** | **the default, by a wide margin** — everything not positively identified below | normal row, normal run, **full loudness** |
+| **grey** | (a) fog, (b) rules declare clues lie **and** the probe refutes, (c) the rules hand this clue type's ruleset to the solver | disabled, rescued by "Validate selection only" — **and that run is real and may fail**; excluded from run-all and ↻; 👁 stays live |
+| **drop** | a variant we **positively recognise** and have not implemented — `KNOWN_UNSUPPORTED_VARIANTS`, which **starts empty** | removed from the menu |
 
-**The `ok` row is the interesting one.** A thermo is drawn; the rules say only *"circles are odd,
-lines are German whispers, and those are the only rules"* — so the thermo is really a circle plus a
-line. Saying anything would hand the player the twist, so the row behaves completely normally and
-the per-clue mute silently ensures it eliminates nothing. **Deliberate under-informing.**
+**A probe refutation no longer drops a row.** v3.186 dropped on "systematic refutation + the rules
+name this type", which reads the answer as evidence about the puzzle's *rule* — and it cannot be.
+`ay6r6mmu5w` "Close Enough" and `rd2kn6vy6d` "Regional Heatwave" get their rows back and are
+**expected to run and fail.** That is not an error state to engineer away: *"You are given a tool
+that may or may not work… you try it, and if it doesn't work, then you know you are using the wrong
+tool. That is not a failure, it is doing what it is supposed to do."*
 
-**`drop` is the ONE exception to v3.182's "an absent row is a spoiler".** It is not a spoiler when
-the rules themselves already said it: `ay6r6mmu5w` "Close Enough" states outright that cage clues
-are sums *rounded to the nearest multiple of 5*. A greyed row invites a click; here there is nothing
-to offer.
+**The `ok` row is still the interesting one, but for the opposite reason.** A thermo is drawn; the
+rules say only *"circles are odd, lines are German whispers, and those are the only rules"*. The row
+stays **live and fully functional** — it runs, it fails, and that failure is how the player learns.
+It is no longer neutered: v3.189 deleted the mute that used to make it eliminate nothing while
+reporting success.
 
-Everything needs a trustworthy solution to reach at all (`probeInfo` is `unknown` without one), so
-on the ~46% of puzzles that publish none, **nothing here fires and the menu is exactly what it was.**
+**Grey branch (c) needs no solution** — `rulesHandTypeToSolver`, below — which matters, because it is
+the only branch that works on the ~46% of puzzles that publish none. `5kx4d90kcm` "Sigma or Pi" is
+**grey, not drop**: we implement sum, one of the two readings the rules offer, so the row is greyed
+and the player rescues it per cage. A sum-run failing on a cage *is the product*, reached through the
+checkbox instead of the plain click.
+
+**Fog greys every row** (§4 rule 3), via `puzzleHasFog()` — the same model-based test the 👁 lockout
+uses, so the two fog rules cannot disagree. `getFogTester()` would have been more precise (it goes
+null once everything is revealed) but returns null whenever the rendered `#fog-path` read fails,
+silently un-greying every row on exactly the puzzle that needed it. The cost is that a fully-revealed
+fog puzzle keeps its rows greyed; that tax is paid in the safe direction. No fog-specific *reporting*
+rule is needed — a selection run carries no denominator, so it never says "5 of 12 cages".
 
 ### The cues
 
 `WROGN_DECLARED_RE` (the genre's own "wrogn", liar/lies, "false clue", "exactly one of … is false")
 and `TYPE_CHOICE_RE` ("sum or product", "either sum or multiply", and the general form
 **"must deduce whether"** — `5kx4d90kcm` "Sigma or Pi"), OR'd with the existing `SELF_DEDUCTION_RE`
-for the line-validator form.
+for the line-validator form. Together they are `rulesDeclareUnreliable`, which gates grey branch (b).
+
+**`rulesHandTypeToSolver` — branch (c), and why it is SCOPED (v3.191).** Branch (c) fires on the
+rules alone, with no probe and no solution, so it has to be precise or it greys honest puzzles — a
+Road A cost paid for a Road B convenience, exactly the trade §4 forbids. Measured over the catalog's
+**1,582 cage puzzles carrying rules text**:
+
+| cue | fires on | really about the cage's ruleset |
+|---|---|---|
+| `TYPE_CHOICE_RE` alone | 12 | **6** |
+| + clue type within **±30 chars** | **6** | **6** (zero false alarms) |
+| + clue type within ±40 chars | 7 | 6 |
+
+The six false alarms are all "determine which" about something else entirely — *which letter
+represents which digit* (`7613uxdt7g`), *which of the sets is Fire* (`kglg9thtij`), *which box
+multiplier* (`n528pv2c16`), *which circle counts the even digits* (`qJt66F2JG4`), *which loop is
+which line type* (`blobz/los-tres-amigos`, correct for lines and already handled by
+`SELF_DEDUCTION_RE`), and one buried in a worked example (`7nnwvn08yz`). The window is deliberately
+tight rather than generous: ±40 lets the first one back in. Line validators are skipped here — their
+own classification already greys them via `SELF_DEDUCTION_RE`. Harness cases pin all twelve.
 
 **These cues never act alone** — they only interpret a refutation the solution has already
 delivered — so a false positive on an honest puzzle costs *nothing*. Measured over the 3,688
