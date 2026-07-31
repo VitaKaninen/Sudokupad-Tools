@@ -499,7 +499,11 @@ way so it stays low-maintenance.
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye` (v3.148: hover = show this validator's clue objects alone, blinking after
   350 ms; click = pin them on, and pins accumulate — `redrawPinnedEyes`) / `makeValidatorIcons` /
-  `makeValidatorRefresh` / `countCluesMissingCandidates` (v3.151: clues holding a cell with no
+  `makeValidatorRefresh` / `getPuzzleSolution` + `solutionDigitsFor` + `muteSolutionRefuted`
+  (v3.182: silently drop clues the puzzle's own `metadata.solution` contradicts — variant rules and
+  decoys alike; fails open when there is no trustworthy solution) / `countSumlessKillerCages`
+  (v3.182: a drawn-but-unreadable cage still lists its menu row, because an absent row is a
+  spoiler) / `countCluesMissingCandidates` (v3.151: clues holding a cell with no
   candidates are checked only weakly — an empty cell reads as the full digit set — so the result
   toast leads with an amber warning naming how many). Single toggle:
   `showValidateButton` (the per-validator enable keys were
@@ -1030,6 +1034,13 @@ shrink-to-fit width — see `applyControlsWidthCap`) and makes UI work look corr
   (colour words, cue regexes, cage maths, chain expansion, region colouring, digit bands) straight
   from the live userscript and replays the documented trap cases. Run it green before committing
   validator changes; `tools/cue_recall.py` (see "Puzzle catalog") is its catalog-recall complement.
+- **Solution scoring:** `python tools/solution_check.py [--detail] [--id <id>]` — scores our clue
+  READINGS against each puzzle's own published solution across the whole catalog (~3,700 puzzles
+  carry a usable one). Built to decide whether the v3.182 solution-mute was safe to ship; re-run it
+  after touching any model-path detector. A refutation rate that JUMPS for a clue type is the
+  signal that its reading regressed. Caveat: its per-type readers are re-implementations, not the
+  shipping detectors — trust the **cage** numbers (identical `r1c2` parsing, no geometry) far more
+  than the geometric ones, whose rates are dominated by the harness's own coordinate guesses.
 
 ## Puzzle catalog (pull examples by rule type / predict broad-change side effects)
 The catalog is **`C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog\classify\`** (part

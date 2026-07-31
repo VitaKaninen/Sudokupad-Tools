@@ -232,7 +232,65 @@ all. `yiaonocy5d` ("...What?", a deliberate-troll 6x6) is the counter-example th
 alone: cage `r5c1-r5c4` has no `sum`, is labelled **16** by an underlay at `[4.25,0.25]`, and the
 puzzle's own `solution` puts **14** there — the rules list never mentions cage sums, so the label
 is a decoy. Inferring sums from cage-corner text would fire this validator on a false total and
-eliminate correct candidates. Only `cage.sum` / `cage.value` counts.
+eliminate correct candidates. Only `cage.sum` / `cage.value` counts. Such a cage is nonetheless
+COUNTED by `countSumlessKillerCages` so the menu row still appears — see below.
+
+## Solution-refuted clues — mute, never announce (v3.182)
+
+**The menu was an oracle.** A validator was listed iff its clue was *checkable*, so on a puzzle
+with decoy clues the dropdown told the player which drawings were real — earlier and more
+reliably than the puzzle intended. `yiaonocy5d` ("...What?") is the case that forced this: five of
+its seven drawings are decoys, and the menu both omitted the fake cage and arrow (revealing them)
+*and* listed the fake thermo, quadruple and difference dot (miseducating about them, and
+eliminating candidates the rules never licensed).
+
+**Two independent fixes, neither of which classifies the puzzle.**
+
+1. **Detection means "is one DRAWN", not "can we check it."** `countSumlessKillerCages` counts
+   killer-style cages with no readable total so `detect()` still lists Cages; they are counted,
+   never validated. Same shape as the bulbless thermo — and deliberately with **no explanatory
+   note**, because "this cage has no total" leaks exactly what the row's presence restores.
+2. **`muteSolutionRefuted(units, holds)`** drops units the puzzle's own `metadata.solution`
+   contradicts. Wired into cage, thermo, arrow, Kropki, XV and difference-dot computes; each
+   passes a `holds(unit, grid)` predicate. `getPuzzleSolution` trusts a solution ONLY if it is
+   complete, plain-digit and a valid latin square (260 of the catalog's 3,972 are partial).
+
+**Why "we misread it" vs "it's a decoy" doesn't need answering.** Both call for the same response —
+stop using the clue, say nothing — so the ambiguity that makes this useless as a wrogn *detector*
+is free when it is used as a *mute*. Refuted units stay in the reported COUNT and contribute no
+removals, so the toast reads exactly like any other "nothing to remove" run.
+
+**Fail open, always.** No solution / an unreadable cell / a `null` verdict / a throwing predicate
+all KEEP the unit, so on the ~37% of puzzles without a solution behaviour is unchanged. Harness
+cases cover every one of those paths.
+
+**This is mostly a CORRECTNESS fix, not an anti-spoiler one.** Measured by `tools/solution_check.py`
+over 3,688 solution-bearing puzzles: **17.1% of killer cages are refuted** (124 puzzles). A hand
+read of 24 of them found **no misparses** — every one was a non-standard cage rule ("all clues work
+modulo 9", "the total of all but one", "either sum or multiply", "digits in the top left must
+APPEAR in the cage", "Scrambled Cages") or a declared liar mechanic. Crucially, many are NOT caught
+by the v3.157 structural check: *Sigma or Pi* has a 4-cell cage marked 30 whose real rule is
+PRODUCT, and 6+7+8+9=30 is a legal sum — so before v3.182 the validator eliminated against a rule
+the puzzle never stated.
+
+**Relationship to v3.157 (fail loudly).** A *structurally* impossible clue is still reported via
+`invalidClueMsg` — that is a detection bug we want to hear about. A *solution-refuted* clue is
+silent. The distinction: structural impossibility is mark- and solution-independent and always
+means we misread something; a refutation may equally mean the puzzle is lying on purpose, and
+announcing that is the spoiler.
+
+**HARD RULE: the solution may only ever DISABLE a check, never inform one.** No solution digit may
+reach a removal, a candidate set, or any player-visible string. Breaking this turns a validator
+into a solver.
+
+**Superseded:** the standing "validators NEVER special-case liar/wrogn mechanics" decision
+(2026-07-06, below) still holds for *reasoning* — no validator weakens a rule because a puzzle
+might be lying. v3.182 does not reason about lies; it declines to act on a clue the finished grid
+disproves. Cue-based wrogn detection was **considered and rejected**: only ~15 of 6,260 catalogued
+puzzles self-identify (`wrogn` 3, `liar` 4, `wrong` 8 — one of which, *Big Fish*, is a false
+positive: "what's wrong with you"), `lie`/`lying` is unusable (31 of 50 hits are positional, "digits
+that *lie on* the line"), and a false positive spoils an honest puzzle — strictly worse than the
+leak being fixed. `yiaonocy5d` self-identifies not at all, so cues would not have helped it.
 **Little-killer validator (v3.57 — diagonal sums, duplicates allowed):**
 `computeLittleKillerRemovals` (independent of Kropki/cages; always-on — the per-validator enable
 settings were removed v3.104). A little killer sums a diagonal; digits **may repeat** along it

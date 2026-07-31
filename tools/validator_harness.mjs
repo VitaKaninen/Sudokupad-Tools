@@ -119,17 +119,24 @@ const NAMES = [
   'countComponents', 'colourSpread', 'colourShadedRegions', 'colourGraph',
   // digit bands (read settings.digitSet — the factory injects a stub)
   'sanitizeDigitSet', 'entropicBands', 'modularBands',
+  // solution-refuted clue muting (getPuzzleSolution itself is Framework/DOM-bound,
+  // so the factory injects a shim for it and these two are tested against it)
+  'solutionDigitsFor', 'muteSolutionRefuted',
 ];
 
 const decls = NAMES.map((n) => ({ name: n, ...extractDecl(n) }))
   .sort((a, b) => a.pos - b.pos);   // source order keeps intra-dependency order
 
 const factory = new Function(
-  'settings',
-  `'use strict';\n${decls.map((d) => d.text).join('\n')}\nreturn { ${NAMES.join(', ')} };`
+  'settings', 'harnessSolution',
+  `'use strict';\nfunction getPuzzleSolution(){ return harnessSolution.grid; }\n`
+  + `${decls.map((d) => d.text).join('\n')}\nreturn { ${NAMES.join(', ')} };`
 );
 const settings = { digitSet: '123456789' };
-const F = factory(settings);
+// Stands in for the real getPuzzleSolution (which reads Framework + the DOM).
+// Tests set .grid to a 'col,row' -> digit map, or null for "no solution".
+const harnessSolution = { grid: null };
+const F = factory(settings, harnessSolution);
 
 // ── tiny test runner ─────────────────────────────────────────────────────────
 let pass = 0, fail = 0;
@@ -1454,6 +1461,54 @@ checkTrue('cc support: a starved run never empties a cell',
   starvedSup.sup.every((s) => s.size > 0));
 checkTrue('cc support: starvation costs eliminations, never invents them',
   starvedSup.sup.every((s, i) => Array.from(dglSup.sup[i]).every((d) => s.has(d))));
+
+// ── solution-refuted clue muting (v3.182) ────────────────────────────────────
+// Anchored to yiaonocy5d ("...What?"), the troll 6x6 that forced this: its cage
+// is drawn and labelled 16 by a COSMETIC underlay, while the puzzle's own
+// solution puts 14 there. See docs/VALIDATORS.md, "Solution-refuted clues".
+{
+  const sol = '426153315264163542254631542316631425', N = 6, grid = {};
+  for (let i = 0; i < N * N; i++) grid[(i % N) + ',' + Math.floor(i / N)] = +sol[i];
+  const K = ['0,4', '1,4', '2,4', '3,4'];          // r5c1-r5c4, the labelled cage
+  // The cage predicate as computeCageRemovals states it: distinct digits summing
+  // to the total. Kept in step with the shipping copy by construction — both read
+  // solutionDigitsFor and nothing else.
+  const cageHolds = (cage, g) => {
+    const d = F.solutionDigitsFor(cage.keys, g);
+    if (!d) return null;
+    let s = 0; const seen = {};
+    for (const x of d) { if (seen[x]) return false; seen[x] = 1; s += x; }
+    return s === cage.sum;
+  };
+  const keptCount = (units, holds) => F.muteSolutionRefuted(units, holds).kept.length;
+
+  harnessSolution.grid = grid;
+  check('mute: solutionDigitsFor reads cells in the clue\'s own order',
+    F.solutionDigitsFor(K, grid), [5, 4, 2, 3]);
+  check('mute: an off-grid cell yields no digits (never scored either way)',
+    F.solutionDigitsFor(['9,9'], grid), null);
+  check('mute: the cosmetic "16" is refuted by the solution\'s 14',
+    keptCount([{ keys: K, sum: 16 }], cageHolds), 0);
+  check('mute: the true total is kept',
+    keptCount([{ keys: K, sum: 14 }], cageHolds), 1);
+  check('mute: a cage we cannot read is kept, not scored',
+    keptCount([{ keys: ['9,9', '1,4'], sum: 5 }], cageHolds), 1);
+  check('mute: only the refuted units go, the honest one stays',
+    F.muteSolutionRefuted([{ keys: K, sum: 16 }, { keys: K, sum: 14 }, { keys: K, sum: 99 }],
+      cageHolds).muted, 2);
+  check('mute: muted count is reported so the unit count shows no gap',
+    F.muteSolutionRefuted([{ keys: K, sum: 16 }], cageHolds).muted, 1);
+  // FAIL OPEN is the safety property: without a trustworthy solution, or when the
+  // predicate itself breaks, behaviour must be byte-identical to pre-v3.182.
+  check('mute: a throwing predicate keeps the unit',
+    keptCount([{ keys: K, sum: 16 }], () => { throw new Error('boom'); }), 1);
+  check('mute: an undecided (null) predicate keeps the unit',
+    keptCount([{ keys: K, sum: 16 }], () => null), 1);
+  harnessSolution.grid = null;
+  check('mute: no solution -> nothing is muted, however hostile the predicate',
+    keptCount([{ keys: K, sum: 16 }, { keys: K, sum: 14 }], () => false), 2);
+  check('mute: an empty unit list is safe', keptCount([], cageHolds), 0);
+}
 
 // ── report ───────────────────────────────────────────────────────────────────
 console.log(`${pass + fail} cases: ${pass} pass, ${fail} fail  (${path.basename(srcPath)})`);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.181.0
+// @version      3.182.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -173,7 +173,7 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.181.0';
+  var SCRIPT_VERSION = '3.182.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   window.spdrVersion = SCRIPT_VERSION;
@@ -7516,6 +7516,112 @@
     return { uni: uni, fullSet: new Set(Object.keys(uni).map(Number)), values: values, centre: centre };
   }
 
+  // ════════════════════════════════════════════════════════════════════════════
+  //  SOLUTION-REFUTED CLUES — MUTE, NEVER ANNOUNCE (v3.182)
+  // ════════════════════════════════════════════════════════════════════════════
+  //  ~63% of catalogued puzzles ship their own solution (`metadata.solution`).
+  //  Where one exists we can ask a question no amount of detection cleverness
+  //  answers: does the finished grid ACTUALLY satisfy this clue as we read it?
+  //  If it doesn't, one of two things is true —
+  //     (a) the clue is a decoy (a "wrogn" puzzle, or a liar mechanic), or
+  //     (b) WE misread it (wrong type, wrong total, wrong cells — the v3.157
+  //         "structurally impossible" case, but reachable without being
+  //         structurally impossible: a 4-cell cage marked 30 whose real rule is
+  //         PRODUCT reads as a perfectly legal sum of 6+7+8+9).
+  //  We cannot tell (a) from (b), and THAT DOESN'T MATTER, because both call for
+  //  exactly the same response: stop using this clue, and say nothing about it.
+  //
+  //  SAY NOTHING is the whole point, and the reason this is not wired to the
+  //  `invalid` / invalidClueMsg path. On a wrogn puzzle, announcing "this cage is
+  //  impossible" hands the player the discovery the puzzle is built around; a
+  //  validator that quietly declines is indistinguishable from one that had
+  //  nothing to remove. Refuted units are therefore dropped from the REMOVAL
+  //  computation but stay in the reported COUNT, so the toast reads exactly like
+  //  any other "nothing to remove" run.
+  //
+  //  Measured before shipping (tools/solution_check.py, 3,688 puzzles with a
+  //  usable solution): 17.1% of killer cages are refuted, and a hand-read sample
+  //  of 24 of the 124 affected puzzles found NO misparses — every one was a
+  //  non-standard cage rule ("all clues work modulo 9", "the total of all but
+  //  one", "either sum or multiply", "digits in the top left must APPEAR in the
+  //  cage") or a declared liar mechanic. So this mute is first and foremost a
+  //  CORRECTNESS fix: those puzzles were getting real, wrong eliminations.
+  //
+  //  HARD RULE — the solution may only ever DISABLE a check, never inform one.
+  //  Nothing below may put a solution digit into a removal, a candidate set, or
+  //  any player-visible string. The moment it does, the validator is solving the
+  //  puzzle for the player instead of checking their work.
+  var _solutionCache = null;
+  function getPuzzleSolution() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp) return null;
+    var raw = (cp.metadata && cp.metadata.solution) || cp.solution || null;
+    if (Array.isArray(raw)) raw = raw.join('');
+    if (typeof raw !== 'string') return null;
+    raw = raw.trim();
+    var N = detectGridSize();
+    if (_solutionCache && _solutionCache.raw === raw && _solutionCache.n === N)
+      return _solutionCache.grid;
+    var grid = null;
+    // Only a COMPLETE, plain-digit, latin-square solution is trusted. 260 of the
+    // catalog's 3,972 solution strings are partial or placeholder, and a bad
+    // string would mute honest clues wholesale — so anything we can't fully
+    // verify is treated as "no solution" and changes nothing.
+    if (N > 0 && raw.length === N * N && /^[1-9]+$/.test(raw)) {
+      var ok = true;
+      for (var i = 0; i < N && ok; i++) {
+        var rowSeen = {}, colSeen = {};
+        for (var j = 0; j < N; j++) {
+          var rv = raw.charAt(i * N + j), cv = raw.charAt(j * N + i);
+          if (rowSeen[rv] || colSeen[cv]) { ok = false; break; }
+          rowSeen[rv] = 1; colSeen[cv] = 1;
+        }
+      }
+      if (ok) {
+        grid = {};
+        for (var r = 0; r < N; r++)
+          for (var c = 0; c < N; c++)
+            grid[c + ',' + r] = raw.charCodeAt(r * N + c) - 48;
+      }
+    }
+    _solutionCache = { raw: raw, n: N, grid: grid };
+    return grid;
+  }
+
+  // Solution digits for a clue's cells, in the clue's own order. null if any cell
+  // is outside the solution (a misread that must not be scored either way).
+  function solutionDigitsFor(keys, grid) {
+    if (!keys || !keys.length) return null;
+    var out = [];
+    for (var i = 0; i < keys.length; i++) {
+      var d = grid[keys[i]];
+      if (typeof d !== 'number') return null;
+      out.push(d);
+    }
+    return out;
+  }
+
+  // Drop the units this puzzle's own solution refutes. `holds(unit, digits)`
+  // returns false ONLY when the finished grid definitely breaks the clue as read;
+  // anything else (true, null, undefined, a thrown error) keeps the unit, so a
+  // predicate that can't decide leaves today's behaviour exactly as it was.
+  // Returns { kept, muted } — `muted` is added back to the reported count so the
+  // player sees no gap where the clue used to be.
+  function muteSolutionRefuted(units, holds) {
+    var grid = getPuzzleSolution();
+    if (!grid || !units || !units.length) return { kept: units || [], muted: 0 };
+    var kept = [], muted = 0;
+    for (var i = 0; i < units.length; i++) {
+      var u = units[i], verdict;
+      try {
+        verdict = holds(u, grid);
+      } catch (e) { verdict = null; }
+      if (verdict === false) muted++; else kept.push(u);
+    }
+    return { kept: kept, muted: muted };
+  }
+
   function computeKropkiRemovals(unitFilter) {
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };   // letters / empty → ratio & consecutive are undefined
@@ -7536,7 +7642,18 @@
 
     var dots = collectKropkiDots();
     if (unitFilter) dots = dots.filter(function (dot) { return unitFilter([dot.a, dot.b]); });
-    if (dots.length === 0) return { noDots: true };
+    // Black = ratio 2, white = consecutive. A dot the solution breaks is a decoy, a
+    // negative-constraint marker we've read as positive, or a differently-defined
+    // dot (ratio 3, difference 4 …) — none of which our partner tables model.
+    var dotMute = muteSolutionRefuted(dots, function (dot, grid) {
+      var a = grid[dot.a], b = grid[dot.b];
+      if (typeof a !== 'number' || typeof b !== 'number') return null;
+      return dot.type === 'black' ? (Math.max(a, b) === 2 * Math.min(a, b))
+                                  : (Math.abs(a - b) === 1);
+    });
+    dots = dotMute.kept;
+    if (dots.length === 0)
+      return dotMute.muted ? { removals: [], dotCount: dotMute.muted } : { noDots: true };
 
     var values = st.values, centre = st.centre, fullSet = st.fullSet;
     // A neighbour cell's candidate set: its value/given (one digit), its centre
@@ -7631,7 +7748,7 @@
     var emptied = 0;
     markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
 
-    return { removals: removals, dotCount: dots.length, emptiedCells: emptied };
+    return { removals: removals, dotCount: dots.length + dotMute.muted, emptiedCells: emptied };
   }
 
   // ── XV validator ──────────────────────────────────────────────────────────
@@ -7758,6 +7875,12 @@
 
     var dots = collectXVDots();
     if (unitFilter) dots = dots.filter(function (dot) { return unitFilter([dot.a, dot.b]); });
+    var xvMute = muteSolutionRefuted(dots, function (dot, grid) {
+      var a = grid[dot.a], b = grid[dot.b];
+      if (typeof a !== 'number' || typeof b !== 'number' || typeof dot.target !== 'number') return null;
+      return a + b === dot.target;
+    });
+    dots = xvMute.kept;
 
     // STRUCTURAL, i.e. MARK-INDEPENDENT (v3.157 contract): the clue's two cells are
     // orthogonally adjacent, so they share a row or column and MUST differ. A target
@@ -7778,7 +7901,9 @@
       invalid++;
       return false;
     });
-    if (dots.length === 0) return { noXV: true, invalid: invalid };
+    if (dots.length === 0)
+      return xvMute.muted ? { removals: [], xvCount: xvMute.muted, invalid: invalid }
+                          : { noXV: true, invalid: invalid };
 
     var values = st.values, centre = st.centre, fullSet = st.fullSet;
     function neighbourSet(key) {
@@ -7818,7 +7943,7 @@
     var emptied = 0;
     markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
 
-    return { removals: removals, xvCount: dots.length, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, xvCount: dots.length + xvMute.muted, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Difference dots (v3.172) ──────────────────────────────────────────────
@@ -8016,7 +8141,15 @@
       invalid++;
       return false;
     });
-    if (dots.length === 0) return { noDiffDots: true, invalid: invalid };
+    var diffMute = muteSolutionRefuted(dots, function (d, grid) {
+      var a = grid[d.a], b = grid[d.b];
+      if (typeof a !== 'number' || typeof b !== 'number' || typeof d.target !== 'number') return null;
+      return Math.abs(a - b) === d.target;
+    });
+    dots = diffMute.kept;
+    if (dots.length === 0)
+      return diffMute.muted ? { removals: [], diffDotCount: diffMute.muted, invalid: invalid }
+                            : { noDiffDots: true, invalid: invalid };
 
     var values = st.values, centre = st.centre, fullSet = st.fullSet;
     var isFogged = getFogTester();
@@ -8061,7 +8194,7 @@
     var emptied = 0;
     markedKeys.forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
 
-    return { removals: removals, diffDotCount: dots.length, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, diffDotCount: dots.length + diffMute.muted, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Counting-circle validator (v3.177) ─────────────────────────────────────
@@ -8685,6 +8818,39 @@
     return out;
   }
 
+  // How many killer cages are DRAWN but carry no readable total — the same cage
+  // shape getKillerCages() keeps, minus the `sum` requirement.
+  //
+  // DETECTION MEANS "IS ONE DRAWN", NOT "CAN WE CHECK IT" (v3.182). The menu used
+  // to list Cages only when a cage was checkable, which turned the menu into an
+  // oracle: on `yiaonocy5d` ("...What?", a troll 6x6) the cage is plainly drawn and
+  // labelled 16, but the label is a cosmetic underlay and the cage carries no sum —
+  // so the row vanished, telling the player the total was fake long before the
+  // rules ("Those are all the rules") were supposed to. Counting these keeps the
+  // row present; it simply has nothing to remove, which is what a fully-constrained
+  // honest cage looks like too. Same reasoning as the bulbless thermo, and the
+  // reason no note explains it: "this cage has no total" would leak the very thing
+  // the row's presence is restoring.
+  function countSumlessKillerCages() {
+    var cp = (typeof Framework !== 'undefined' && Framework.app && Framework.app.puzzle)
+      ? Framework.app.puzzle.currentPuzzle : null;
+    if (!cp || !Array.isArray(cp.cages)) return 0;
+    var N = detectGridSize(), n = 0;
+    cp.cages.forEach(function (cage) {
+      if (!cage || cage.unique === false || cage.style !== 'killer') return;
+      var sum = typeof cage.sum === 'number' ? cage.sum : Number(cage.value);
+      if (isFinite(sum)) return;                     // checkable → getKillerCages has it
+      var cells = cage.cells || '', k = 0, m, re = /r(\d+)c(\d+)/gi;
+      while ((m = re.exec(cells)) !== null) {
+        var col = Number(m[2]) - 1, row = Number(m[1]) - 1;
+        if (col < 0 || row < 0 || col >= N || row >= N) return;
+        k++;
+      }
+      if (k >= 2) n++;
+    });
+    return n;
+  }
+
   // All distinct-digit combinations of `size` digits drawn from `digits` (sorted
   // ascending) that sum to `target`. Each combination is returned as an array of
   // numbers. Plain subset-sum recursion; digit counts are tiny (≤ grid size).
@@ -8736,7 +8902,27 @@
     if (!st) return { unsupported: true };
     var cages = getKillerCages();
     if (unitFilter) cages = cages.filter(function (cage) { return unitFilter(cage.keys); });
-    if (cages.length === 0) return { noCages: true };
+    // A cage the puzzle's own solution contradicts is not a killer cage as we read
+    // it — a variant rule (product / modular / all-but-one) or a decoy. Mute it.
+    var cageMute = muteSolutionRefuted(cages, function (cage, grid) {
+      var d = solutionDigitsFor(cage.keys, grid);
+      if (!d) return null;
+      var s = 0, seen = {};
+      for (var i = 0; i < d.length; i++) {
+        if (seen[d[i]]) return false;            // getKillerCages keeps unique cages only
+        seen[d[i]] = 1; s += d[i];
+      }
+      return s === cage.sum;
+    });
+    cages = cageMute.kept;
+    // Cages that are drawn but unusable — muted by the solution, or carrying no
+    // readable total at all. They are COUNTED, never validated: reporting "checked,
+    // nothing to remove" (rather than "no cages found") keeps a drawn cage's row
+    // looking identical to a fully-constrained honest one. Selection-only mode
+    // counts only what the player selected, so the sum-less sweep is skipped there.
+    var cagesShown = cageMute.muted + (unitFilter ? 0 : countSumlessKillerCages());
+    if (cages.length === 0)
+      return cagesShown ? { removals: [], cageCount: cagesShown } : { noCages: true };
 
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
 
@@ -8753,7 +8939,9 @@
       if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
       else invalid++;
     });
-    if (active.length === 0) return { noCages: true, invalid: invalid };
+    if (active.length === 0)
+      return cagesShown ? { removals: [], cageCount: cagesShown, invalid: invalid }
+                        : { noCages: true, invalid: invalid };
 
     // Working copies of the player's centre marks (the only cells we may modify).
     var work = {};
@@ -8811,7 +8999,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, cageCount: active.length, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, cageCount: active.length + cagesShown, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Little-killer validator ───────────────────────────────────────────────
@@ -13133,6 +13321,20 @@
          ' no bulb marker — the bulb position is unknown, so ' + (det.bulbless === 1 ? 'it was' : 'they were') + ' not checked.')
       : null;
     if (unitFilter) thermos = thermos.filter(function (t) { return unitFilter(t.keys); });
+    // Deliberately the WEAK test: refute only an edge the solution runs DOWNHILL.
+    // An equal pair breaks a strict thermo but is legal on a slow one, and we would
+    // rather leave a real thermo checkable than mute one over a reading of `slow`.
+    // A drawing whose digits descend is not a thermometer under either reading.
+    var thermoMute = muteSolutionRefuted(thermos, function (t, grid) {
+      if (!t.edges || !t.edges.length) return null;
+      for (var i = 0; i < t.edges.length; i++) {
+        var a = grid[t.edges[i][0]], b = grid[t.edges[i][1]];
+        if (typeof a !== 'number' || typeof b !== 'number') return null;
+        if (a > b) return false;
+      }
+      return true;
+    });
+    thermos = thermoMute.kept;
 
     var slow = effectiveThermoSlow();
     // A STRICT thermometer's digits increase by at least 1 every cell, so an arm
@@ -13149,7 +13351,9 @@
       });
       thermos = okThermos;
     }
-    if (thermos.length === 0) return { noThermos: true, note: note, invalid: invalid };
+    if (thermos.length === 0)
+      return thermoMute.muted ? { removals: [], thermoCount: thermoMute.muted, note: note, invalid: invalid }
+                              : { noThermos: true, note: note, invalid: invalid };
     var regionCageSets = slow ? getThermoRegionCageSets() : [];
 
     var values = st.values, fullSet = st.fullSet;
@@ -13205,7 +13409,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied, note: note, invalid: invalid };
+    return { removals: removals, thermoCount: thermos.length + thermoMute.muted, emptiedCells: emptied, note: note, invalid: invalid };
   }
 
   // ── Sum-arrow + double-arrow validator ────────────────────────────────────
@@ -13452,7 +13656,19 @@
     getSumArrows().forEach(function (a) { raw.push({ keys: [a.circle].concat(a.shaft), tc: 1 }); });
     getDoubleArrows().forEach(function (d) { raw.push({ keys: d.circles.concat(d.line), tc: 2 }); });
     if (unitFilter) raw = raw.filter(function (u) { return unitFilter(u.keys); });
-    if (raw.length === 0) return { noArrows: true };
+    // Target side and line side must balance in the finished grid; if they don't,
+    // this drawing isn't the sum equation we read it as.
+    var arrowMute = muteSolutionRefuted(raw, function (u, grid) {
+      var d = solutionDigitsFor(u.keys, grid);
+      if (!d || !(u.tc > 0) || u.tc >= d.length) return null;
+      var t = 0, l = 0, i;
+      for (i = 0; i < u.tc; i++) t += d[i];
+      for (i = u.tc; i < d.length; i++) l += d[i];
+      return t === l;
+    });
+    raw = arrowMute.kept;
+    if (raw.length === 0)
+      return arrowMute.muted ? { removals: [], arrowCount: arrowMute.muted } : { noArrows: true };
 
     // Region conflicts via makeSameRegion (v3.162): never fabricate a boxing on a
     // puzzle whose regions are the solver's to determine.
@@ -13571,7 +13787,7 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, arrowCount: units.length, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, arrowCount: units.length + arrowMute.muted, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Between-line validator ─────────────────────────────────────────────────
@@ -14150,7 +14366,9 @@
         detect: function () { return collectKropkiDots().length > 0; },
         compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
       { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages',
-        detect: function () { return getKillerCages().length > 0; },
+        // A drawn-but-unreadable cage still lists the row (see
+        // countSumlessKillerCages) — an absent row is a spoiler, not a courtesy.
+        detect: function () { return getKillerCages().length > 0 || countSumlessKillerCages() > 0; },
         compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
       { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers',
         detect: function () { return getLittleKillers().length > 0; },
