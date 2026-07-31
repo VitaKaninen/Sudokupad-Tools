@@ -627,23 +627,44 @@ way so it stays low-maintenance.
   column" below. Architecture, per-validator notes, detection layers, ambiguity policy,
   digit-set/fog rules and the candidate-elimination contract all live in
   [VALIDATORS.md](VALIDATORS.md).
-- **Zipper fold centres (v3.123, corrected v3.124):** **`zipperChains`** (→ `mergeLineStrokes`, generalised v3.166) and
-  **`zipperFoldCenter`** are the single shared reader — *one clue can be drawn as several strokes*,
-  so the classified chains are joined end-to-end before anything folds them, and the fold point is
-  computed in one place. All three consumers go through them: `computeZipperRemovals` (the
-  validator's pairing), `drawZipperCenterDots` (the injected cosmetic dot) and
-  `validatorClueObjects`' `zipper` case (the eyeball disc) — so a fold point can never mean three
-  different things in three places. `drawZipperCenterDots` (+ helpers `zipperLineDomPaths`,
-  `smallCosmeticMarkerPoints`) is a *rendering* feature: where a confidently classified zipper has
-  no cosmetic object within 0.3 cells of its fold centre, it injects a `[data-spdr-zipper-dot]`
-  `<circle>` in the line's own **rendered** colour, diameter = `zipperCenterDotScale` × the line's
-  stroke width. It runs at the tail of the render pipeline (`applySettings`, `startLabelRectPatch`,
-  the observer's `flushFixes` WORK_FULL branch) so it reads the stroke **after** `fixAllLines` has
-  shaded it; its own nodes are classified `'none'` in `classifyAddedNode` so they can't re-trigger a
-  sweep. The eyeball disc uses the same multiplier against the highlight's own line width (`SEG_W`),
-  so drawn and highlighted marks match. Settings: `zipperCenterDotEnabled`, `zipperCenterDotScale`.
+- **Line fold centres (v3.123 zipper, corrected v3.124, generalised to every folded clue type
+  v3.184):** **`lineClueChains`** (→ `mergeLineStrokes`, generalised v3.166) and **`lineFoldCenter`**
+  are the single shared reader — *one clue can be drawn as several strokes*, so the classified
+  chains are joined end-to-end before anything folds them, and the fold point is computed in one
+  place. All consumers go through them: `computeZipperRemovals` / `computePalindromeRemovals` (the
+  validators' pairing), `drawCenterDots` (the injected cosmetic dot) and `validatorClueObjects`'
+  shared `zipper`/`palindrome` case (the eyeball disc, descriptor `{type:'fold'}`) — so a fold point
+  can never mean different things in different places.
+  **`drawCenterDots`** (+ `drawFoldDots`, `CENTER_DOT_SPECS`, helpers `lineCluePathsWithKeys`,
+  `smallCosmeticMarkerPoints`) is a *rendering* feature: where a confidently classified folded line
+  has no cosmetic object within 0.3 cells of its fold centre, it injects a `[data-spdr-center-dot]`
+  `<circle>` in the line's own **rendered** colour, diameter = `centerDotScale` × the line's stroke
+  width. **`drawFoldDots` is the ONE place any visual property of the mark is decided** and
+  `CENTER_DOT_SPECS` is the ONE list of which clue types get one — adding a third folded type is a
+  row there plus a `makeSubCheckbox` in `buildCenterDotSection`; restyling the dot is a single edit
+  that lands on every type. The path index and the "already marked" point list are built once and
+  **shared across types**, so two types can't double-paint one fold point.
+  It runs at the tail of the render pipeline (`applySettings`, `startLabelRectPatch`, the observer's
+  `flushFixes` WORK_FULL branch) so it reads the stroke **after** `fixAllLines` has shaded it; its
+  own nodes are classified `'none'` in `classifyAddedNode` so they can't re-trigger a sweep. The
+  eyeball disc uses the same multiplier against the highlight's own line width (`SEG_W`), so drawn
+  and highlighted marks match. Settings: `centerDotEnabled` (master), `centerDotZipper`,
+  `centerDotPalindrome`, `centerDotScale`; UI = `buildCenterDotSection` ("Line centre dots").
   Regression-tested in `validator_harness.mjs` against `k9mm1xgca5`, which marks all seven of its
   own fold centres.
+- **Master on/off switch (v3.184):** `masterEnabled` / `buildMasterSwitch` / `restoreNativeDarkmode`,
+  at the very TOP of the IIFE (before the dark substrate) because a disabled run must return before
+  anything touches the page. Key `spdr-master-enabled` in localStorage — deliberately **not** in the
+  settings blob: it is read at document-start before `loadSettings` exists, and it must survive
+  "Reset all settings to default". Off → `window.spdrDisabled = true`, the IIFE returns, and the only
+  thing added to the page is one fixed-position ⏻ button (bottom-right, unstyled by `spdrFxButton` on
+  purpose). On → the same button, sized to `GEAR_SIZE`, inserted immediately left of the ⚙ in
+  `#sp-gear-holder` by `buildAllUI`'s gear-rehome poll. **It reloads the page by design** — the dark
+  substrate must be installed before SudokuPad's bundle and before DarkReader scans the document, and
+  the SVG fixes write `!important` colours onto native nodes without a general undo; see the block
+  comment for the full argument. `restoreNativeDarkmode` hands back SudokuPad's own `darkmode`
+  setting (stashed under `spdr-native-darkmode-restore` on the first forced write) so switching off
+  doesn't strand the site in light mode.
 - **Region-border device-pixel snapping (v3.124, settled v3.129):** `borderSnapCtx` /
   `makeAxisSnap` / `snapCenteredBand` + `rectilinearSegments`, used inside
   `drawRegionSplitBorders` (`addRect` and the centre-border block). **Unconditional — no

@@ -41,7 +41,12 @@ VALIDATORS = [
     ('ten line', 'TEN_LINE_CUE_RE', 'TEN_LINE_ANTI_RE', 'ten_line', None),
     ('region sum', 'REGIONSUM_CUE_RE', None, 'region_sum', None),
     ('parity', 'PARITY_CUE_RE', None, 'parity_line', None),
-    ('zipper', 'ZIPPER_CUE_RE', None, 'zipper', None),
+    # ZIPPER_CUE_RE is the bare word; the fold phrasing ("equidistant from the
+    # centre") is shared with palindrome and only counts alongside a sum verb.
+    # The script scopes that pair PER SENTENCE (hasZipperCue); this table can only
+    # do it per blob, so the row below is an UPPER bound on the fold branch.
+    ('zipper', 'ZIPPER_CUE_RE', None, 'zipper',
+     ('ZIPPER_FOLD_RE', 'ZIPPER_FOLD_SUM_RE')),
     ('palindrome', 'PALINDROME_CUE_RE', 'PALINDROME_ANTI_RE', 'palindrome', None),
     ('same difference', 'SAMEDIFF_CUE_RE', 'SAMEDIFF_ANTI_RE', 'same_difference', None),
     ('entropic', 'ENTROPIC_CUE_RE', 'ENTROPIC_ANTI_RE', 'entropic_line',

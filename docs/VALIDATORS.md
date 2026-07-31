@@ -1606,6 +1606,34 @@ notes wired like renban/region-sum.
 flattened to plain `line` entries with no `fromConstraint` label to read — so the cue+colour ladder
 stays load-bearing and this is purely additive precision.
 
+**⚠️ THE FOLD PHRASING BELONGS TO NEITHER RULE — it needs a verb (v3.184).** "digits equidistant
+from the centre" says only how a clue PAIRS cells up; it is equally the definition of a zipper and
+of a **palindrome**. `ZIPPER_CUE_RE` took it unconditionally through v3.183, so `yiaonocy5d`
+("...What?", a 6x6 whose rules read *"Grey lines are palindromes, i.e. digits equidistant from a
+grey line's center are always the same"*) had the **zipper** validator running on its palindromes.
+What separates the two rules is the verb — a zipper's fold pairs **sum** to a constant, a
+palindrome's are **equal** — so the phrasing branch now only counts as a zipper cue in a sentence
+that also says sum/total/add (`hasZipperCue` = `ZIPPER_CUE_RE` (the bare word) `||` per-sentence
+`ZIPPER_FOLD_RE && ZIPPER_FOLD_SUM_RE`). Scoped **per sentence**, not per blob, so a puzzle carrying
+both clue types can't let its zipper's "sum" license its palindrome's "equidistant".
+`ZIPPER_CLAUSE_RE` is narrowed the same way for the named-colour layer.
+
+Handed to `classifyCueLines` as an object with a `.test` method, which leaves **layer 0 intact**: an
+f-puzzles payload declaring `zipperline` still wins without consulting the rules text at all.
+
+**Catalog-measured (2026-07-31, 4,825 puzzles with rules text): exactly 4 verdicts change, and all
+four are fixes.**
+
+| puzzle | was | why the old cue was wrong |
+|---|---|---|
+| `yiaonocy5d` "...What?" | zipper | tagged palindrome; the reported false positive |
+| `zqpxetdz7a` "Hungry Rabbit in the Fog" | zipper | tagged palindrome |
+| `bg99zmbupy` "Across Roads" | zipper | *"cells an equal distance from the centre of a silver line have **equal values**"* — a palindrome |
+| `bill-murphy/20250705-consecutive-palindromes` | zipper | *"digits equidistant from the centre must be **consecutive**"* — **neither** rule. `PALINDROME_ANTI_RE` already excluded it; zipper had no such guard, so it was over-removing. |
+
+Nominal recall against the `zipper` tag reads 62 → 61 of 64, but the one "lost" puzzle is the
+consecutive-palindromes one above — a mis-tag, and a bug fixed rather than a regression.
+
 **⚠️ ONE ZIPPER CAN BE DRAWN AS SEVERAL STROKES — join before folding (v3.124).** `k9mm1xgca5`
 stores its R6C3→R9C3 zipper as TWO line entries meeting end-to-end at R8C2. Folding each stroke
 separately pairs the wrong cells, so `computeZipperRemovals` now folds **`zipperChains(lines)`**
@@ -1616,14 +1644,15 @@ junction and we refuse to guess (the `walkBetweenSegment` rule); closed loops ne
 merge that would revisit a cell is rejected. This is the mirror image of the between-line lesson:
 there one stroke was several clues, here several strokes are one clue.
 
-**One fold function, three consumers (v3.124).** `zipperFoldCenter(keys)` returns the fold point in
+**One fold function, every consumer (v3.124; renamed `zipperFoldCenter` → `lineFoldCenter` in
+v3.184, when palindrome joined).** `lineFoldCenter(keys)` returns the fold point in
 CELL units — the middle cell on an odd chain, the midpoint of the two middle cells on an even one
-(a cell EDGE when the line runs straight through, a grid CORNER where it turns). The validator's
-pairing, the eyeball disc and the injected cosmetic dot all read it, so the three can't drift.
-The eyeball case `{type:'zipper',keys}` draws the polyline plus a filled disc (`disc()` in
-`showObjects`) sized `zipperCenterDotScale × SEG_W`, matching the drawn dot's
-`zipperCenterDotScale × line width`. The rendering counterpart is `drawZipperCenterDots` — see
-PROJECT_SUMMARY.
+(a cell EDGE when the line runs straight through, a grid CORNER where it turns). Both folded
+validators' pairing, the eyeball disc and the injected cosmetic dot all read it, so they can't
+drift. The eyeball case is now the shared `{type:'fold',keys}` (emitted for zipper AND palindrome):
+polyline plus a filled disc (`disc()` in `showObjects`) sized `centerDotScale × SEG_W`, matching the
+drawn dot's `centerDotScale × line width`. The rendering counterpart is `drawCenterDots` /
+`drawFoldDots` — see PROJECT_SUMMARY.
 
 **Ground truth for the fold geometry:** `k9mm1xgca5` marks every fold centre with its own cosmetic
 circle. All 7 computed folds match all 7 circles — including a 4-cell circle on a grid CORNER and

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.183.0
+// @version      3.184.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -20,6 +20,116 @@
   // crackingthecryptic.com hosts many non-puzzle pages; only activate when a
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
+
+  var SCRIPT_VERSION = '3.184.0';
+  // Expose on window so we (or a test harness) can verify the loaded version
+  // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
+  // (Set here rather than beside the settings block because the master switch
+  // below can return early, and "which build is live" must answer either way.)
+  window.spdrVersion = SCRIPT_VERSION;
+  // Distinguishes this native-mode edition from the 2.x DarkReader-fighting one
+  // when both are installed in TamperMonkey for A/B testing (enable one at a time).
+  window.spdrEdition = 'native';
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MASTER ON/OFF SWITCH (v3.184)
+  //
+  // A power button immediately left of the ⚙ gear that takes the WHOLE script out
+  // of the page — the dark substrate, every SVG fix, every injected button, every
+  // validator — leaving only the switch itself so it can be turned back on. It
+  // exists to save a round-trip through the TamperMonkey/ViolentMonkey menu when
+  // comparing our rendering against stock SudokuPad.
+  //
+  // ⚠️ IT RELOADS THE PAGE, AND THAT IS NOT LAZINESS. A live teardown cannot be
+  // honest here, and a half-torn-down page is worse than either state:
+  //   • The dark substrate is installed at document-start, BEFORE SudokuPad's
+  //     bundle reads its own `darkmode` setting; and DarkReader only honours
+  //     <meta darkreader-lock> if it is in the document before DR scans it.
+  //     Neither can be undone after the fact, nor installed late — so "off" could
+  //     not reach stock rendering, and "on" could not reach ours.
+  //   • The SVG fixes write inline `!important` colours onto hundreds of NATIVE
+  //     nodes. Only some of those paths record the value they replaced, so a
+  //     general "put it back" does not exist. The board's true colours return when
+  //     SudokuPad redraws it — which is what a reload does.
+  // A reload costs nothing the user notices: SudokuPad restores the puzzle and the
+  // solver's progress from its own localStorage. So the switch flips the flag and
+  // reloads.
+  //
+  // The flag gets its OWN localStorage key rather than a field in the settings
+  // blob, for two reasons: it is read at document-start, long before loadSettings
+  // exists, and it must survive "Reset all settings to default" (a reset that
+  // silently re-enabled the script would be a trap).
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  var MASTER_KEY   = 'spdr-master-enabled';
+  var NATIVE_DM_KEY = 'spdr-native-darkmode-restore';
+  function masterEnabled() {
+    // Default ON: a browser that refuses localStorage gets the script, not a
+    // mysteriously inert one.
+    try { return localStorage.getItem(MASTER_KEY) !== 'off'; } catch (e) { return true; }
+  }
+  // SudokuPad's own dark mode is forced OFF for as long as we run (lockDRUseNative
+  // step 2), and that write outlives us. Switching the script off would otherwise
+  // leave the site in LIGHT mode for someone who had its dark mode on, with no clue
+  // why — so the original value is stashed on the first forced write and handed
+  // back here.
+  function restoreNativeDarkmode() {
+    try {
+      var prev = localStorage.getItem(NATIVE_DM_KEY);
+      if (prev === null) return;
+      var SS = 'svencodes_settings';
+      var s = JSON.parse(localStorage.getItem(SS) || '{}');
+      if (prev === 'unset') delete s.darkmode; else s.darkmode = (prev === 'true');
+      localStorage.setItem(SS, JSON.stringify(s));
+      localStorage.removeItem(NATIVE_DM_KEY);
+    } catch (e) {}
+  }
+  // The switch itself. One builder for both hosts — the gear holder while we run,
+  // a fixed corner button while we don't — so the two can't drift apart.
+  function buildMasterSwitch(size) {
+    var on = masterEnabled();
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'sp-master-btn';
+    btn.textContent = '⏻';
+    btn.title = on
+      ? 'Sudoku Tools is ON. Click to disable everything this script does — the dark theme, all rendering fixes, the validators and every button. The page reloads; this switch stays so you can turn it back on.'
+      : 'Sudoku Tools is OFF. Click to re-enable it. The page reloads.';
+    Object.assign(btn.style, {
+      flex: '0 0 auto', margin: '0',
+      width: size + 'px', height: size + 'px',
+      background: '#313244', color: on ? '#a6e3a1' : '#f38ba8',
+      border: '1px solid ' + (on ? '#45475a' : '#f38ba8'), borderRadius: '4px',
+      cursor: 'pointer', fontSize: Math.round(size * 0.58) + 'px',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: '0', lineHeight: '1', boxSizing: 'border-box',
+      pointerEvents: 'auto',
+    });
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      try { localStorage.setItem(MASTER_KEY, on ? 'off' : 'on'); } catch (err) {}
+      if (on) restoreNativeDarkmode();
+      location.reload();
+    });
+    return btn;
+  }
+
+  if (!masterEnabled()) {
+    window.spdrDisabled = true;
+    // Everything below this point is skipped: no dark substrate, no injected CSS,
+    // no observers, no UI. The page is stock SudokuPad plus this one button, which
+    // is deliberately plain — spdrFxButton would inject a stylesheet, and an "off"
+    // script that still styles the page is not off.
+    var mountMasterSwitch = function () {
+      if (!document.body || document.getElementById('sp-master-btn')) return;
+      var b = buildMasterSwitch(28);
+      Object.assign(b.style, { position: 'fixed', right: '12px', bottom: '12px', zIndex: '900' });
+      document.body.appendChild(b);
+    };
+    if (document.body) mountMasterSwitch();
+    else document.addEventListener('DOMContentLoaded', mountMasterSwitch);
+    return;
+  }
 
   // ═══════════════════════════════════════════════════════════════════════════
   // Dark substrate: lock DarkReader out, run our OWN frozen copy of SudokuPad's
@@ -131,7 +241,17 @@
     try {
       var SS = 'svencodes_settings';
       var s = JSON.parse(localStorage.getItem(SS) || '{}');
-      if (s.darkmode !== false) { s.darkmode = false; localStorage.setItem(SS, JSON.stringify(s)); }
+      if (s.darkmode !== false) {
+        // Stash what it was first, so the master switch can hand it back. This
+        // branch is only ever taken while the value is NOT already our forced
+        // false, so the stash records the user's own setting and can never be
+        // overwritten by a later re-force.
+        try {
+          if (localStorage.getItem(NATIVE_DM_KEY) === null)
+            localStorage.setItem(NATIVE_DM_KEY, s.darkmode === undefined ? 'unset' : String(!!s.darkmode));
+        } catch (e2) {}
+        s.darkmode = false; localStorage.setItem(SS, JSON.stringify(s));
+      }
     } catch (e) {}
 
     // 3. Inject our frozen copy of DMA (keyed on our own .spdr-dark class).
@@ -173,13 +293,9 @@
   // persist via localStorage.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  var SCRIPT_VERSION = '3.183.0';
-  // Expose on window so we (or a test harness) can verify the loaded version
-  // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
-  window.spdrVersion = SCRIPT_VERSION;
-  // Distinguishes this native-mode edition from the 2.x DarkReader-fighting one
-  // when both are installed in TamperMonkey for A/B testing (enable one at a time).
-  window.spdrEdition = 'native';
+  // (SCRIPT_VERSION / window.spdrVersion / window.spdrEdition are set at the very
+  // top of this IIFE — the master switch above can return before reaching here,
+  // and "which build is live" has to answer in both states.)
 
   var SETTINGS_KEY = 'sp-darkreader-fix';
 
@@ -271,8 +387,12 @@
     kropkiLabelSize:              16,     // font-size (user units) for both Kropki dot labels — larger default than the old hardcoded 13
     kropkiLabelWeight:            '600',  // font-weight for both Kropki dot labels — semi-bold (between the old 'normal'/400 and 'bold'/700)
 
-    zipperCenterDotEnabled:       true,   // draw the fold centre on zipper lines the setter left unmarked
-    zipperCenterDotScale:         5,      // dot DIAMETER as a multiple of the line width (shared by the eyeball disc)
+    // Fold-centre dots. One look, one size, one drawing function — see
+    // CENTER_DOT_SPECS / drawCenterDots. (Was zipper-only through v3.183.)
+    centerDotEnabled:             true,   // master: draw fold centres at all
+    centerDotZipper:              true,   // …on zipper lines
+    centerDotPalindrome:          true,   // …on palindrome lines
+    centerDotScale:               5,      // dot DIAMETER as a multiple of the line width (shared by the eyeball disc)
 
     selectionBorderEnabled:       true,    // "Border" subsection: restyle the selection cage stroke (colour/opacity/width) + grow/offset
     selectionColor:               '#3399ff',
@@ -855,7 +975,7 @@
     darkenInlineToolButtons();
     if (easyShadeSwatchRefresh) { try { easyShadeSwatchRefresh(); } catch (e) {} }
     var svg = document.getElementById('svgrenderer');
-    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); disambiguateShadedColors(svg); drawZipperCenterDots(svg); }
+    if (svg) { fixAllLabelRects(svg); fixAllCageBoxes(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); applyHideAuthorBorders(svg); drawRegionSplitBorders(svg); disambiguateShadedColors(svg); drawCenterDots(svg); }
     var cc = document.getElementById('cell-candidates');
     if (cc) { sortAllCandidateCells(cc); fixAllCenterTspans(cc); }
     var cp = document.getElementById('cell-pencilmarks');
@@ -2474,7 +2594,7 @@
     fixAllKropkiClueShapes(svg);
     rebuildKropkiLabels(svg);
     disambiguateShadedColors(svg);
-    drawZipperCenterDots(svg);
+    drawCenterDots(svg);
     startCageBoxPatch(svg);
     startSelectionBorderObserver();
     scheduleAutoShade();   // auto-enable Shaded mode if this puzzle has extra regions
@@ -2505,7 +2625,7 @@
       var el = node.nodeType === 1 ? node : node.parentElement;   // text nodes: judge by parent
       if (!el || !el.closest) return 'full';
       if (el.getAttribute && el.getAttribute('data-spdr-kropki-label')) return 'none';
-      if (el.getAttribute && el.getAttribute('data-spdr-zipper-dot') != null) return 'none';
+      if (el.getAttribute && el.getAttribute('data-spdr-center-dot') != null) return 'none';
       if (el.closest('[data-spdr-region-split]')) return 'none';
       if (el.closest('#cell-candidates, #cell-pencilmarks, #cell-highlights')) return 'none';
       if (el.closest('#cell-values')) return 'digits';
@@ -2518,7 +2638,7 @@
       var work = pendingWork;
       pendingWork = 0;
       if (work & WORK_FULL) {
-        fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); drawZipperCenterDots(svg); scheduleAutoShade();
+        fixAllLabelRects(svg); fixAllUnderlays(svg); assignExtraRegionColors(svg); fixAllCagePaths(svg); fixAllLines(svg); fixAllGivens(svg); fixAllUserDigits(svg); fixAllOverlayMarkerText(svg); fixAllKropkiDots(svg); fixAllKropkiClueShapes(svg); rebuildKropkiLabels(svg); disambiguateShadedColors(svg); drawCenterDots(svg); scheduleAutoShade();
       } else if (work & WORK_DIGITS) {
         fixAllUserDigits(svg);
       }
@@ -4998,8 +5118,8 @@
     // segment per tree edge + a bulb marker), {type:'arrow',circle,shaft} (bulb ring +
     // polyline + an arrowhead chevron at the tip), {type:'between',keys} (polyline + a
     // ring on BOTH endpoint circles), {type:'lockout',keys} (polyline + a DIAMOND on
-    // both endpoints — a ring there would draw the rival clue type), {type:'zipper',keys} (polyline + a disc at the
-    // fold centre), {type:'cage',keys} (merged perimeter of the cell
+    // both endpoints — a ring there would draw the rival clue type), {type:'fold',keys} (polyline + a disc at the
+    // fold centre — zipper and palindrome), {type:'cage',keys} (merged perimeter of the cell
     // set). Rings on 'arrow'/'between' MATCH the drawn circle's real centre + radius
     // when one is there (see ringCell), so the highlight lands on the clue.
     function showObjects(objs) {
@@ -5136,18 +5256,19 @@
         else if (o.type === 'circle') ringCell(o.key, cellPx * 0.34);
         else if (o.type === 'between') { var bk = o.keys || []; polyline(bk); if (bk.length > 1) { ringCell(bk[0], cellPx * 0.34); ringCell(bk[bk.length - 1], cellPx * 0.34); } }
         else if (o.type === 'lockout') { var lk = o.keys || []; polyline(lk); if (lk.length > 1) { diamondCell(lk[0], cellPx * 0.34); diamondCell(lk[lk.length - 1], cellPx * 0.34); } }
-        // Zipper: the FOLD CENTRE is what the clue turns on, so mark it. Position
-        // comes from zipperFoldCenter — the same function the injected cosmetic dot
-        // and the validator's own pairing use — and the disc is sized by the same
-        // `zipperCenterDotScale` multiple, here of OUR line width (SEG_W) instead of
-        // the puzzle's, so the highlight and the drawn dot read as the same mark.
-        else if (o.type === 'zipper') {
+        // A FOLDED line (zipper, palindrome): the FOLD CENTRE is what the clue turns
+        // on, so mark it — a bare polyline hides the one thing the clue is about.
+        // Position comes from lineFoldCenter, the same function the injected cosmetic
+        // dot and the validators' own pairing use, and the disc is sized by the same
+        // `centerDotScale` multiple, here of OUR line width (SEG_W) instead of the
+        // puzzle's, so the highlight and the drawn dot read as the same mark.
+        else if (o.type === 'fold') {
           var zk = o.keys || [];
           polyline(zk);
-          var zfc = zipperFoldCenter(zk);
+          var zfc = lineFoldCenter(zk);
           if (zfc) {
-            var zsc = parseFloat(settings.zipperCenterDotScale);
-            if (!isFinite(zsc) || zsc <= 0) zsc = DEFAULTS.zipperCenterDotScale;
+            var zsc = parseFloat(settings.centerDotScale);
+            if (!isFinite(zsc) || zsc <= 0) zsc = DEFAULTS.centerDotScale;
             disc(S(zfc.cx * cs, zfc.cy * cs), SEG_W * zsc / 2);
           }
         }
@@ -10144,9 +10265,38 @@
   // renban/whisper. It is RARE (3 of the catalog's 64 zipper puzzles carry the key;
   // most f-puzzles zippers are flattened to plain `line` entries with no
   // fromConstraint label), so the cue+colour ladder below stays load-bearing.
-  var ZIPPER_CUE_RE = /zipper|equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
-  var ZIPPER_CLAUSE_RE = /zipper|equidistant|equal\s+distance/;
-  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE_RE, ZIPPER_CLAUSE_RE, 'zipper', 'zipper'); }
+  //
+  // ⚠️ THE FOLD PHRASING IS NOT THE ZIPPER'S — IT IS THE FOLD'S (v3.184). "digits
+  // equidistant from the centre" says only WHERE the clue pairs cells up, not what
+  // the pair must do, and it is exactly how many setters define a PALINDROME:
+  // `yiaonocy5d` ("...What?") says "Grey lines are palindromes, i.e. digits
+  // equidistant from a grey line's center are always the same" and had the zipper
+  // validator firing on its palindromes. What separates the two rules is the verb —
+  // a zipper's pairs SUM to a constant, a palindrome's pairs are EQUAL — so the
+  // phrasing branch only counts as a zipper cue when the same sentence also says
+  // sum/total/add. The word "zipper" itself needs no such company.
+  //
+  // Scoped PER SENTENCE, not per blob: a puzzle carrying both clue types would
+  // otherwise let its zipper's "sum" license its palindrome's "equidistant".
+  var ZIPPER_CUE_RE = /zipper/;
+  // The fold phrasing, shared with palindrome (see PALINDROME_CUE_RE's note) …
+  var ZIPPER_FOLD_RE = /equal\s+distance\s+from\s+the\s+cent|equidistant[^.]*cent/;
+  // … and the verb that makes it a zipper rather than a palindrome.
+  var ZIPPER_FOLD_SUM_RE = /\bsums?\b|\btotals?\b|\badds?\s+(?:up\s+)?to\b/;
+  // Clause trigger for the named-colour layer, narrowed the same way: bare
+  // "equidistant" in a legend entry is as likely to be the palindrome line's.
+  var ZIPPER_CLAUSE_RE = /zipper|(?:equidistant|equal\s+distance)(?=[^.]*(?:sum|total))/;
+  function hasZipperCue(blob) {
+    if (ZIPPER_CUE_RE.test(blob)) return true;
+    return String(blob).split(/[.;\n]+/).some(function (s) {
+      return ZIPPER_FOLD_RE.test(s) && ZIPPER_FOLD_SUM_RE.test(s);
+    });
+  }
+  // classifyCueLines only ever calls `.test` on the cue, so handing it this object
+  // keeps LAYER 0 intact: an f-puzzles payload that declares `zipperline` outright
+  // still wins without consulting the rules text at all.
+  var ZIPPER_CUE = { test: hasZipperCue };
+  function classifyZipperLines() { return classifyCueLines(ZIPPER_CUE, ZIPPER_CLAUSE_RE, 'zipper', 'zipper'); }
 
   // Palindrome lines (v3.164): the digits read the same in both directions, i.e.
   // the two cells EQUIDISTANT FROM THE LINE'S CENTRE hold the SAME digit. Fold
@@ -10173,9 +10323,12 @@
   //     calls a BOX a "quasi-thermo-palindrome". No cue that reads the word can
   //     dodge that one, and the colour layers still have to pin a line before
   //     anything is checked.
-  // Deliberately NOT matched: the zipper family's "equidistant from the centre"
-  // phrasing. Every palindrome puzzle that words it that way also says
-  // "palindrome", and ZIPPER_CUE_RE already owns those words for a rival rule.
+  // Deliberately NOT matched: the fold phrasing "digits equidistant from the
+  // centre". It describes only how the clue PAIRS cells and is common to both
+  // rules; every palindrome puzzle that words it that way also says "palindrome",
+  // so nothing is lost by leaving it out. (Zipper does read it — but only in a
+  // sentence that also says the pairs SUM; see hasZipperCue. Before v3.184 zipper
+  // took it unconditionally and fired on `yiaonocy5d`'s palindromes.)
   var PALINDROME_CUE_RE = /palindrom|reads?\s+the\s+same\b/;
   // Two rules borrow the words for a DIFFERENT constraint, and both would be
   // over-removals (the contract's one forbidden direction):
@@ -10744,7 +10897,7 @@
   // grid CORNER where it turns. This is exactly the fold computeZipperRemovals
   // pairs across (keys[i] with keys[L-1-i]), by construction rather than by
   // coincidence — everything that needs "where does this zipper fold" calls this.
-  function zipperFoldCenter(keys) {
+  function lineFoldCenter(keys) {
     if (!keys || keys.length < 2) return null;
     function c(k) { var p = String(k).split(','); return [+p[0] + 0.5, +p[1] + 0.5]; }
     var L = keys.length;
@@ -10753,21 +10906,26 @@
     return { cx: (a[0] + b[0]) / 2, cy: (a[1] + b[1]) / 2 };
   }
 
-  // ── Zipper fold-centre dot (v3.123) ─────────────────────────────────────────
-  // A zipper line folds at its geometric centre, and that centre is the one thing
-  // the drawing doesn't show: most setters mark it with a small circle (`k9mm1xgca5`
-  // "The Zip that Zips the Zips" marks every one; `w9gvte9pxw` "Aad-van-ced Zippers"
-  // marks two of three), but plenty mark none at all (`2nnlhao8xm`, `4qt4n1bnz3`),
-  // leaving the solver to count cells every time they read the clue. Where a
-  // CONFIDENTLY-classified zipper has no cosmetic object at its centre, draw one.
+  // ── Fold-centre dots (v3.123 zipper; generalised v3.184) ────────────────────
+  // A FOLDED line — one whose rule pairs cells equidistant from the middle — turns
+  // on its geometric centre, and that centre is the one thing the drawing doesn't
+  // show. Some setters mark it (`k9mm1xgca5` "The Zip that Zips the Zips" marks
+  // every zipper centre; `w9gvte9pxw` "Aad-van-ced Zippers" marks two of three),
+  // plenty mark none at all (`2nnlhao8xm`, `4qt4n1bnz3`), and the solver is left
+  // counting cells every time they read the clue. Where a CONFIDENTLY-classified
+  // folded line has no cosmetic object at its centre, draw one.
+  //
+  // ONE function, one look, one size setting, driven by CENTER_DOT_SPECS — adding a
+  // third folded clue type is a row in that table, and restyling the dot is a single
+  // edit that lands on every type at once. Zipper and palindrome both fold at
+  // lineFoldCenter, so nothing here is per-type except which classifier to ask.
   //
   // It must read as part of the clue, not as an extra constraint, so it takes the
-  // LINE's own colour and a diameter of `zipperCenterDotScale` × the line's stroke
-  // width.
+  // LINE's own colour and a diameter of `centerDotScale` × the line's stroke width.
   //
-  // GEOMETRY comes from zipperFoldCenter over zipperChains — the SAME pair of
-  // functions the validator and the eyeball preview use, so the drawn dot, the
-  // highlighted dot and the cells the validator folds together can never disagree.
+  // GEOMETRY comes from lineFoldCenter over lineClueChains — the SAME pair of
+  // functions the validators and the eyeball preview use, so the drawn dot, the
+  // highlighted dot and the cells a validator folds together can never disagree.
   // Setters mark the fold the same way: `k9mm1xgca5` stores a 4-cell circle
   // (R2C6/R2C7/R3C6/R3C7) where a chain folds on a grid corner, and 2-cell circles
   // where it folds on an edge.
@@ -10778,7 +10936,7 @@
   // guess at, and the model can be stored transposed (the v3.83 trap). A chain with
   // no matching DOM path is SKIPPED: under-draw, never guess a colour. A MERGED
   // chain matches on any of its constituent strokes (`parts`).
-  function zipperLineDomPaths(cs) {
+  function lineCluePathsWithKeys(cs) {
     var out = [];
     if (!cs) return out;
     var N = detectGridSize();
@@ -10809,7 +10967,7 @@
     var out = [];
     if (!cs) return out;
     document.querySelectorAll('#overlay rect, #underlay rect, #overlay circle, #underlay circle').forEach(function (el) {
-      if (el.getAttribute('data-spdr-zipper-dot') != null) return;     // our own dot
+      if (el.getAttribute('data-spdr-center-dot') != null) return;     // our own dot
       var cx, cy, w, h;
       if (el.tagName.toLowerCase() === 'circle') {
         var r = parseFloat(el.getAttribute('r') || 0);
@@ -10825,38 +10983,28 @@
     });
     return out;
   }
-  function drawZipperCenterDots(svg) {
-    if (!svg) svg = document.getElementById('svgrenderer');
-    if (!svg) return;
-    svg.querySelectorAll('[data-spdr-zipper-dot]').forEach(function (el) { el.remove(); });
-    if (!settings.zipperCenterDotEnabled) return;
-    var cs = getGridCellSize();
-    if (!cs) return;
-    var cls;
-    try { cls = classifyZipperLines(); } catch (e) { return; }
-    if (!cls || cls.mode !== 'confident' || !cls.lines || cls.lines.length === 0) return;
-
-    // Stroke → the <path> that draws it. Both orientations: the classifier's chain
-    // and the path's own point order can run opposite ways.
-    var byChain = {};
-    zipperLineDomPaths(cs).forEach(function (info) {
-      var fwd = info.keys.join(' '), rev = info.keys.slice().reverse().join(' ');
-      if (!byChain[fwd]) byChain[fwd] = info;
-      if (!byChain[rev]) byChain[rev] = info;
-    });
-    var marks = smallCosmeticMarkerPoints(cs);
+  // The folded clue types that get a centre dot: which setting turns each on, and
+  // which classifier says where its lines are. ADD A TYPE HERE, nowhere else.
+  var CENTER_DOT_SPECS = [
+    { key: 'centerDotZipper',     classify: function () { return classifyZipperLines(); } },
+    { key: 'centerDotPalindrome', classify: function () { return classifyPalindromeLines(); } },
+  ];
+  // THE one dot-drawing function. Every visual property of the mark lives here, so
+  // restyling it is a single edit that lands on every folded clue type at once.
+  // `chains` are already-merged cell chains; `cs` the grid cell size in user units.
+  function drawFoldDots(chains, byChain, marks, cs) {
     var NS = 'http://www.w3.org/2000/svg';
     var TOL = cs * 0.3;                       // "already marked" radius around the fold point
-    var scale = parseFloat(settings.zipperCenterDotScale);
-    if (!isFinite(scale) || scale <= 0) scale = DEFAULTS.zipperCenterDotScale;
+    var scale = parseFloat(settings.centerDotScale);
+    if (!isFinite(scale) || scale <= 0) scale = DEFAULTS.centerDotScale;
 
-    mergeLineStrokes(cls.lines).forEach(function (item) {
-      // A merged zipper is drawn by several paths; any one of them carries the
-      // colour and width (they are the same line), so take the first that matched.
+    chains.forEach(function (item) {
+      // A merged line is drawn by several paths; any one of them carries the colour
+      // and width (they are the same line), so take the first that matched.
       var info = null;
       for (var i = 0; i < item.parts.length && !info; i++) info = byChain[item.parts[i].join(' ')];
       if (!info || !info.el.parentNode) return;
-      var fc = zipperFoldCenter(item.keys);
+      var fc = lineFoldCenter(item.keys);
       if (!fc) return;
       var cx = fc.cx * cs, cy = fc.cy * cs;
       if (marks.some(function (p) { return Math.abs(p.x - cx) < TOL && Math.abs(p.y - cy) < TOL; })) return;
@@ -10865,7 +11013,7 @@
       var col = st.stroke, w = parseFloat(st.strokeWidth);
       if (!col || col === 'none' || !isFinite(w) || w <= 0) return;
       var dot = document.createElementNS(NS, 'circle');
-      dot.setAttribute('data-spdr-zipper-dot', '1');
+      dot.setAttribute('data-spdr-center-dot', '1');
       dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
       dot.setAttribute('r', w * scale / 2);                  // diameter = scale × the line width
       dot.setAttribute('pointer-events', 'none');
@@ -10873,9 +11021,39 @@
       var op = parseFloat(st.strokeOpacity);
       if (isFinite(op) && op < 1) dot.style.setProperty('fill-opacity', String(op), 'important');
       info.el.parentNode.appendChild(dot);
-      // A dot we just drew must itself count as "marked" — two zippers can share a
-      // fold point (crossing lines), and the second must not double-paint it.
+      // A dot we just drew must itself count as "marked" — two folded lines can
+      // share a fold point (crossing lines), and the second must not double-paint
+      // it. This is also what stops a line classified as BOTH types (impossible
+      // today, but cheap) getting two coincident dots.
       marks.push({ x: cx, y: cy });
+    });
+  }
+  function drawCenterDots(svg) {
+    if (!svg) svg = document.getElementById('svgrenderer');
+    if (!svg) return;
+    svg.querySelectorAll('[data-spdr-center-dot]').forEach(function (el) { el.remove(); });
+    if (!settings.centerDotEnabled) return;
+    var cs = getGridCellSize();
+    if (!cs) return;
+    var specs = CENTER_DOT_SPECS.filter(function (s) { return !!settings[s.key]; });
+    if (specs.length === 0) return;
+
+    // Stroke → the <path> that draws it. Both orientations: the classifier's chain
+    // and the path's own point order can run opposite ways. Built ONCE and shared,
+    // as is `marks` — so the second type sees the first type's dots as taken.
+    var byChain = {};
+    lineCluePathsWithKeys(cs).forEach(function (info) {
+      var fwd = info.keys.join(' '), rev = info.keys.slice().reverse().join(' ');
+      if (!byChain[fwd]) byChain[fwd] = info;
+      if (!byChain[rev]) byChain[rev] = info;
+    });
+    var marks = smallCosmeticMarkerPoints(cs);
+
+    specs.forEach(function (spec) {
+      var cls;
+      try { cls = spec.classify(); } catch (e) { return; }
+      if (!cls || cls.mode !== 'confident' || !cls.lines || cls.lines.length === 0) return;
+      drawFoldDots(mergeLineStrokes(cls.lines), byChain, marks, cs);
     });
   }
 
@@ -14537,7 +14715,7 @@
   }
   // Clue-object descriptors for spdrHi.showObjects: {type:'dot',a,b},
   // {type:'line'|'diag',keys}, {type:'cage',keys}, {type:'arrow',circle,shaft},
-  // {type:'thermo',edges,root}, {type:'between',keys}, {type:'zipper',keys}.
+  // {type:'thermo',edges,root}, {type:'between',keys}, {type:'fold',keys}.
   function validatorClueObjects(def) {
     var out = [];
     switch (def.name) {
@@ -14586,13 +14764,15 @@
         if (lcls && lcls.mode === 'confident')
           lockoutSegments(lcls.lines).forEach(function (seg) { out.push({ type: 'lockout', keys: seg }); });
         break;
-      // Zipper gets its own case so the preview shows the FOLD CENTRE (a bare
-      // polyline hides the one thing the clue is about). Same classify() the
-      // compute reads, so the preview can't drift from what runs.
+      // The FOLDED types get their own case so the preview shows the FOLD CENTRE (a
+      // bare polyline hides the one thing the clue is about). Same classify() the
+      // compute reads, so the preview can't drift from what runs — and the same
+      // chains + fold point the injected centre dot draws.
       case 'zipper':
+      case 'palindrome':
         var zcls = validatorClassify(def);
         if (zcls && zcls.mode === 'confident')
-          zipperChains(zcls.lines || []).forEach(function (keys) { out.push({ type: 'zipper', keys: keys }); });
+          lineClueChains(zcls.lines || []).forEach(function (keys) { out.push({ type: 'fold', keys: keys }); });
         break;
       default:
         // Only CONFIDENTLY-identified lines are validated on a plain click, so those
@@ -16922,15 +17102,20 @@
     });
   }
 
-  // Settings panel — "Zipper centre dots" section (v3.123).
-  function buildZipperSection() {
+  // Settings panel — "Line centre dots" section (v3.123 zipper-only; both folded
+  // types from v3.184). One master, one size, a checkbox per clue type — the same
+  // shape as the drawing code, so a new folded type is a row in CENTER_DOT_SPECS
+  // plus a makeSubCheckbox here.
+  function buildCenterDotSection() {
     return buildSection({
-      enabledKey: 'zipperCenterDotEnabled',
-      label: 'Zipper centre dots',
-      desc: 'Mark the fold point of a zipper line the setter left unmarked, in the line’s own colour. Lines that already carry a centre marker are left alone.',
+      enabledKey: 'centerDotEnabled',
+      label: 'Line centre dots',
+      desc: 'Mark the fold point of a folded line the setter left unmarked, in the line’s own colour. Lines that already carry a centre marker are left alone.',
       hasColor: false,
-      resetKeys: ['zipperCenterDotEnabled', 'zipperCenterDotScale'],
+      resetKeys: ['centerDotEnabled', 'centerDotZipper', 'centerDotPalindrome', 'centerDotScale'],
       subBuilder: function (wrap) {
+        wrap.appendChild(makeSubCheckbox('centerDotZipper', 'Zipper lines'));
+        wrap.appendChild(makeSubCheckbox('centerDotPalindrome', 'Palindrome lines'));
         var row = document.createElement('div');
         Object.assign(row.style, { display:'flex', alignItems:'center', gap:'6px', marginTop:'6px' });
         var lbl = document.createElement('span');
@@ -16938,7 +17123,7 @@
         Object.assign(lbl.style, { color:'#cdd6f4', fontSize:'12px', flex:'1' });
         var inp = document.createElement('input');
         inp.type = 'text';
-        inp.value = String(settings.zipperCenterDotScale != null ? settings.zipperCenterDotScale : DEFAULTS.zipperCenterDotScale);
+        inp.value = String(settings.centerDotScale != null ? settings.centerDotScale : DEFAULTS.centerDotScale);
         Object.assign(inp.style, {
           width:'54px', background:'#313244', color:'#cdd6f4',
           border:'1px solid #45475a', borderRadius:'4px',
@@ -16946,10 +17131,10 @@
         });
         inp.addEventListener('input', function () {
           var v = inp.value.trim();
-          if (v === '' || /^\d+(\.\d+)?$/.test(v)) { settings.zipperCenterDotScale = v; saveSettings(settings); applySettings(); }
+          if (v === '' || /^\d+(\.\d+)?$/.test(v)) { settings.centerDotScale = v; saveSettings(settings); applySettings(); }
         });
-        controlSyncers['zipperCenterDotScale'] = function () {
-          inp.value = String(settings.zipperCenterDotScale != null ? settings.zipperCenterDotScale : DEFAULTS.zipperCenterDotScale);
+        controlSyncers['centerDotScale'] = function () {
+          inp.value = String(settings.centerDotScale != null ? settings.centerDotScale : DEFAULTS.centerDotScale);
         };
         row.appendChild(lbl); row.appendChild(inp);
         wrap.appendChild(row);
@@ -17103,7 +17288,7 @@
 
     content.appendChild(buildKropkiSection());
 
-    content.appendChild(buildZipperSection());
+    content.appendChild(buildCenterDotSection());
 
     content.appendChild(buildLabelBgSection());
 
@@ -18608,6 +18793,13 @@
       var gear = document.getElementById('sp-fix-btn');
       if (!host || !gear) return false;
       if (gear.parentElement !== host) host.appendChild(gear);
+      // The master on/off switch sits immediately LEFT of the gear, sized to match
+      // it. (Holder order ends up: version label, ⏻, ⚙.)
+      if (!document.getElementById('sp-master-btn')) {
+        var sw = buildMasterSwitch(GEAR_SIZE);
+        spdrFxButton(sw);          // same hover-brighten / depress / flash as the gear
+        host.insertBefore(sw, gear);
+      }
       return true;
     }, 100, 100);
     // Selection-border offset observer is feature-independent of DarkReader

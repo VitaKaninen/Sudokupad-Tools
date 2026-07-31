@@ -70,7 +70,7 @@ const NAMES = [
   'TEN_LINE_CUE_RE', 'TEN_LINE_CLAUSE_RE', 'TEN_LINE_ANTI_RE',
   'REGIONSUM_CUE_RE', 'REGIONSUM_CLAUSE_RE',
   'PARITY_CUE_RE', 'PARITY_CLAUSE_RE',
-  'ZIPPER_CUE_RE', 'ZIPPER_CLAUSE_RE',
+  'ZIPPER_CUE_RE', 'ZIPPER_FOLD_RE', 'ZIPPER_FOLD_SUM_RE', 'ZIPPER_CLAUSE_RE', 'hasZipperCue',
   'PALINDROME_CUE_RE', 'PALINDROME_ANTI_RE', 'PALINDROME_CLAUSE_RE',
   'SAMEDIFF_CUE_RE', 'SAMEDIFF_ANTI_RE', 'SAMEDIFF_CLAUSE_RE',
   'SAMEDIFF_ADJDIFF_RE', 'SAMEDIFF_BOUNDED_RE', 'SAMEDIFF_PERLINE_RE',
@@ -90,7 +90,7 @@ const NAMES = [
   // lockout-line support (the between line's mirror)
   'lockoutOutside', 'lockoutSegmentSupport',
   // zipper stroke-joining + fold centre
-  'mergeLineStrokes', 'lineClueChains', 'zipperChains', 'zipperFoldCenter',
+  'mergeLineStrokes', 'lineClueChains', 'zipperChains', 'lineFoldCenter',
   // Roman numerals on a cell border (the XV validator's sum target)
   'ROMAN_UNITS', 'romanString', 'romanValue',
   // difference dots (a labelled white border circle: |a-b| = the label)
@@ -276,9 +276,23 @@ checkTrue('region-sum cue: "every region it passes through" (2ifg92eka9)',
   F.REGIONSUM_CUE_RE.test('the digits in every region it passes through have the same sum'));
 checkTrue('region-sum cue: "each 3x3 box" spans the size (bl168ah6g9)',
   F.REGIONSUM_CUE_RE.test('for each 3x3 box a line passes through, the digits on the line sum to the same total'));
-// Zipper
-checkTrue('zipper cue: equal distance from the center',
-  F.ZIPPER_CUE_RE.test('digits an equal distance from the center of the line sum to the same total'));
+// Zipper. The word is enough on its own; the FOLD phrasing is shared with
+// palindrome, so it only counts in a sentence that also says the pairs sum
+// (v3.184 — `yiaonocy5d` defines its palindromes with the same words).
+checkTrue('zipper cue: equal distance from the center + sum',
+  F.hasZipperCue('digits an equal distance from the center of the line sum to the same total'));
+checkTrue('zipper cue: the word alone needs no sum verb',
+  F.hasZipperCue('grey lines are zipper lines.'));
+checkFalse('zipper cue: the fold phrasing alone is a PALINDROME (yiaonocy5d)',
+  F.hasZipperCue("grey lines are palindromes, i.e. digits equidistant from a grey line's center are always the same."));
+checkFalse('zipper cue: a zipper sentence elsewhere does not license a palindrome sentence',
+  F.hasZipperCue('blue lines: digits sum to ten. grey lines: digits equidistant from the center are identical.'));
+checkTrue('zipper cue: both clue types in one puzzle still detects the zipper',
+  F.hasZipperCue('grey lines: digits equidistant from the center are identical. blue lines: digits equidistant from the center sum to the same total.'));
+checkFalse('zipper clause: bare "equidistant" in a legend is not the zipper line',
+  F.ZIPPER_CLAUSE_RE.test('grey lines, whose digits are equidistant from the centre and identical'));
+checkTrue('zipper clause: the fold phrasing plus a sum still pins the line',
+  F.ZIPPER_CLAUSE_RE.test('purple lines: digits an equal distance from the center sum to the same total'));
 // Palindrome (v3.164). Catalog-measured: 132/132 scoreable tagged puzzles fire.
 // The named form is trivial; the load-bearing branch is the 8 setters who only
 // DESCRIBE it, and the anti guards the two rules that borrow the same words.
@@ -1213,7 +1227,7 @@ const K9_STROKES = [
 const K9_CIRCLES = [[1.5,2.5],[3.5,0.5],[6,2],[6.5,3.5],[5,3.5],[1.5,4.5],[8.5,7]];
 const k9 = F.zipperChains(K9_STROKES);
 check('zipper: 8 strokes join into 7 zippers (k9mm1xgca5)', k9.length, 7);
-const k9folds = k9.map((c) => { const f = F.zipperFoldCenter(c); return [f.cx, f.cy]; });
+const k9folds = k9.map((c) => { const f = F.lineFoldCenter(c); return [f.cx, f.cy]; });
 const keyOf = (p) => p[0] + '/' + p[1];
 check('zipper: every fold lands on the setter’s own centre circle',
   k9folds.map(keyOf).sort(), K9_CIRCLES.map(keyOf).sort());
@@ -1222,7 +1236,7 @@ const k9merged = k9.find((c) => c.length === 9 && c[0] === zRc('R6C3'));
 checkTrue('zipper: the two-stroke line merges to 9 cells ending R9C3',
   !!k9merged && k9merged[k9merged.length - 1] === zRc('R9C3'));
 check('zipper: merged fold = R5C2 (the marked centre)',
-  k9merged ? F.zipperFoldCenter(k9merged) : null, { cx: 1.5, cy: 4.5 });
+  k9merged ? F.lineFoldCenter(k9merged) : null, { cx: 1.5, cy: 4.5 });
 // Guard rails: a junction is never guessed at, and a closed loop never joins.
 const yJunction = [['0,0','1,0','2,0'], ['2,0','2,1','2,2'], ['2,0','3,0','4,0']];
 check('zipper: three chain-ends at one cell = refuse to join',
@@ -1250,11 +1264,11 @@ checkTrue('strokes: joining is idempotent (resolve + zipperChains both run it)',
 check('strokes: untouched chains pass straight through',
   F.lineClueChains([['0,0','1,0'], ['5,5','5,6']]).length, 2);
 check('zipper: an odd chain folds on its middle cell',
-  F.zipperFoldCenter(['0,0','1,0','2,0']), { cx: 1.5, cy: 0.5 });
+  F.lineFoldCenter(['0,0','1,0','2,0']), { cx: 1.5, cy: 0.5 });
 check('zipper: an even STRAIGHT chain folds on the shared edge',
-  F.zipperFoldCenter(['0,0','1,0','2,0','3,0']), { cx: 2, cy: 0.5 });
+  F.lineFoldCenter(['0,0','1,0','2,0','3,0']), { cx: 2, cy: 0.5 });
 check('zipper: an even DIAGONAL step folds on the grid corner',
-  F.zipperFoldCenter(['0,0','1,1']), { cx: 1, cy: 1 });
+  F.lineFoldCenter(['0,0','1,1']), { cx: 1, cy: 1 });
 
 // ── counting circles (v3.177) ────────────────────────────────────────────────
 // Every string below is real rules text from the puzzle named beside it. The cue's
