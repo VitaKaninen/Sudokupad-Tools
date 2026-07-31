@@ -128,6 +128,15 @@ Sources: grey semantics 2026-07-17; the (b) branch and `drop` 2026-07-31.
 > the validator completely, and not gray it out. There is no reason for it to be available."
 > — 2026-07-31 (`ay6r6mmu5w` "Close Enough", `5kx4d90kcm` "Sigma or Pi")
 
+**These two quotes are not in conflict — check the provenance before reopening it.** The first
+(2026-07-31 12:02, session "Script on/off switch and puzzle validators") was answering a question
+scoped to a specific residue: the 29 catalogued puzzles with no arithmetic tip-off and no published
+solution, whose *rules state a rule that isn't ours*. Read in place, that turn separates the cases
+itself — rules declare a liar ⇒ grey; not spelled out ⇒ keep it available; rules plainly don't fit
+⇒ disable outright. The second (19:54, "Cage validation issue") is about the general case, where
+nothing in the rules contradicts us. **Default live; grey and drop are the narrow exceptions, and
+both need rules-text evidence.**
+
 ### What may be evidence for grey / drop
 
 **Only the rules text.** A puzzle that hides its twist is *entitled* to hide it from us too:
