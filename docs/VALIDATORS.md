@@ -622,9 +622,19 @@ ever be removed from it and every validator would report a clean bill of health.
 
 `probeInfo` returns `{verdict, bad, total}` — how many of the validator's **clues** the answer
 refutes, grouped by `validatorClueCellGroups` (the same reader the missing-candidates warning uses).
-One bad cage among 29 (`bH8FJtL3F3` "Killer Sudoku") is a decoy — which is supposed to FAIL when the
-player runs the validator, since that failure is how they find out; 16 of 19 (`ay6r6mmu5w` "Close
-Enough") means the rule itself is not ours. `probeSystematic` splits them at half — a blunt line, and
+One bad cage among 29 (`bH8FJtL3F3` "Killer Sudoku") is a **local** fault — which is supposed to FAIL
+when the player runs the validator; 16 of 19 (`ay6r6mmu5w` "Close Enough") means the rule itself is
+not ours.
+
+> **`bH8FJtL3F3` is NOT a decoy, and earlier notes calling it one were wrong** (corrected on the
+> setter's account, 2026-08-01). Its odd cage is a **typo introduced when the puzzle was hand-edited
+> into SudokuPad's format** — the published video shows that cage carrying a different total. The
+> rules give no hint of a false clue, and they shouldn't, because there isn't one by design. It stays
+> here as an example only of the *magnitude* question — one clue wrong versus all of them — which is
+> what `probeInfo` measures and is unaffected by why the clue is wrong. A puzzle can be locally wrong
+> because it is trolling the solver **or** because someone fat-fingered a transcription, and we
+> cannot tell those apart. We do not need to: the response is identical, and diagnosing which it is
+> would be the solver's job either way (P2). `probeSystematic` splits them at half — a blunt line, and
 nothing hinges on it: the real distribution is bimodal (43 of the 99 refuted-cage puzzles refute
 **every** cage).
 
@@ -716,7 +726,7 @@ geometry), so they stand in for the rest. Of 653 puzzles with readable cages and
 |---|---|---|
 | **grey** | 17 | "Liar Zone Sudoku", "Liar Killer", "Wrogn Fogn" ×2, "Escape the Foggy Liar", "Sigma or Pi", "TomTom Sudoku" — the genre, cleanly |
 | **drop** | 104 | Zone Sudoku ×6, "Semikiller", "Knapp Daneben Killer", "Max Cage Sudoku", "Modular Cages", "Round Off Sudoku", "Count Different Sudoku", "The Devil is in the Details" (product), "Leap Day" (repeats). Nearly all at ratio **1.00** — every cage refuted |
-| **keep** | 16 | the partials: `bH8FJtL3F3` "Killer Sudoku" at 1/29, `blobz/orchard` at 4/11 — decoys, correctly left to the per-clue mute |
+| **keep** | 16 | the partials: `bH8FJtL3F3` "Killer Sudoku" at 1/29, `blobz/orchard` at 4/11 — a locally wrong clue, not a puzzle-wide variant, so correctly kept (`bH8FJtL3F3`'s odd cage is a **transcription typo**, not a decoy — see the note above) |
 
 The thin case is a puzzle with a single refuted cage and cages named in the rules (`67rr7DMJDh`
 "121", 1/1): ratio 1.00 on a sample of one, so it drops. There is no evidence available to tell
