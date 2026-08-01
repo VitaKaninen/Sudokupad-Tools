@@ -405,8 +405,13 @@ what we do with a refutation: no longer "go quiet", now "read it properly, or sa
 
 ## 8. Open questions
 
-1. **The puzzle-wide cage-ruleset measurement** (§6). Run it before anything else — it sets how much
-   of the problem §6 can actually absorb.
+1. ~~**The puzzle-wide cage-ruleset measurement** (§6).~~ **✅ RUN 2026-07-31** —
+   `tools/cage_rulesets.py --puzzlewide`, written up in `VALIDATORS.md`. §6 is **viable**: with the
+   solution, 75.4% of cage puzzles resolve to exactly one ruleset and 1.8% to two (the §4(c)
+   grey-both case). Without a solution, arithmetic over all cages at once **contains** the true
+   ruleset 99.0% of the time but only *elects* a non-standard one correctly 8 times in 10 — so the
+   standing rule is: **arithmetic may eliminate `sum_distinct`, never elect its replacement.**
+   Electing needs the solution or a rules cue.
 2. **UNCHECKED wording.** The reason string must be honest without diagnosing (P2). "This cage's
    corner is not a sum of different digits" is arithmetic the player could do themselves; "this
    cage is a decoy" is the answer. Draft each one against that line.

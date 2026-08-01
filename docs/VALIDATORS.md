@@ -368,6 +368,60 @@ The 10.4% "no reading explains it" bucket says why the ceiling is so low: the va
 its digit; `ay6r6mmu5w` "Close Enough" and `uqvv06s42j` "Knapp Daneban Killer" are off-by-one sums;
 `clover/20250731-max-cage-sudoku` totals only the largest). No fixed list of readings closes it.
 
+### …but PUZZLE-WIDE it mostly works — the §8 q1 measurement, run 2026-07-31
+
+`tools/cage_rulesets.py --puzzlewide` runs the experiment `VALIDATOR_POLICY.md` §8 called "the
+concrete next experiment": intersect the rulesets consistent with **every** cage of a puzzle, rather
+than judging one cage alone. Same 682 solution-bearing puzzles. **The answer flips.**
+
+Candidate rulesets: `sum_distinct`, `sum_any` (repeats permitted — a superset of `sum_distinct`, so
+the implied one is dropped from every intersection), `product`, `difference` (2-cell), `quotient`
+(2-cell), `digit_list`, `partial_list`, `minimum`, `maximum`.
+
+**A — with the solution, the puzzle's ruleset is usually determined:**
+
+| rulesets explaining every cage | puzzles | |
+|---|---|---|
+| exactly 1 | **514** | **75.4%** |
+| 2 | 12 | 1.8% |
+| 0 (bespoke rule, or non-numeric corners) | 156 | 22.9% |
+
+The single verdicts: `sum_distinct` 494, `sum_any` 11, `partial_list` 4, `digit_list` 4, `product` 1.
+The 12 two-ruleset puzzles are exactly the case §4(c) describes — list both rows, grey both.
+
+**B — without the solution, arithmetic is a safe FILTER but an unsafe PICKER.** Feasibility over all
+cages at once **contains** the true ruleset on **519 of 524 determinate puzzles (99.0%)**, and
+narrows to exactly one on 337 (49.4%) — right 291 of the 293 determinate ones (**99.3%**).
+
+**C — but the one action that matters is barely better than a coin flip.** Of those 337, the pick is
+something *other than* `sum_distinct` on only **10** puzzles, and it is right on **8 (80%)**. That is
+the whole no-solution case: arithmetic almost never earns the right to switch rulesets, it just
+confirms the standard one. **Design consequence:** arithmetic may *eliminate* `sum_distinct` (the
+`67rr7DMJDh` "121" pigeonhole: cells > digits), never *elect* a replacement. Electing needs the
+solution (§5's permitted "identify the ruleset" use) or a rules cue.
+
+**Why this doesn't contradict v3.184 above.** That measured one cage, in isolation, with no solution
+— and its 58.3% is still correct for that question. Nothing here rehabilitates per-cage
+classification; what works is all-cages-at-once, and mostly with the solution present.
+
+### Cage variant scope — what is actually out there (`--survey`)
+
+1,253 of the catalog's 6,260 puzzles draw a killer cage with a corner (1,210 with ≥1 numeric corner;
+682 also publish a solution). Beyond the standard sum the population is **small and the tail is
+infinite**. Per-puzzle sole verdicts scale to roughly: repeats-allowed sum ~20, digit list ~7,
+partial list ~7, product ~2 of the 1,253.
+
+The 156 no-ruleset puzzles are each their own invention and confirm the tail can't be enumerated:
+doubler/multiplier cells changing a digit's *value* (`zi8pirt0ks` "Abyssus",
+`james-sinclair/double-entendre`), letters standing for unknown sums (`nk5f0ylrde` "X, Y and Z???",
+`gdc/hazy-cipher`), arithmetic *expressions* in the corner (`zph1u3t3zq` "Nos482" — `(4+8)x2`),
+modulo (`n3s05tso9a` "Modular Mayhem"), rounding (`h5sq10em9r`/`yn4fe4j20j` "Round Off Sudoku",
+`ay6r6mmu5w` "Close Enough"), inequalities (`dfjxdryzuo` "Anti-Sums" — `<23`, `>9`), "exactly two of
+these three digits" (`dj4ini56n0`/`lgih5qwoi1` "Liar Zone"), multi-digit *numbers* read out of the
+cage (`uvzlpx3x3r` "3-Digit Killer", `hr2psfhzcz` "Welcome, 2025!"), dates (`bofuhbwz6i`), and
+cage-sum-plus-everything-outside-the-cages (`m7fj6dp5si` "Overflow"). These are the **UNCHECKED**
+pile by construction — no ruleset list reaches them.
+
 ### The gate that DOES work: one unreadable cage indicts the whole puzzle (v3.184) — ⚰️ REMOVED v3.190
 
 > **The measurement is real; the trade was wrong.** 71% recall at 83% precision means **14 honest
