@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.194.0
+// @version      3.195.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.194.0';
+  var SCRIPT_VERSION = '3.195.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -9323,8 +9323,22 @@
   // ── THE FOUR RULESETS ───────────────────────────────────────────────────────
   // `key` is the menu identity; `noun` names the reading in the row label and in
   // every UNCHECKED reason, so the two can never drift apart.
+  // ── REPEATS ARE NOT A SEPARATE VALIDATOR (v3.195) ───────────────────────────
+  // v3.194 shipped "Cages (repeats allowed)" as its own row, which was wrong.
+  // Whether digits may repeat in a cage is something every cage puzzle states
+  // outright, so there is no choice for the player to make — it is the SAME
+  // validator with a more relaxed rule. Two rows meant `67rr7DMJDh` "121" asked
+  // the player to pick between two live rows for no reason.
+  //
+  // The sum row now picks its own reading PER CAGE (see computeCageRemovals):
+  // relaxed when the setter marked the cage repeats-allowed, when the rules say
+  // so, or when there are more cells than digits; distinct otherwise. Distinct
+  // is the default because it is the STRONGER reading — the relaxed one is a
+  // sound relaxation and removes strictly less, so it is never chosen for a cage
+  // that does not need it.
+  //
   // (One line because the harness extracts `var`s a line at a time.)
-  var CAGE_RULESETS = [{ key: 'sum', label: 'Cages', noun: 'sum' }, { key: 'sumRep', label: 'Cages (repeats allowed)', noun: 'repeats-allowed sum' }, { key: 'product', label: 'Cages (product)', noun: 'product' }, { key: 'digits', label: 'Cages (digit list)', noun: 'digit list' }];
+  var CAGE_RULESETS = [{ key: 'sum', label: 'Cages (sum)', noun: 'sum' }, { key: 'product', label: 'Cages (product)', noun: 'product' }, { key: 'digits', label: 'Cages (digit list)', noun: 'digit list' }];
   function cageRulesetDef(key) {
     for (var i = 0; i < CAGE_RULESETS.length; i++)
       if (CAGE_RULESETS[i].key === key) return CAGE_RULESETS[i];
@@ -9344,8 +9358,10 @@
       total += digits[i];
       prod *= digits[i];
     }
-    if (ruleKey === 'sum')     return !dup && total === cage.sum;
-    if (ruleKey === 'sumRep')  return total === cage.sum;
+    // The sum reading covers both sub-readings: a repeating fill is explained
+    // only if repeats are permitted for that cage, which is the caller's fact to
+    // know (`relaxed`), not something the digits can tell us.
+    if (ruleKey === 'sum')     return total === cage.sum && (!dup || !!cage.relaxed);
     if (ruleKey === 'product') return !dup && prod === cage.sum;
     if (ruleKey === 'digits') {
       var want = cage.text || '';
@@ -9442,7 +9458,7 @@
     var cages = getKillerCages();
     var blob = getPuzzleRulesBlob();
     var elected = {}, byRules = 0, replaceSum = false;
-    ['sumRep', 'product', 'digits'].forEach(function (k) {
+    ['product', 'digits'].forEach(function (k) {
       if (!cageCueFires(k, blob)) return;
       // The solution CONFIRMS a cue-elected ruleset (§5/§6 point 3). If it
       // refutes one, we have a rules cue and an answer that disagree — so we
@@ -9459,20 +9475,22 @@
       if (!elected.product) { elected.product = true; byRules++; }
       replaceSum = false;
     }
-    // Pure arithmetic, per cage, leaking nothing: more cells than digits ⇒ some
-    // digit MUST repeat ⇒ no distinct-digit reading can apply. Also the setter's
-    // own `unique === false` mark, which says the same thing outright. Adds a
-    // row; never removes or greys one (see the banner above).
-    var N = detectGridSize() || 9;
-    var forced = cages.some(function (c) { return c.keys.length > N || c.repeatsOk; });
-    if (forced && !elected.sumRep) elected.sumRep = true;
-
+    // NOTE what is NOT here any more (v3.195): the more-cells-than-digits
+    // pigeonhole and the setter's `unique === false` mark used to elect a second
+    // row. They are still used — but as a per-cage RELAXATION inside the sum row
+    // (computeCageRemovals), not as a row of their own. Whether repeats are
+    // allowed is never a choice we hand the player.
     var keys = [];
     if (!replaceSum) keys.push('sum');
-    ['sumRep', 'product', 'digits'].forEach(function (k) { if (elected[k]) keys.push(k); });
+    ['product', 'digits'].forEach(function (k) { if (elected[k]) keys.push(k); });
     if (!keys.length) keys = ['sum'];
     return { keys: keys, grey: byRules > 0 && keys.length > 1 };
   }
+  // May digits repeat inside a cage on THIS puzzle? A rules-level fact, so it is
+  // read once per run rather than per cage. Per-cage evidence (the setter's own
+  // `unique === false` mark, and the more-cells-than-digits pigeonhole) is
+  // applied separately in computeCageRemovals.
+  function cageRulesRelaxRepeats() { return cageCueFires('sumRep', getPuzzleRulesBlob()); }
 
   // Why a cage went UNCHECKED, in the player's own arithmetic (§3 + §8 q2). Three
   // reasons can apply at once, and one `uncheckedWhy` has to carry all of them:
@@ -9501,6 +9519,7 @@
     var o = opts || {}, why = CAGE_NOTSUM_WHY[o.rule] || CAGE_NOTSUM_WHY.sum;
     var parts = [];
     if (notSum)  parts.push([notSum,  why[0], why[1]]);
+    if (o.notReach) parts.push([o.notReach, CAGE_NOTSUM_WHY.sumRep[0], CAGE_NOTSUM_WHY.sumRep[1]]);
     if (repeats) parts.push([repeats, 'more cells than this puzzle has digits, so repeats are forced',
                                       'more cells than this puzzle has digits, so repeats are forced']);
     if (o.declared) parts.push([o.declared, 'a setter mark saying digits may repeat in it',
@@ -9591,29 +9610,45 @@
     // product row cannot read is UNCHECKED *on the product row* — the sum row is
     // untouched and reaches its own verdict on the same cage. That per-row
     // independence is what lets a two-reading puzzle offer both.
-    var active = [], notSum = 0, repeatsForced = 0, declared = 0;
+    // ── THE SUM ROW PICKS ITS OWN READING, PER CAGE (v3.195) ─────────────────
+    // Distinct digits is the DEFAULT because it is the stronger reading. It is
+    // relaxed to repeats-allowed for a cage only on evidence, and all three
+    // kinds of evidence are things the player can see for themselves:
+    //   • the rules say digits may repeat in cages (`cageRulesRelaxRepeats`)
+    //   • the setter marked this cage `unique === false`
+    //   • more cells than the puzzle has digits, so repeats are forced —
+    //     pigeonhole, `67rr7DMJDh` "121" (36 cells, total 121)
+    // The relaxed reading is a sound relaxation of the distinct one: it removes
+    // strictly less, never more, so applying it where it isn't needed would only
+    // cost eliminations — which is why it is never the default.
+    var rulesRelax = rule === 'sum' && cageRulesRelaxRepeats();
+    // notSum = a DISTINCT reading found no combination; notReach = a RELAXED one
+    // found the total out of range. Counted apart because they are different
+    // claims, and reporting the distinct wording over a relaxed cage would
+    // overstate what we actually tested.
+    var active = [], notSum = 0, notReach = 0, repeatsForced = 0, declared = 0;
     cages.forEach(function (cage) {
       var k = cage.keys.length;
-      // The setter said digits may repeat here. Only the repeats-allowed reading
-      // can honour that; every distinct-digit ruleset must decline rather than
-      // check under a rule the puzzle explicitly disclaimed (P4).
-      if (cage.repeatsOk && rule !== 'sumRep') { declared++; return; }
-      if (rule === 'sumRep') {
+      var relaxed = rule === 'sum'
+        && (rulesRelax || cage.repeatsOk || k > digitList.length);
+      if (relaxed) {
         // No enumeration and no pigeonhole — repeats are the point. The only
         // unreadable case is a total the cells cannot reach AT ALL, which is the
         // loosest mark-independent bound this rule has: k cells each holding at
         // most the largest digit and at least the smallest. Checking it here is
-        // also what keeps the DP's array size bounded by something real — a
-        // digit-list corner like "4456" read as a total would otherwise size the
-        // table at 4,456 per cell.
+        // also what keeps the DP's array size bounded by something real.
         var lo = digitList[0] * k, hi = digitList[digitList.length - 1] * k;
         if (!isFinite(cage.sum) || cage.sum !== Math.round(cage.sum)
-            || cage.sum < lo || cage.sum > hi) { notSum++; return; }
+            || cage.sum < lo || cage.sum > hi) { notReach++; return; }
         active.push({ keys: cage.keys, rule: 'sumRep', target: cage.sum });
         return;
       }
-      // Every other ruleset places DISTINCT digits, so more cells than digits is
-      // the pigeonhole: no distinct reading can apply, and the player can see it.
+      // The setter said digits may repeat here, and this row reads distinct
+      // digits — so it declines rather than check under a rule the puzzle
+      // explicitly disclaimed (P4). Only reachable on the product/digit-list
+      // rows now; the sum row relaxed instead.
+      if (cage.repeatsOk) { declared++; return; }
+      // A distinct reading with more cells than digits is the pigeonhole.
       if (k > digitList.length) { repeatsForced++; return; }
       var combos;
       if (rule === 'product')     combos = cageProductCombinations(digitList, k, cage.sum);
@@ -9625,9 +9660,10 @@
       if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
       else notSum++;
     });
-    var unchecked = sumless + repeatsForced + notSum + declared;
+    var unchecked = sumless + repeatsForced + notSum + notReach + declared;
     var uncheckedWhy = cageUncheckedWhy(notSum, repeatsForced, sumless,
-                                        { rule: rule, declared: declared });
+                                        { rule: rule, declared: declared,
+                                          notReach: notReach });
 
     // ── THE v3.184 WHOLE-PUZZLE GATE IS GONE (v3.190) ────────────────────────
     // It disabled cage validation across the ENTIRE puzzle as soon as one cage came
@@ -10664,7 +10700,6 @@
     'cage':            /\bcages?\b|\bkiller\b/,
     // The per-ruleset cage rows (v3.194) are the same clue type, so they share
     // the same "does the rules text name it" test.
-    'cage sumRep':     /\bcages?\b|\bkiller\b/,
     'cage product':    /\bcages?\b|\bkiller\b/,
     'cage digits':     /\bcages?\b|\bkiller\b/,
     'little killer':   /little\s+killer/,
@@ -15717,7 +15752,6 @@
       // click looks at all of them; which ones it could READ comes back in the
       // run's UNCHECKED count, after the player asked.
       case 'cage':
-      case 'cage sumRep':
       case 'cage product':
       case 'cage digits':
         getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;

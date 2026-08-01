@@ -430,14 +430,33 @@ sole puzzle-wide reading, so they could only ever run via selection).
 
 | ruleset | row label | how a cage is read | sole reading on |
 |---|---|---|---|
-| `sum` | **Cages** | `cageCombinations` — distinct digits, the historic behaviour, unchanged | 494 of 682 |
-| `sumRep` | **Cages (repeats allowed)** | `cageRepeatSumReach` prefix/suffix subset-sum DP | 11 |
+| `sum` | **Cages (sum)** | `cageCombinations` (distinct) **or** `cageRepeatSumReach` (relaxed), chosen per cage | 505 of 682 |
 | `product` | **Cages (product)** | `cageProductCombinations` — distinct digits, multiplicative | 1 |
 | `digits` | **Cages (digit list)** | `cageDigitListCombo` — the corner IS the multiset, one digit per cell | 4 |
 
 Every row shares `computeCageRemovals(unitFilter, ruleKey)` and the existing support/matching
 machinery; only the combination source differs. Rows reach **independent** verdicts on the same
 cages, which is what lets a two-reading puzzle offer both.
+
+#### ⚠️ REPEATS ARE A RELAXATION, NOT A RULESET (corrected v3.195)
+
+v3.194 shipped **Cages (repeats allowed)** as a fourth row. That was wrong, and the symptom was
+`67rr7DMJDh` "121" offering the player **two live rows** and asking them to choose. There is nothing
+to choose: every cage puzzle that permits repeats says so outright, and the two readings are the same
+validator with one rule loosened.
+
+The sum row now picks its reading **per cage**. Distinct is the default *because it is the stronger
+reading*; it relaxes only on evidence the player can see for themselves:
+
+1. the rules say digits may repeat in cages (`cageRulesRelaxRepeats`, the `CAGE_REPEAT_RE` cue),
+2. the setter marked that cage `unique === false`, or
+3. the cage has more cells than the puzzle has digits — pigeonhole, which is the "121" case.
+
+The relaxed reading removes strictly less than the distinct one (it is a sound relaxation), so
+applying it where it isn't warranted would only cost eliminations — which is exactly why it is never
+the default. The two sub-readings also fail for different reasons and report separately
+(`notSum` vs `notReach`): claiming *"not a sum of different digits"* over a cage that was tested with
+repeats allowed would overstate what was checked.
 
 **Repeats-allowed needs no enumeration, and that is the whole trick.** A 36-cell cage over 9 digits
 has astronomically many multisets summing to 121, so the obvious port of `cageCombinations` does not
@@ -453,26 +472,27 @@ over-remove.
 Straight out of the measurement: arithmetic over all cages **contains** the true ruleset 99.0% of
 the time but **elects** a non-sum one correctly only 8 times in 10.
 
-- **A rules cue elects** (`cageCueFires`), and may REPLACE the sum row — a puzzle that says "digits
-  may repeat" has told us the distinct reading is wrong, so leaving that row live would invite an
-  over-removal the rules already ruled out.
+- **A rules cue elects** (`cageCueFires`), and may REPLACE the sum row — a puzzle whose rules say its
+  cages multiply is not also a sum puzzle, and leaving that row live would invite an over-removal the
+  rules already ruled out. (The repeats cue is the exception: it relaxes the sum row rather than
+  electing anything, per the correction above.)
 - **The solution confirms, and may only veto.** A cue the answer refutes keeps the sum row alongside
   instead of replacing it. It may never elect on its own: a `Cages (product)` row on a puzzle whose
   rules never said "product" would announce the twist, and the row's presence is information the
   player never asked for (§2, menu time).
-- **Arithmetic may only ADD.** More cells than digits, or the setter's own `unique === false` mark,
-  adds the repeats-allowed row. It never removes or greys one.
+- **Arithmetic never elects a row at all.** More cells than digits, or the setter's `unique === false`
+  mark, relaxes a cage *inside* the sum row. It cannot add, remove or grey a row.
 
-#### Greying is for a choice the PUZZLE poses
+#### Greying is for a choice the PUZZLE poses — and effectively only one puzzle poses it
 
 `5kx4d90kcm` "Sigma or Pi" states that each cage is a sum cage or a product cage and leaves the
 solver to work out which. Both rows list, **both grey**, and the player picks per cage with "Validate
 selection only" — a real run that may fail, which is exactly how they find out (§4's worked example).
 
-An **arithmetic** election never greys, because the two rows are not rivals: `67rr7DMJDh` "121" gets
-a live sum row (which reports its one cage UNCHECKED) *and* a live repeats-allowed row (which reads
-it). Greying there would be the v3.184 mistake again — a Road A cost paid to tidy something that was
-never a conflict.
+**Every other cage puzzle in the catalogue gets exactly one row.** That is the design target, not a
+happy accident: a second row is only ever created by a rules cue, and greying only by two rules cues
+disagreeing. **If a puzzle ever shows two UNGREYED cage rows, that is a bug** — it is what v3.194 did
+on `67rr7DMJDh` "121" by making repeats a row of their own.
 
 #### Two smaller fixes that rode along
 
@@ -482,6 +502,45 @@ never a conflict.
   digits may repeat in it"), and their presence elects the repeats-allowed row.
 - **The raw corner STRING is kept** alongside the number. `Number('4456')` is a perfectly finite
   "total", so reading only the number is exactly the misread the digit-list ruleset exists to fix.
+
+#### What the three rulesets leave behind — measured, `tools/cage_tail.py` (v3.195)
+
+The "should we build a fifth?" question, answered with counts. Over the 682 solution-bearing cage
+puzzles (6,765 cages carrying a corner):
+
+| | cages | share |
+|---|---|---|
+| read by a shipped ruleset | 5,479 | **81.0%** |
+| corner is not a number or digit string (`<=10`, `x`, `Alice`, `A`) | 352 | 5.2% |
+| everything else | 934 | 13.8% |
+
+**Per-cage hit counts are worthless here and the tool reports them only as a trap.** 87 cages "work
+modulo 9", 57 match `maximum`, 47 match `difference` — nearly all coincidence. The only number that
+means anything is the puzzle-wide one, the same lesson `--puzzlewide` taught for the first four:
+
+**Across all 682 puzzles, a further ruleset would rescue 19 — and no single one rescues more than 5.**
+
+| candidate ruleset | puzzles it explains WHOLE | real? |
+|---|---|---|
+| `sum_mod_9` | 8 | **~2** — only the two "Modular Mayhem" puzzles genuinely work modulo 9; the rest (`26e1w4r81e` 666, `hr2psfhzcz` 2025, `hxxmopig9c`) are coincidence |
+| `partial_list` ("at least one of these digits") | 5 | yes — `36fnN33h7L`, `k0341howz7`, `kksz1lx30m`, `rT277BN3dF`, `clover/…max-cage` |
+| `sum_off_by_one` (Knapp Daneben) | 3 | yes — `sntfo9m133`, `uqvv06s42j`, `1pdzuv445k` |
+| `subset_of_corner` ("exactly two of these three") | 2 | yes — `dj4ini56n0`, `lgih5qwoi1` "Liar Zone" |
+| `sum_rounded_5` | 1 | yes — `ay6r6mmu5w` "Close Enough" |
+| `maximum` | 1 | yes — `clover/20250731-max-cage-sudoku` |
+| `difference`, `quotient`, `average`, `minimum`, `count_odd/even` | **0** | never a whole-puzzle reading — confirms declining difference/quotient in v3.194 |
+
+Scaled to the full 1,253 cage puzzles that is roughly **35 puzzles for every remaining ruleset
+combined**, against ~30 lines of engine each plus a cue that has to be measured. Not worth it, and
+`partial_list` — the largest at 5 — is the one whose eliminations are weakest anyway.
+
+**The genuine one-offs: 370 cages across 85 puzzles**, and they are one-offs in the strict sense —
+no mechanical reading touches them. Bucketed by rules signature: value≠digit doublers/multipliers
+(25 cages, 10 puzzles), multi-digit numbers read out of the cage (37/2), inequality corners (15/5),
+cage sum plus everything outside the cages (12/1), declared-liar puzzles (8/4), divisor/fraction
+cages (5/1), solver-deduced totals (6/1) — and **262 cages matching no signature at all**, each its
+own invention. This is the open-ended tail `VALIDATOR_POLICY.md` §4 says we cannot enumerate, and
+UNCHECKED is its correct and permanent answer.
 
 #### The eyeball previews every drawn cage on every cage row
 

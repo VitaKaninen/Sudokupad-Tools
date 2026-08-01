@@ -496,8 +496,8 @@ way so it stays low-maintenance.
   press Ctrl+Z" (the old per-reason "Nothing was damaged" / partial-count text is gone).
 - **Validate Constraints — the validator subsystem (v3.53+; full documentation in
   [VALIDATORS.md](VALIDATORS.md)):** floating button + popup menu of per-constraint validators
-  (Kropki, cages — **one row per cage ruleset the puzzle elects since v3.194: sum, repeats allowed,
-  product, digit list** — little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
+  (Kropki, cages — **one row per cage ruleset the puzzle elects since v3.194: sum, product, digit
+  list; effectively always exactly one row** — little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
   between lines, renban, nabner, ten lines, region-sum, parity, same difference, zipper, entropic, modular, difference dots) that remove — never add — centre candidates with no
   complete support. Entry points: `buildValidateButton` / `openValidateMenu` /
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
@@ -515,7 +515,9 @@ way so it stays low-maintenance.
   (`CAGE_PRODUCT_RE` / `CAGE_REPEAT_RE` / `CAGE_DIGITLIST_RE`, sentence-scoped against
   `CAGE_WORD_RE` + `CAGE_RIVAL_NOUN_RE`) / `cageRuleHolds` + `cageRulesetExplainsSolution` (the
   solution CONFIRMS a cue, never elects) / `cageProductCombinations` / `cageDigitListCombo` /
-  `cageRepeatSumReach` + `cageRepeatSumSupports` (subset-sum DP — exact, no enumeration, no cap) /
+  `cageRepeatSumReach` + `cageRepeatSumSupports` (subset-sum DP — exact, no enumeration, no cap;
+  the sum row's RELAXED sub-reading, chosen per cage by `cageRulesRelaxRepeats` / `unique === false`
+  / the more-cells-than-digits pigeonhole — repeats are never a row of their own, v3.195) /
   `CAGE_RULESETS` + `cageRulesetDef` / `computeCageRemovals(unitFilter, ruleKey)`** — measured by
   `tools/cage_rulesets.py --puzzlewide` and `tools/cage_cues.py` /
   **the solution PROBE + trust policy (v3.186): `buildSolutionProbeState` / `probeInfo` /

@@ -1701,13 +1701,18 @@ check('cage digit list: a non-numeric corner reads as nothing',
 
 // cageRuleHolds mirrors tools/cage_rulesets.py's `holds` — the measurement and
 // the shipping code must agree or the quoted figures describe another program.
-check('cage holds: a distinct sum holds for sum and for repeats-allowed',
-  ['sum', 'sumRep', 'product', 'digits'].map(r =>
+check('cage holds: a distinct sum holds for the sum reading alone',
+  ['sum', 'product', 'digits'].map(r =>
     F.cageRuleHolds(r, [4, 5, 6], { sum: 15, text: '15' })),
-  [true, true, false, false]);
-check('cage holds: a repeating total holds ONLY for repeats-allowed',
-  ['sum', 'sumRep'].map(r => F.cageRuleHolds(r, [5, 5, 5], { sum: 15, text: '15' })),
+  [true, false, false]);
+// v3.195: repeats are not a separate ruleset — they are a per-cage RELAXATION
+// the sum reading applies on evidence, carried here as `cage.relaxed`.
+check('cage holds: a repeating fill needs the cage to be marked relaxed',
+  [F.cageRuleHolds('sum', [5, 5, 5], { sum: 15, text: '15' }),
+   F.cageRuleHolds('sum', [5, 5, 5], { sum: 15, text: '15', relaxed: true })],
   [false, true]);
+check('cage holds: relaxing does not excuse a wrong total',
+  F.cageRuleHolds('sum', [5, 5, 5], { sum: 16, text: '16', relaxed: true }), false);
 check('cage holds: a product cage (ta7eqdt02w)',
   F.cageRuleHolds('product', [2, 3, 4], { sum: 24, text: '24' }), true);
 check('cage holds: a digit list matches as a multiset, in any cell order',
@@ -1716,9 +1721,12 @@ check('cage holds: a digit list with the wrong digits does not hold',
   F.cageRuleHolds('digits', [6, 4, 5, 5], { sum: 4456, text: '4456' }), false);
 // 67rr7DMJDh "121": 36 cells summing to exactly 121. Completely honest, and the
 // distinct reading cannot even represent it.
-check('cage holds: the 121 cage is a repeats-allowed sum and nothing else',
-  F.cageRuleHolds('sumRep', [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4], { sum: 121, text: '121' }),
-  true);
+// 67rr7DMJDh "121": 36 cells summing to exactly 121, so repeats are FORCED by
+// pigeonhole and computeCageRemovals relaxes that cage for itself. One row, no
+// choice handed to the player.
+check('cage holds: the 121 cage reads as a sum once relaxed',
+  F.cageRuleHolds('sum', [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4],
+    { sum: 121, text: '121', relaxed: true }), true);
 
 // ── the election cues (v3.194) — measured in tools/cage_cues.py ──────────────
 // Sentence-scoped: the cue must find a cage word in ITS OWN sentence and no
@@ -1768,12 +1776,28 @@ checkFalse('cage cue: ordinary killer wording elects nothing',
     'normal sudoku rules apply. the digits within a cage must sum to the small clue '
     + 'in the top-left corner of that cage. digits may not repeat within a cage.')));
 // A row per elected ruleset, and the label names the reading (policy §6 point 4).
-check('cage rulesets: four readings, each with its own row label',
-  F.CAGE_RULESETS.map(r => r.key), ['sum', 'sumRep', 'product', 'digits']);
-check('cage rulesets: the sum row keeps the plain label',
-  F.cageRulesetDef('sum').label, 'Cages');
+// ⚠️ THREE, not four: repeats-allowed is NOT a row. Whether digits may repeat is
+// stated outright by every cage puzzle that allows it, so there is no choice for
+// the player to make — it is the same validator with a relaxed rule. v3.194
+// shipped it as its own row and `67rr7DMJDh` "121" then offered two live rows
+// for no reason. If a fourth key appears here, that regression is back.
+check('cage rulesets: three rows — repeats is a relaxation, not a ruleset',
+  F.CAGE_RULESETS.map(r => r.key), ['sum', 'product', 'digits']);
+check('cage rulesets: every row label names its reading',
+  F.CAGE_RULESETS.map(r => r.label),
+  ['Cages (sum)', 'Cages (product)', 'Cages (digit list)']);
 check('cage rulesets: an unknown key falls back to the sum reading',
   F.cageRulesetDef('nonsense').key, 'sum');
+// The sum row's two sub-readings fail for different reasons and must say so —
+// claiming "not a sum of different digits" over a cage we tested with repeats
+// allowed would overstate what was actually checked.
+check('cage why: a relaxed cage that cannot reach its total says only that',
+  F.cageUncheckedWhy(0, 0, 0, { rule: 'sum', notReach: 1 }),
+  'it has a corner number its cells cannot total');
+check('cage why: the two sum sub-readings report side by side',
+  F.cageUncheckedWhy(1, 0, 0, { rule: 'sum', notReach: 2 }),
+  '1 has a corner number that is not a sum of different digits and '
+  + '2 have corner numbers their cells cannot total');
 
 // ── node-cap bails are abstentions, and say so (v3.192) ──────────────────────
 // The banner's rule 1b: "cap hit → bail is safe but SILENT: nothing removed,

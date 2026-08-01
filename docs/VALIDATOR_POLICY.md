@@ -318,13 +318,24 @@ candidate set, or any player-visible string.** Breaking that turns a validator i
 
 ## 6. Cages: stop muting, start reading
 
-> **✅ BUILT in v3.194.** Four rulesets ship — sum, repeats allowed, product, digit list — one menu
-> row each, elected per puzzle by `cageRulesetElection`. `difference` and `quotient` were measured
-> and deliberately not built (45 cages, never a sole puzzle-wide reading). The standing rule the
-> measurement produced: **a rules cue elects a ruleset and may replace the sum row; the solution may
-> only confirm or veto a cue, never elect; arithmetic may only ADD a row, never remove or grey one.**
-> See `VALIDATORS.md` → "Multi-ruleset cages (v3.194)". Point 5 below (any cage no ruleset explains
-> is UNCHECKED) was already live from v3.190 and is unchanged.
+> **✅ BUILT in v3.194, corrected in v3.195.** Three rulesets ship — **sum, product, digit list** —
+> elected per puzzle by `cageRulesetElection`. The standing rule the measurement produced: **a rules
+> cue elects a ruleset and may replace the sum row; the solution may only confirm or veto a cue,
+> never elect; arithmetic may not elect at all.**
+>
+> **Point 4 below overstated the case, and v3.194 implemented the overstatement.** "A puzzle that
+> genuinely offers two readings shows both rows" is right; *repeats allowed* is not such a puzzle.
+> Whether digits may repeat is stated outright by every cage puzzle that permits it, so it is the
+> **same validator with a relaxed rule**, not a second reading — and shipping it as its own row made
+> `67rr7DMJDh` "121" offer two live rows and a choice that does not exist. The sum row now relaxes
+> **per cage** on evidence (rules cue, `unique === false`, or the pigeonhole). Practically every cage
+> puzzle gets exactly ONE row; two rows means `5kx4d90kcm` "Sigma or Pi", and they are both grey.
+>
+> `difference` and `quotient` were measured and deliberately not built (45 cages, never a sole
+> puzzle-wide reading), and `tools/cage_tail.py` since sized everything else: **a further ruleset
+> would rescue 19 of 682 puzzles, none more than 5.** See `VALIDATORS.md` → "Multi-ruleset cages".
+> Point 5 below (any cage no ruleset explains is UNCHECKED) was already live from v3.190 and is
+> unchanged.
 
 Cages are where this came to a head, and they are the worked example for every clue type.
 
