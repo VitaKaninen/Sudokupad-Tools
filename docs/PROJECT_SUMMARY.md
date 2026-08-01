@@ -1089,8 +1089,41 @@ shrink-to-fit width — see `applyControlsWidthCap`) and makes UI work look corr
   two things a cage change turns on: how often the reading is **separable** from arithmetic alone
   (badly — 38% of unreadable cages narrow to one candidate reading, right 58% of the time) and how
   many cages the validator **runs on but the solution refutes** (9.6%, over 17% of puzzles). Built
-  to decide v3.185's whole-puzzle cage gate; re-run it before touching `computeCageRemovals`.
+  to decide v3.185's whole-puzzle cage gate (**removed in v3.190** — the measurement stands, the
+  trade did not); re-run it before touching `computeCageRemovals`.
   Full numbers + the rejected classifier in [VALIDATORS.md](VALIDATORS.md).
+
+### Validator-policy test set (v3.188–v3.192)
+
+The puzzles the validator-policy rollout was built and checked against; each id was confirmed
+against the catalog on 2026-08-01. Policy in [VALIDATOR_POLICY.md](VALIDATOR_POLICY.md).
+
+**Run the controls first and last** — they are the 82% case, so if either changes behaviour,
+something in the shared machinery broke:
+[`0qbt11p1jt`](https://sudokupad.app/0qbt11p1jt) (20 plain cages, solution published, probes clean)
+and [`179dze6yfh`](https://sudokupad.app/179dze6yfh) (16 plain cages, same).
+
+| puzzle | what it is | what should happen |
+|---|---|---|
+| [`67rr7DMJDh`](https://sudokupad.app/67rr7DMJDh) "121" | ONE cage: 36 cells, total 121, honest repeats-allowed sum | UNCHECKED — "more cells than this puzzle has digits, so repeats are forced" |
+| [`26e1w4r81e`](https://sudokupad.app/26e1w4r81e) "The Devil is in the Details" | 4 product cages cornered 666 | UNCHECKED and named, never counted clean |
+| [`36fnN33h7L`](https://sudokupad.app/36fnN33h7L) "Leap Day" | 29 over a 14-cell cage | UNCHECKED and named |
+| [`yiaonocy5d`](https://sudokupad.app/yiaonocy5d) "...What?" | 6×6 troll; 5 of 7 drawings are decoys | every row live and fully functional; the fake thermo/quad/dot **fail** when run |
+| [`bH8FJtL3F3`](https://sudokupad.app/bH8FJtL3F3) "Killer Sudoku" | 1 decoy cage among 29 honest ones | 29 checked for real, the decoy fails |
+| [`ay6r6mmu5w`](https://sudokupad.app/ay6r6mmu5w) "Close Enough" | 20 cages, sums rounded to nearest 5 | row **live** (no cue recognises rounding) — runs and fails |
+| [`rd2kn6vy6d`](https://sudokupad.app/rd2kn6vy6d) "Regional Heatwave" | region-sum segments *strictly increase* along the line | **live**, runs, fails — the tool not fitting the job |
+| [`5kx4d90kcm`](https://sudokupad.app/5kx4d90kcm) "Sigma or Pi" | *"solvers must deduce whether each cage is a sum cage or a product cage"* | **grey**, not dropped. Selection rescues it; a sum-run failing teaches the player it's a product cage |
+| [`NbqQ2HhP4P`](https://sudokupad.app/NbqQ2HhP4P) "Miracle-Once Again" | counting-circle rules, no circles drawn | grey — we can't locate the clue |
+| [`nmhixakego`](https://sudokupad.app/nmhixakego) "Campfire Whispers" | the "circles" are tents the player draws | grey |
+| [`k18i652bjj`](https://sudokupad.app/k18i652bjj) "Within and without" | between lines not locatable; lockout lines on the same puzzle ARE found | grey / live respectively |
+| [`1cwnilmrp0`](https://sudokupad.app/1cwnilmrp0) "Two Out of Three Ain't Bad" | line type is the solver's choice | grey — the original ambiguity case (v3.90) |
+| [`xgmmht4odf`](https://sudokupad.app/xgmmht4odf) "The Buddy System" | circles shared between between-lines and palindromes | **live**: check what it can, name the rest |
+| [`26w1k7rwci`](https://sudokupad.app/26w1k7rwci) "The Fourth Killer" | fog + killer cages | all three fog rules — see below |
+| [`FMGPBBt24p`](https://sudokupad.app/FMGPBBt24p) "Lines in the Fog" | fog + region-sum lines | same |
+
+**On a fog puzzle check all three rules:** 👁 disabled with a tooltip, **every** row greyed (the
+thermo row included — it slipped past the grey check until v3.191), and a selection run that works
+and reports **no denominator** (select 2 cages → "2 cages", never "2 of 20").
 
 ## Puzzle catalog (pull examples by rule type / predict broad-change side effects)
 The catalog is **`C:\Users\VitaKaninen\Desktop\Projects\GitHub\Sudokupad Catalog\classify\`** (part

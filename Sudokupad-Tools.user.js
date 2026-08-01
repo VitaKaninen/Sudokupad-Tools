@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.191.0
+// @version      3.192.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.191.0';
+  var SCRIPT_VERSION = '3.192.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -9010,8 +9010,16 @@
     // A bail here proves nothing either way, so it must NOT read as "impossible".
     if (!struct.live.length && !struct.bailed) return { noCountingCircles: true, invalid: 1 };
 
+    // ⚠️ A BAIL HERE IS NOT AN ABSTENTION (v3.192). Unlike the little-killer and
+    // arrow node caps — where a bail means the clue was not read at all, and so is
+    // reported UNCHECKED (§3) — blowing this budget DEGRADES to the tier-1
+    // sum-equation answer, which is sound and still removes. The circles were
+    // checked, just less sharply, so calling them "not checked" would be its own
+    // false report. Ten-line draws the same line: its exact-search bail falls back
+    // to a real relaxation (still checked), and only a bail in the RELAXATION
+    // counts as unchecked.
     var values = st.values, centre = st.centre;
-    var removals = [], seen = {}, bailed = struct.bailed;
+    var removals = [], seen = {};
     var changed = true, guard = 0;
     // Each round must remove at least one candidate to continue, so the loop is
     // bounded by the candidate count anyway; the guard is belt-and-braces and the
@@ -9024,7 +9032,6 @@
       });
       var res = countingCircleSupport(countingCircleModel(keys, doms, mustDiffer),
                                       doms, subsets, ctl);
-      if (res.bailed) bailed = true;
       // No seatable subset under the CURRENT marks is a mark contradiction, not a
       // structural one — fall through and let the removals empty the cells, which is
       // the uniform "no valid combination" report.
@@ -9044,7 +9051,7 @@
 
     var emptied = 0;
     Object.keys(centre).forEach(function (k) { if (centre[k] && centre[k].size === 0) emptied++; });
-    return { removals: removals, circleCount: n, emptiedCells: emptied, bailed: bailed };
+    return { removals: removals, circleCount: n, emptiedCells: emptied };
   }
 
   // ── Cage validator ────────────────────────────────────────────────────────
@@ -9235,7 +9242,7 @@
     // ── A CAGE WE CANNOT READ IS UNCHECKED, NOT CLEAN (v3.190) ───────────────
     // A cage with ZERO distinct-digit combinations is dropped from the removal
     // computation — it must never be allowed to wipe out every candidate. What
-    // happens NEXT is what this rollout is about.
+    // happens NEXT is the whole point.
     //
     // It is not `invalid` (v3.157's "⛔ no arrangement of digits can satisfy it").
     // v3.183 was right that the message is alarming and, for a cage, factually
@@ -9668,11 +9675,19 @@
       return { supported: supported, bailed: bailed, empty: false };
     }
 
+    // Diagonals the node cap stopped us reading (v3.192). "Cap hit → bail" is safe
+    // but SILENT — nothing removed, nothing said — which is the banner's own 1b
+    // warning and, under §3, a clue found and not checked. `res.empty` is NOT
+    // counted here: a diagonal holding a cell with no candidates left is the
+    // missing-candidates case, which the toast already warns about on its own
+    // terms (it blames the marks, not our reading).
+    var cappedKeys = {};
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
       changed = false;
       diags.forEach(function (diag) {
         var res = computeSupported(diag);
+        if (res.bailed) cappedKeys[diag.keys.join('|')] = 1;      // deduped across passes
         if (res.bailed || res.empty || !res.supported) return;    // give up safely on this diagonal
         diag.keys.forEach(function (C, i) {
           if (st.values[C] != null || !work[C]) return;           // only cells with player marks
@@ -9691,7 +9706,9 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, lkCount: diags.length, emptiedCells: emptied, invalid: invalid };
+    var capped = Object.keys(cappedKeys).length;
+    return { removals: removals, lkCount: diags.length - capped, emptiedCells: emptied, invalid: invalid,
+             unchecked: capped, uncheckedWhy: capped ? searchGaveUpWhy(capped) : null };
   }
 
   // ── German Whisper validator ──────────────────────────────────────────────
@@ -12392,17 +12409,25 @@
       if (bailed) {
         ld.exactHopeless = true;                                   // don't re-burn the cap next round
         if (setsByIdx.some(function (s) { return s.length === 0; })) return null;
-        return tenLineTilingSupport(n, setsByIdx, diff, ld.loop, hasZero);
+        // The relaxation is a sound over-approximation that still removes, so an
+        // exact bail alone is NOT an abstention — the line is checked, weakly.
+        // Only when the relaxation blows its OWN cap have we read nothing (v3.192).
+        var relaxed = tenLineTilingSupport(n, setsByIdx, diff, ld.loop, hasZero);
+        if (!relaxed) ld.capped = true;
+        return relaxed;
       }
       return support;
     }
 
+    var cappedKeys = {};
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
       changed = false;
       lineData.forEach(function (ld) {
         var support = lineSupport(ld);
-        if (!support) return;                                      // node cap → no removals from this line
+        // A null with no `capped` flag is the missing-candidates case (some cell
+        // has nothing left), which the toast already reports on its own terms.
+        if (!support) { if (ld.capped) cappedKeys[ld.keys.join('|')] = 1; return; }
         ld.keys.forEach(function (C, i) {
           if (st.values[C] != null || !work[C] || !mayRemove(C)) return;
           Array.from(work[C]).forEach(function (d) {               // snapshot: set mutates in loop
@@ -12419,7 +12444,9 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, tenLineCount: lineData.length, emptiedCells: emptied, invalid: invalid };
+    var capped = Object.keys(cappedKeys).length;
+    return { removals: removals, tenLineCount: lineData.length - capped, emptiedCells: emptied, invalid: invalid,
+             unchecked: capped, uncheckedWhy: capped ? searchGaveUpWhy(capped) : null };
   }
 
   // Split a region-sum line's cell chain into maximal same-region runs.
@@ -12539,8 +12566,16 @@
     // is a wrong ANSWER rather than a weak one. No regions → decline; a puzzle
     // whose rules name region-sum lines but whose regions the solver must still
     // deduce is simply not checkable yet.
+    //
+    // Declining is right; reporting it as "no region-sum lines found in this
+    // puzzle" was not (fixed v3.192). The lines ARE there — the player can see
+    // them — so that read as a false all-clear over clues nothing had looked at.
+    // It is an abstention, and it says so.
     var regionId = makeRegionOf();
-    if (!regionId) return { noRegionSum: true };
+    if (!regionId)
+      return { noRegionSum: true, unchecked: lines.length,
+               uncheckedWhy: 'this puzzle\'s regions are not marked out, and a region-sum line is '
+                           + 'split into segments by its region borders' };
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
     var work = {};
     Object.keys(st.centre).forEach(function (k) { work[k] = new Set(st.centre[k]); });
@@ -12573,9 +12608,15 @@
       }
       return { lo: lo, hi: hi, fits: n <= digitList.length };
     }
+    // A line lying wholly inside one region is VACUOUSLY clean, not unchecked: the
+    // rule "every segment sums to the same total" is satisfied by anything when
+    // there is only one segment. We read it under the rule we trust and it passed,
+    // so it belongs in the CHECKED count — it used to vanish from both counts,
+    // which under-reported what the run actually looked at (v3.192).
+    var vacuous = 0;
     lines.forEach(function (keys) {
       var segs = regionSumSegments(keys, regionId);
-      if (segs.length < 2) return;
+      if (segs.length < 2) { vacuous++; return; }
       var lo = -Infinity, hi = Infinity, impossible = false;
       segs.forEach(function (sg) {
         var r = segRange(sg.length);
@@ -12586,17 +12627,23 @@
       if (impossible || lo > hi) { invalid++; return; }
       lineData.push({ keys: keys, segs: segs });
     });
-    if (lineData.length === 0) return { noRegionSum: true, invalid: invalid };
+    if (lineData.length === 0)
+      return vacuous ? { removals: [], regionSumCount: vacuous, invalid: invalid }
+                     : { noRegionSum: true, invalid: invalid };
 
     function enumSegment(segKeys) {
       return regionSumSegmentSupport(segKeys.map(function (k) { return cellSet(k); }), digitList);
     }
 
+    var cappedKeys = {};
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
       changed = false;
       lineData.forEach(function (ld) {
         var segRes = ld.segs.map(enumSegment);
+        // A cap bail means this line was not read at all → UNCHECKED (v3.192).
+        // `r.empty` is the missing-candidates case and is reported on its own terms.
+        if (segRes.some(function (r) { return r.bailed; })) cappedKeys[ld.keys.join('|')] = 1;
         if (segRes.some(function (r) { return r.bailed || r.empty; })) return;   // give up on this line safely
         var overall = null;                                      // ∩ of every segment's achievable sums
         segRes.forEach(function (r) {
@@ -12632,7 +12679,10 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, regionSumCount: lineData.length, emptiedCells: emptied, invalid: invalid };
+    var capped = Object.keys(cappedKeys).length;
+    return { removals: removals, regionSumCount: lineData.length - capped + vacuous,
+             emptiedCells: emptied, invalid: invalid,
+             unchecked: capped, uncheckedWhy: capped ? searchGaveUpWhy(capped) : null };
   }
 
   // ── Parity-line validator ─────────────────────────────────────────────────
@@ -12883,12 +12933,15 @@
     // line over the full digit set? A "no" cannot be the puzzle's fault (its clues
     // are peer-reviewed), so it means we claimed the wrong line type: drop it,
     // count it, report it. A bail answers "possible", never "impossible".
-    var lineData = [], invalid = 0;
+    // A bail inside sameDiffLineSupport is NOT an abstention: it degrades to
+    // arc-consistent domains, a sound over-approximation that still removes. Only
+    // a search that reads NOTHING earns `unchecked` (cf. little killer, arrow).
+    var lineData = [], invalid = 0, vacuous = 0;
     lines.forEach(function (keys) {
       var loop = keys.length > 2 && keys[0] === keys[keys.length - 1];
       var cells = loop ? keys.slice(0, -1) : keys;
       var n = cells.length, i, j;
-      if (n < 2) return;                                            // 1 cell constrains nothing
+      if (n < 2) { vacuous++; return; }                             // 1 cell constrains nothing
       var dm = [];
       for (i = 0; i < n; i++) { dm.push([]); for (j = 0; j < n; j++) dm[i].push(false); }
       for (i = 0; i < n; i++)
@@ -12900,7 +12953,9 @@
       if (!s.bailed && s.diffs.size === 0) { invalid++; return; }
       lineData.push({ cells: cells, dm: dm, loop: loop });
     });
-    if (lineData.length === 0) return { noSameDiff: true, invalid: invalid };
+    if (lineData.length === 0)
+      return vacuous ? { removals: [], sameDiffCount: vacuous, invalid: invalid }
+                     : { noSameDiff: true, invalid: invalid };
 
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
@@ -12922,7 +12977,7 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, sameDiffCount: lineData.length, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, sameDiffCount: lineData.length + vacuous, emptiedCells: emptied, invalid: invalid };
   }
 
   // ── Zipper-line validator ─────────────────────────────────────────────────
@@ -12981,7 +13036,12 @@
       for (var i = 0; i < Math.floor(L / 2); i++) pairs.push([keys[i], keys[L - 1 - i]]);
       var centre = (L % 2 === 1) ? keys[(L - 1) / 2] : null;
       return { keys: keys, pairs: pairs, centre: centre };
-    }).filter(function (ld) { return ld.pairs.length > 0; });     // a 1-cell "line" carries nothing
+    });
+    // A 1-cell "line" has no pair to fold, so the rule is trivially satisfied —
+    // CHECKED and clean, not unchecked. It stays in the reported count (v3.192);
+    // dropping it from both counts under-reported what the run looked at.
+    var vacuous = lineData.filter(function (ld) { return ld.pairs.length === 0; }).length;
+    lineData = lineData.filter(function (ld) { return ld.pairs.length > 0; });
 
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
@@ -13049,7 +13109,7 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, zipperCount: lineData.length, emptiedCells: emptied };
+    return { removals: removals, zipperCount: lineData.length + vacuous, emptiedCells: emptied };
   }
 
   // ── Palindrome-line validator (v3.164) ────────────────────────────────────
@@ -13103,20 +13163,32 @@
     // chain's length, so folding two strokes of one line separately does not
     // merely under-constrain — it asserts a DIFFERENT, wrong set of equalities
     // (`DBFdgmG6mq`, four strokes of one spiral, each "impossible" on its own).
-    var lineData = [], invalid = 0;
+    // Three ways a line leaves the working set, and they are three DIFFERENT
+    // outcomes (v3.192 — all three used to vanish the same silent way):
+    //   loop     a closed loop has no fold axis, so we cannot read it → UNCHECKED
+    //   vacuous  a 1-cell line constrains nothing → checked, trivially clean
+    //   invalid  a pair the grid forces to differ → structurally impossible, loud
+    var lineData = [], invalid = 0, loops = 0, vacuous = 0;
     lines.forEach(function (keys) {
-      if (keys.length > 2 && keys[0] === keys[keys.length - 1]) return;   // closed loop: no fold axis
+      if (keys.length > 2 && keys[0] === keys[keys.length - 1]) { loops++; return; }
       var L = keys.length, pairs = [], impossible = false;
       for (var i = 0; i < Math.floor(L / 2); i++) {
         var a = keys[i], b = keys[L - 1 - i];
         if (mustDiffer(a, b)) impossible = true;
         pairs.push([a, b]);
       }
-      if (pairs.length === 0) return;                               // 1-cell line constrains nothing
+      if (pairs.length === 0) { vacuous++; return; }                // 1-cell line constrains nothing
       if (impossible) { invalid++; return; }
       lineData.push(pairs);
     });
-    if (lineData.length === 0) return { noPalindrome: true, invalid: invalid };
+    var loopWhy = loops
+      ? (loops === 1 ? 'it is' : 'they are') + ' drawn as a closed loop, so there is no middle to fold '
+        + (loops === 1 ? 'it' : 'them') + ' around'
+      : null;
+    if (lineData.length === 0)
+      return (loops || vacuous)
+        ? { removals: [], palindromeCount: vacuous, invalid: invalid, unchecked: loops, uncheckedWhy: loopWhy }
+        : { noPalindrome: true, invalid: invalid };
 
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
@@ -13141,7 +13213,8 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    return { removals: removals, palindromeCount: lineData.length, emptiedCells: emptied, invalid: invalid };
+    return { removals: removals, palindromeCount: lineData.length + vacuous, emptiedCells: emptied,
+             invalid: invalid, unchecked: loops, uncheckedWhy: loopWhy };
   }
 
   // ── Entropic-line validator ───────────────────────────────────────────────
@@ -13233,15 +13306,40 @@
       return v == null || bands.of[v] !== undefined;
     }
     var PERMS = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    // THREE DIFFERENT OUTCOMES, not one silent filter (v3.192). All three lines
+    // used to be dropped identically and invisibly, so a run that read none of
+    // them still came back "checked N lines, nothing to remove".
+    var vacuous = 0, badLoop = 0, unreadable = 0;
     var lineData = lines.map(function (keys) {
       var loop = keys.length > 3 && keys[0] === keys[keys.length - 1];
       return { keys: loop ? keys.slice(0, -1) : keys, loop: loop };
     }).filter(function (ld) {
-      if (ld.keys.length < 3) return false;                       // no window of 3 → no constraint
-      if (ld.loop && ld.keys.length % 3 !== 0) return false;      // can't BE an entropic loop → not one
-      if (!ld.keys.every(digitsReadable)) return false;           // off-set value → can't reason
+      // Under 3 cells there is no window of 3, so the rule says nothing about it.
+      // Read under the rule we trust, trivially satisfied → CHECKED, clean.
+      if (ld.keys.length < 3) { vacuous++; return false; }
+      // A closed loop whose length is not a multiple of 3 cannot carry a repeating
+      // 3-band pattern at all. Pure arithmetic the player can redo (count the
+      // cells), and it says our READING doesn't fit — never that the puzzle is
+      // broken (P2). Reported UNCHECKED rather than through v3.157's loud
+      // `invalid` path: the drawing being a closed loop is our inference from
+      // stroke joining, and we have no measurement of how often that inference is
+      // wrong, so shouting "IMPOSSIBLE" on it would be a claim we cannot back.
+      if (ld.loop && ld.keys.length % 3 !== 0) { badLoop++; return false; }
+      // A cell already holds a value outside this puzzle's digit set, so no band
+      // can be assigned to it.
+      if (!ld.keys.every(digitsReadable)) { unreadable++; return false; }
       return true;
     });
+    var unchecked = badLoop + unreadable;
+    var uncheckedWhy = null;
+    if (unchecked) {
+      var parts = [];
+      if (badLoop) parts.push((badLoop === 1 ? '1 is' : badLoop + ' are')
+        + ' a closed loop whose cell count is not a multiple of 3');
+      if (unreadable) parts.push((unreadable === 1 ? '1 has' : unreadable + ' have')
+        + ' a cell holding a digit outside this puzzle\'s digit set');
+      uncheckedWhy = parts.join(' and ');
+    }
 
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
@@ -13270,8 +13368,9 @@
 
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0 && mayRemove(k)) emptied++; });
-    var out = { removals: removals, emptiedCells: emptied };
-    out[keyNames.count] = lineData.length;
+    var out = { removals: removals, emptiedCells: emptied,
+                unchecked: unchecked, uncheckedWhy: uncheckedWhy };
+    out[keyNames.count] = lineData.length + vacuous;
     return out;
   }
   function computeEntropicRemovals(unitFilter) {
@@ -13699,7 +13798,10 @@
     }
     var covered = {};
     chains.forEach(function (ch) { ch.forEach(function (k) { covered[k] = 1; }); });
-    var bulbless = 0;
+    // Their CELL KEYS, not just a tally (v3.192): an unchecked count has to be
+    // filterable by "Validate selection only" like any other clue, or a selection
+    // run would report a whole-puzzle denominator the player never asked for.
+    var bulbless = [];
     try {
       var cand = cueThermoLines();
       var markerMap = cand.length ? markerCellsByColor() : null;
@@ -13708,11 +13810,17 @@
         var set = (markerMap && markerMap[normLineColor(l.color)]) || {};
         var atStart = set[l.keys[0]] ? 1 : 0;
         var atEnd = set[l.keys[l.keys.length - 1]] ? 1 : 0;
-        if (atStart + atEnd !== 1) { bulbless++; return; }               // no marker / both ends → unorientable
+        if (atStart + atEnd !== 1) { bulbless.push(l.keys.slice()); return; }   // no marker / both ends → unorientable
         chains.push(atStart ? l.keys.slice() : l.keys.slice().reverse());
       });
     } catch (e) { /* cue layer must never break the model/DOM sources */ }
     return { trees: chains.length ? buildThermoTrees(chains) : [], bulbless: bulbless };
+  }
+  // How many bulbless thermo lines this run would have to answer for. Honours the
+  // unit filter, so a selection run counts only what the player selected.
+  function countBulblessThermos(unitFilter) {
+    var b = getThermoDetection().bulbless;
+    return unitFilter ? b.filter(function (keys) { return unitFilter(keys); }).length : b.length;
   }
   function getThermos() { return getThermoDetection().trees; }
 
@@ -13823,11 +13931,19 @@
     if (!st) return { unsupported: true };
     var det = getThermoDetection();
     var thermos = det.trees;
-    // Bulbless thermo lines (cue-pinned, unorientable) are NEVER validated —
-    // surfaced to the player so a skipped line isn't a silent mystery.
-    var note = det.bulbless > 0
-      ? ('Note: ' + det.bulbless + ' thermo line' + (det.bulbless === 1 ? ' has' : 's have') +
-         ' no bulb marker — the bulb position is unknown, so ' + (det.bulbless === 1 ? 'it was' : 'they were') + ' not checked.')
+    // Bulbless thermo lines (cue-pinned, unorientable) are never validated — a
+    // thermometer's whole constraint is its DIRECTION, and without a bulb we do
+    // not know which end is low. That is the textbook abstention: we found the
+    // clue and declined to read it.
+    //
+    // Reported through `unchecked` since v3.192, not the ad-hoc `note` channel it
+    // used to use. The wording was already honest; what it lacked was the count
+    // discipline — a bulbless line sat outside `thermoCount` but its absence made
+    // no difference to the toast's colour, so a run that checked nothing could
+    // still come back green.
+    var bulbless = countBulblessThermos(unitFilter);
+    var bulblessWhy = bulbless
+      ? (bulbless === 1 ? 'it has' : 'they have') + ' no bulb marker, so we cannot tell which end is the low one'
       : null;
     if (unitFilter) thermos = thermos.filter(function (t) { return unitFilter(t.keys); });
     // No solution mute (v3.189). A drawing whose solution digits run downhill is
@@ -13850,7 +13966,8 @@
       });
       thermos = okThermos;
     }
-    if (thermos.length === 0) return { noThermos: true, note: note, invalid: invalid };
+    if (thermos.length === 0)
+      return { noThermos: true, invalid: invalid, unchecked: bulbless, uncheckedWhy: bulblessWhy };
     var regionCageSets = slow ? getThermoRegionCageSets() : [];
 
     var values = st.values, fullSet = st.fullSet;
@@ -13906,7 +14023,8 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied, note: note, invalid: invalid };
+    return { removals: removals, thermoCount: thermos.length, emptiedCells: emptied,
+             invalid: invalid, unchecked: bulbless, uncheckedWhy: bulblessWhy };
   }
 
   // ── Sum-arrow + double-arrow validator ────────────────────────────────────
@@ -14252,11 +14370,15 @@
       return { supported: supported, bailed: bailed, empty: false };
     }
 
+    // Arrows the node cap stopped us reading — see searchGaveUpWhy. `res.empty` is
+    // the missing-candidates case and is not counted here.
+    var cappedKeys = {};
     var removals = [], seen = {}, changed = true, guard = 0;
     while (changed && guard++ < 1000) {
       changed = false;
       units.forEach(function (unit) {
         var res = computeSupported(unit);
+        if (res.bailed) cappedKeys[unit.keys.join('|')] = 1;      // deduped across passes
         if (res.bailed || res.empty || !res.supported) return;    // give up safely on this arrow
         unit.keys.forEach(function (C, i) {
           if (st.values[C] != null || !work[C]) return;           // only cells with player marks
@@ -14275,7 +14397,9 @@
     var emptied = 0;
     Object.keys(st.centre).forEach(function (k) { if (work[k] && work[k].size === 0) emptied++; });
 
-    return { removals: removals, arrowCount: units.length, emptiedCells: emptied, invalid: invalid };
+    var capped = Object.keys(cappedKeys).length;
+    return { removals: removals, arrowCount: units.length - capped, emptiedCells: emptied, invalid: invalid,
+             unchecked: capped, uncheckedWhy: capped ? searchGaveUpWhy(capped) : null };
   }
 
   // ── Between-line validator ─────────────────────────────────────────────────
@@ -14782,7 +14906,17 @@
   //      `s7221r2i0r`). Same rule for the digit set: read it from st.uni, never
   //      assume 1..N.
   //   1b. IF YOUR SEARCH HAS A NODE CAP, AUDIT IT (v3.155/v3.156) — "cap hit → bail"
-  //      is safe but SILENT: nothing removed, nothing said. Measure where the cap
+  //      is safe but SILENT: nothing removed, nothing said.
+  //      A BAIL IS NOW REPORTABLE, AND WHICH KIND IT IS DECIDES WHERE IT GOES
+  //      (v3.192). If the bail means the clue was NOT READ AT ALL, it is an
+  //      abstention: count it, drop it from <unitCount>, and return it as
+  //      `unchecked` with searchGaveUpWhy (little killer, arrow, ten-line's
+  //      relaxation, region sum). If the bail DEGRADES to a sound weaker answer
+  //      that still removes, the clue WAS checked — just less sharply — so it
+  //      stays in the checked count and reports nothing (counting circles' tier-1
+  //      fallback, ten-line's exact→tiling fallback, sameDiffLineSupport's
+  //      arc-consistent domains). Calling a degraded check "not checked" is its
+  //      own false report. Measure where the cap
   //      actually dies against the clue sizes real puzzles draw, and check the bail
   //      zone against the zone where the clue can eliminate anything. A cap is only
   //      acceptable when the pruning strength TRACKS the constraint strength (both
@@ -14895,7 +15029,7 @@
       { name: 'thermo', unitNoun: 'thermometer', menuLabel: 'Thermometers',
         // bulbless-only puzzles still list the item: clicking it explains WHY
         // nothing can be checked (the bulbless note) instead of hiding the row.
-        detect: function () { var d = getThermoDetection(); return d.trees.length > 0 || d.bulbless > 0; },
+        detect: function () { var d = getThermoDetection(); return d.trees.length > 0 || d.bulbless.length > 0; },
         compute: computeThermoRemovals, countKey: 'thermoCount', noneKey: 'noThermos' },
       { name: 'German whisper', unitNoun: 'German whisper line', menuLabel: 'German whisper lines',
         classify: classifyWhisperLines, compute: computeWhisperRemovals, countKey: 'whisperCount', noneKey: 'noWhispers' },
@@ -15663,6 +15797,19 @@
     return n + ' ' + pluralUnit(unitNoun, n) + (n === 1 ? ' was' : ' were') +
            ' not checked' + (why ? ' (' + why + ')' : '') + '.';
   }
+  // The reason shared by every NODE-CAP bail (v3.192). Several validators run a
+  // bounded search and give up when it blows the cap — the banner's rule 1b calls
+  // that out as "safe but SILENT: nothing removed, nothing said", which is exactly
+  // the abstention §3 exists to name.
+  //
+  // It says the search gave up, not that the clue is hard or wrong: the cap is OUR
+  // limit and nothing about it is evidence about the puzzle. And it names the one
+  // thing the player can actually do about it — pencilling in more marks shrinks
+  // the search, so the same clue often becomes checkable a few digits later.
+  function searchGaveUpWhy(n) {
+    return (n === 1 ? 'it was' : 'they were') + ' too open to search all the way — '
+         + 'filling in more candidates usually makes ' + (n === 1 ? 'it' : 'them') + ' checkable';
+  }
   // "12 of 14 cages" as soon as anything went unchecked, plain "14 cages" when
   // nothing did — so a qualified run can never read as a whole-puzzle all-clear.
   function checkedPhrase(count, unchecked, unitNoun) {
@@ -16141,8 +16288,6 @@
       showRemoveInvalidToast('Validation failed unexpectedly — nothing was changed.', 'error');
       return;
     }
-    var note = comp.note || null;
-    function withNote(msg) { return note ? msg + ' ' + note : msg; }
     // The third outcome (see uncheckedMsg): clues found but declined, never folded
     // into the checked count and never dropped from a message.
     var unchecked = comp.unchecked || 0;
@@ -16153,8 +16298,8 @@
       if (comp.needSelection) { showRemoveInvalidToast('The ' + def.unitNoun + '(s) couldn\'t be identified — select their cells, then click "' + label + '" again.', 'warning'); return; }
       if (comp.wholeClue) { showRemoveInvalidToast(wholeClueMsg(def, comp.wholeClue), 'warning'); return; }
       // Clues found, none of them read — the abstention IS the result here.
-      if (uncMsg) { showRemoveInvalidToast(withNote(uncMsg), 'warning'); return; }
-      showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), note ? 'warning' : 'success');
+      if (uncMsg) { showRemoveInvalidToast(uncMsg, 'warning'); return; }
+      showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success');
       return;
     }
     var count    = comp[def.countKey] || 0;
@@ -16166,14 +16311,14 @@
     // no cell text changed, so the board observer will never notice. Kick them.
     scheduleAutoValidators();
     rebuildValidateMenu();
-    if (removals.length === 0) { showRemoveInvalidToast(withWarn(withNote(withUnchecked('Checked ' + checked + ' — no invalid candidates to highlight.'))), okType(unchecked)); return; }
+    if (removals.length === 0) { showRemoveInvalidToast(withWarn(withUnchecked('Checked ' + checked + ' — no invalid candidates to highlight.')), okType(unchecked)); return; }
     var emptied = countEmptiedSince(before);
     if (emptied > 0) { showRemoveInvalidToast(withUnchecked(noValidComboHighlightMsg(checked, removals.length, emptied)), 'error'); return; }
     var tail = validatorAutoOn(def.name)
       ? ' Auto-update (↻) is on.'
       : ' Press "Clear all highlights" to remove them, or ↻ to keep them updated.';
-    showRemoveInvalidToast(withWarn(withNote(withUnchecked('Highlighted ' + removals.length + ' invalid candidate' +
-      (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail))), okType(unchecked));
+    showRemoveInvalidToast(withWarn(withUnchecked('Highlighted ' + removals.length + ' invalid candidate' +
+      (removals.length === 1 ? '' : 's') + ' across ' + checked + '.' + tail)), okType(unchecked));
   }
 
   // Highlight mode has NO run-all (v3.143): the bottom button is "Clear all
@@ -16204,10 +16349,13 @@
   async function applyOneValidator(def, unitFilter) {
     var comp = def.compute(unitFilter);
     if (comp.unsupported) return { unsupported: true };
-    // comp.note = an informational sentence for the result toast (e.g. the
-    // thermo validator's "N bulbless lines were not checked") — carried on
-    // every outcome so a skipped clue is never silent.
-    var note = comp.note || null;
+    // The `note` channel is GONE (v3.192). It was the ad-hoc predecessor of
+    // `unchecked` — a free-text sentence a compute could tack onto any outcome to
+    // explain a skipped clue — and its last two users (bulbless thermos, the
+    // v3.184 whole-puzzle cage gate) are now on the real channel or deleted.
+    // Keeping both would be exactly the parallel mechanism §3 warns against: the
+    // note carried no count, so it could not colour the toast, and a run that
+    // checked nothing could still come back green while explaining itself.
     // Structurally impossible clues (see invalidClueMsg): dropped, never validated,
     // and carried on EVERY outcome so they can't vanish behind an all-clear.
     var invalid = comp.invalid || 0;
@@ -16219,17 +16367,17 @@
     // comp.wholeClue = this clue is a WHOLE-PUZZLE count whose variant we can't read
     // (counting circles), so unlike needSelection there is nothing the player can
     // select to enable it — the string says which variant it is.
-    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, wholeClue: comp.wholeClue || null, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
+    if (comp[def.noneKey]) return { present: false, removed: 0, needSelection: !!comp.needSelection, wholeClue: comp.wholeClue || null, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
     var count = comp[def.countKey] || 0;
     var removals = comp.removals || [];
-    if (removals.length === 0) return { present: true, removed: 0, count: count, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
+    if (removals.length === 0) return { present: true, removed: 0, count: count, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
     var preSnap = snapshotPencilmarks();
     var r = await _removeCandidatesInternal(removals);
     if (r.aborted) {
       var reverted = await revertToSnapshot(preSnap, 12);
-      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
+      return { present: true, removed: 0, count: count, aborted: true, reverted: reverted, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
     }
-    return { present: true, removed: r.removed, count: count, note: note, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
+    return { present: true, removed: r.removed, count: count, invalid: invalid, unchecked: unchecked, uncheckedWhy: uncheckedWhy };
   }
 
   // Run a single validator (a menu pick): lock, compute+apply once, toast.
@@ -16246,7 +16394,6 @@
     // clue we declined to check. Green means "all of it, checked".
     function okType(unchecked) { return (mcWarn || unchecked) ? 'warning' : 'success'; }
     applyOneValidator(def, unitFilter).then(function (res) {
-      function withNote(msg) { return res.note ? msg + ' ' + res.note : msg; }
       // The unchecked sentence rides on EVERY outcome, errors included — an
       // abstention may not vanish behind a louder result.
       var unchecked = res.unchecked || 0;
@@ -16258,14 +16405,14 @@
         if (res.wholeClue) { showRemoveInvalidToast(wholeClueMsg(def, res.wholeClue), 'warning'); return; }
         // Every clue was impossible as read → that IS the result, not "none found".
         var noneInv = withInvalid(res, def, null);
-        if (noneInv) { showRemoveInvalidToast(withUnchecked(withNote(noneInv)), 'error'); return; }
+        if (noneInv) { showRemoveInvalidToast(withUnchecked(noneInv), 'error'); return; }
         // Clues WERE found, we just declined to read any of them. Saying "no cages
         // found in this puzzle" here would be the false all-clear in its purest
         // form, so the abstention stands alone as the whole result.
-        if (uncMsg) { showRemoveInvalidToast(withNote(uncMsg), 'warning'); return; }
-        // A note explains WHY nothing was checkable (e.g. bulbless thermos) —
-        // that deserves the player's attention, so it warns instead of green.
-        showRemoveInvalidToast(withNote(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter)), res.note ? 'warning' : 'success'); return;
+        if (uncMsg) { showRemoveInvalidToast(uncMsg, 'warning'); return; }
+        // Genuinely none of this clue type — an honest green, not an all-clear
+        // over something we skipped.
+        showRemoveInvalidToast(noneFoundMsg(pluralUnit(def.unitNoun, 0), !!unitFilter), 'success'); return;
       }
       if (res.aborted) { validateAbortToast(res.reverted); return; }
       // A removal made changes → offer a post-run Undo (one native-undo group).
@@ -16278,10 +16425,10 @@
           ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) + '.';
       // An impossible clue outranks every other outcome except a mark contradiction,
       // which is reported on its own terms (it blames the marks, not the clue).
-      if (emptied > 0) { showRemoveInvalidToast(withUnchecked(withNote(noValidComboMsg(checked, res.removed, emptied))), 'error'); return; }
+      if (emptied > 0) { showRemoveInvalidToast(withUnchecked(noValidComboMsg(checked, res.removed, emptied)), 'error'); return; }
       var inv = withInvalid(res, def, body);
-      if (inv) { showRemoveInvalidToast(withUnchecked(withNote(inv)), 'error'); return; }
-      showRemoveInvalidToast(withWarn(withNote(withUnchecked(body))), okType(unchecked));
+      if (inv) { showRemoveInvalidToast(withUnchecked(inv), 'error'); return; }
+      showRemoveInvalidToast(withWarn(withUnchecked(body)), okType(unchecked));
     }).finally(function () { actionInProgress = false; });
   }
 
@@ -16319,7 +16466,6 @@
     function okType(unchecked) { return (mcWarn || unchecked) ? 'warning' : 'success'; }
     (async function () {
       var totalRemoved = 0, undoSteps = 0, passes = 0, present = {}, unsupported = false, aborted = false, reverted = true;
-      var notes = {};   // informational notes (e.g. bulbless thermos), deduped across passes
       var invalid = {}; // validator name → impossible-clue count (see invalidClueMsg)
       // validator name → clues we declined to check (see uncheckedMsg). Aggregated
       // PER CLUE TYPE, because run-all is otherwise a brand-new false-green channel:
@@ -16330,7 +16476,6 @@
         changed = false;
         for (var i = 0; i < defs.length; i++) {
           var res = await applyOneValidator(defs[i], unitFilter);
-          if (res.note) notes[res.note] = 1;
           // Same clues every pass, so take the count rather than accumulating it.
           if (res.invalid) invalid[defs[i].name] = { n: res.invalid, unitNoun: defs[i].unitNoun };
           if (res.unchecked) unchecked[defs[i].name] = { n: res.unchecked, unitNoun: defs[i].unitNoun, why: res.uncheckedWhy };
@@ -16342,9 +16487,8 @@
         passes++;
         if (unsupported || aborted) break;
       }
-      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, notes: Object.keys(notes), invalid: invalid, unchecked: unchecked };
+      return { totalRemoved: totalRemoved, undoSteps: undoSteps, passes: passes, present: present, unsupported: unsupported, aborted: aborted, reverted: reverted, invalid: invalid, unchecked: unchecked };
     })().then(function (s) {
-      function withNotes(msg) { return s.notes.length ? msg + ' ' + s.notes.join(' ') : msg; }
       // One combined sentence per clue type that came back structurally impossible.
       var invNames = Object.keys(s.invalid);
       var invMsg = invNames.length
@@ -16361,11 +16505,11 @@
       if (s.totalRemoved > 0) validatorArmUndo(s.undoSteps, preSnap);
       var names = Object.keys(s.present);
       if (names.length === 0) {
-        if (invMsg) { showRemoveInvalidToast(withUnchecked(withNotes(invMsg)), 'error'); return; }
+        if (invMsg) { showRemoveInvalidToast(withUnchecked(invMsg), 'error'); return; }
         // Clues were found and all of them declined — never "none found".
-        if (uncMsg) { showRemoveInvalidToast(withNotes(uncMsg), 'warning'); return; }
+        if (uncMsg) { showRemoveInvalidToast(uncMsg, 'warning'); return; }
         var nouns = defs.map(function (v) { return pluralUnit(v.unitNoun, 0); }).join(' or ');
-        showRemoveInvalidToast(withNotes(noneFoundMsg(nouns, !!unitFilter)), s.notes.length ? 'warning' : 'success');
+        showRemoveInvalidToast(noneFoundMsg(nouns, !!unitFilter), 'success');
         return;
       }
       var checked = names.map(function (nm) {
@@ -16378,9 +16522,9 @@
         : 'Removed ' + s.totalRemoved + ' invalid candidate' + (s.totalRemoved === 1 ? '' : 's') +
           ' across ' + checked + ' in ' + formatDuration(performance.now() - t0) +
           ' (' + s.passes + ' pass' + (s.passes === 1 ? '' : 'es') + ').';
-      if (emptied > 0) { showRemoveInvalidToast(withUnchecked(withNotes(noValidComboMsg(checked, s.totalRemoved, emptied))), 'error'); return; }
-      if (invMsg) { showRemoveInvalidToast(withUnchecked(withNotes(invMsg + ' — ' + body)), 'error'); return; }
-      showRemoveInvalidToast(withWarn(withNotes(withUnchecked(body))), okType(uncNames.length));
+      if (emptied > 0) { showRemoveInvalidToast(withUnchecked(noValidComboMsg(checked, s.totalRemoved, emptied)), 'error'); return; }
+      if (invMsg) { showRemoveInvalidToast(withUnchecked(invMsg + ' — ' + body), 'error'); return; }
+      showRemoveInvalidToast(withWarn(withUnchecked(body)), okType(uncNames.length));
     }).finally(function () { actionInProgress = false; });
   }
 

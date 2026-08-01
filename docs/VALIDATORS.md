@@ -1108,6 +1108,28 @@ anything goes unchecked, so a partial run cannot render as a whole-puzzle all-cl
 `runAllValidators` aggregates **per clue type** — otherwise one validator's abstention would
 disappear into another's clean result, a brand-new false-green channel.
 
+**The `note` channel is gone (v3.192).** It was the ad-hoc predecessor: a free-text sentence a
+compute could tack onto any outcome. It carried no count, so it could not colour the toast — a run
+that checked nothing came back green *while explaining itself*. Its last two users (bulbless
+thermos, the v3.184 cage gate) are on the real channel or deleted.
+
+#### What counts as UNCHECKED, and what does not
+
+Four distinctions the v3.192 sweep had to draw. Getting them wrong produces a *different* false
+report, so they are worth stating outright:
+
+| situation | bucket | why |
+|---|---|---|
+| clue found, no rule we trust reads it | **UNCHECKED** | bulbless thermo (no bulb ⇒ no direction), closed-loop palindrome (no fold axis), region-sum lines on a puzzle with no marked regions, entropic loop whose length isn't a multiple of 3 |
+| node cap bailed and **nothing** was read | **UNCHECKED** | little killer, arrow, ten-line's relaxation, region sum — `searchGaveUpWhy` |
+| node cap bailed but it **degrades to a sound weaker check** | **checked** | counting circles' tier-1 fallback, ten-line's exact→tiling fallback, `sameDiffLineSupport`'s arc-consistent domains. The clue *was* read, just less sharply; calling that "not checked" is its own false report |
+| the rule is **vacuously satisfied** | **checked, clean** | a 1-cell zipper/palindrome/same-difference line, a region-sum line lying wholly in one region, a sub-3-cell entropic line. We read it under the rule we trust and it passed — these used to vanish from *both* counts, under-reporting what the run looked at |
+| a cell has no candidates left | **neither** | the pre-existing missing-candidates warning owns it; it blames the marks, not our reading |
+| structurally impossible as read | **`invalid`, red** | v3.157's path, unchanged — renban longer than the digit set, lockout with no feasible pair, impossible XV/difference target |
+
+The `unitFilter` is **not** an unchecked source: a selection run reports only what was selected and
+carries no denominator, which is also why fog needs no special reporting rule.
+
 ### NEVER INVENT A SUDOKU UNIT — regions may not exist yet (v3.162)
 
 Rows and columns are free: every puzzle has them, and two cells sharing one must differ. **Regions

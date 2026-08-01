@@ -128,7 +128,7 @@ const NAMES = [
   // grey branch (c) — the rules hand this clue type's ruleset to the solver (v3.191)
   'TYPE_CHOICE_WINDOW', 'rulesHandTypeToSolver',
   // the third outcome — UNCHECKED reporting (v3.188, VALIDATOR_POLICY.md §3)
-  'pluralUnit', 'uncheckedMsg', 'checkedPhrase', 'cageUncheckedWhy',
+  'pluralUnit', 'uncheckedMsg', 'checkedPhrase', 'cageUncheckedWhy', 'searchGaveUpWhy',
 ];
 
 const decls = NAMES.map((n) => ({ name: n, ...extractDecl(n) }))
@@ -1616,6 +1616,25 @@ check('cage why: all three reasons list with a serial comma-free join',
 // The v3.184 whole-puzzle gate is gone: one bad cage may not disable the rest.
 checkFalse('cage: no whole-puzzle gate survives (policy §4, Road B is cheap)',
   /wholePuzzleUnreadable/.test(src));
+
+// ── node-cap bails are abstentions, and say so (v3.192) ──────────────────────
+// The banner's rule 1b: "cap hit → bail is safe but SILENT: nothing removed,
+// nothing said." Little killer, arrow, ten line and region sum all bailed that
+// way. The reason names OUR limit (the search gave up), never the puzzle's, and
+// it points at the one thing the player can do about it.
+check('cap: one clue reads singular and offers the fix',
+  F.searchGaveUpWhy(1),
+  'it was too open to search all the way — filling in more candidates usually makes it checkable');
+check('cap: several clues read plural',
+  F.searchGaveUpWhy(3),
+  'they were too open to search all the way — filling in more candidates usually makes them checkable');
+checkFalse('cap: the reason never blames the puzzle or the clue',
+  /wrong|broken|impossible|invalid|decoy/i.test(F.searchGaveUpWhy(2)));
+// A bail that DEGRADES to a sound weaker check is not an abstention — the clue
+// was checked, just less sharply. Counting circles and ten-line's exact search
+// both do that, and must not report unchecked for it.
+checkTrue('cap: counting circles do not report a degraded search as unchecked',
+  /A BAIL HERE IS NOT AN ABSTENTION/.test(src));
 
 // ── grey branch (c): the rules hand this clue type to the solver (v3.191) ────
 // Measured over the catalog's 1,582 cage puzzles with rules text: TYPE_CHOICE_RE
