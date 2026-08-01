@@ -1116,13 +1116,16 @@ something in the shared machinery broke:
 [`0qbt11p1jt`](https://sudokupad.app/0qbt11p1jt) (20 plain cages, solution published, probes clean)
 and [`179dze6yfh`](https://sudokupad.app/179dze6yfh) (16 plain cages, same).
 
+> **`bH8FJtL3F3` and `blobz/orchard` were removed from this set on 2026-08-01.** Both were listed as
+> *"a decoy cage among honest ones"* and neither is one — see "The decoy-among-honest-cages category
+> was never real" in [VALIDATORS.md](VALIDATORS.md). Do not re-add them as decoy tests.
+
 | puzzle | what it is | what should happen |
 |---|---|---|
 | [`67rr7DMJDh`](https://sudokupad.app/67rr7DMJDh) "121" | ONE cage: 36 cells, total 121, honest repeats-allowed sum | UNCHECKED — "more cells than this puzzle has digits, so repeats are forced" |
 | [`26e1w4r81e`](https://sudokupad.app/26e1w4r81e) "The Devil is in the Details" | 4 product cages cornered 666 | UNCHECKED and named, never counted clean |
 | [`36fnN33h7L`](https://sudokupad.app/36fnN33h7L) "Leap Day" | 29 over a 14-cell cage | UNCHECKED and named |
 | [`yiaonocy5d`](https://sudokupad.app/yiaonocy5d) "...What?" | 6×6 troll; 5 of 7 drawings are decoys | every row live and fully functional; the fake thermo/quad/dot **fail** when run |
-| [`bH8FJtL3F3`](https://sudokupad.app/bH8FJtL3F3) "Killer Sudoku" | 1 cage with a **mistyped total** among 29 correct ones — a transcription error made porting the puzzle to SudokuPad, **not** a decoy (the video shows the cage with a different total, and the rules never hint at a bad clue) | 29 checked for real, the mistyped one fails |
 | [`ay6r6mmu5w`](https://sudokupad.app/ay6r6mmu5w) "Close Enough" | 20 cages, sums rounded to nearest 5 | row **live** (no cue recognises rounding) — runs and fails |
 | [`rd2kn6vy6d`](https://sudokupad.app/rd2kn6vy6d) "Regional Heatwave" | region-sum segments *strictly increase* along the line | **live**, runs, fails — the tool not fitting the job |
 | [`5kx4d90kcm`](https://sudokupad.app/5kx4d90kcm) "Sigma or Pi" | *"solvers must deduce whether each cage is a sum cage or a product cage"* | **grey**, not dropped. Selection rescues it; a sum-run failing teaches the player it's a product cage |

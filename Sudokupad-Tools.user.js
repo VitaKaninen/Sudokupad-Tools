@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.196.0
+// @version      3.197.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.196.0';
+  var SCRIPT_VERSION = '3.197.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -7825,18 +7825,20 @@
   }
 
   // ⚠️ HOW MANY of this validator's clues the answer refutes, not just whether any
-  // does — because the two mean opposite things. ONE bad cage among 29 (`bH8FJtL3F3`
-  // "Killer Sudoku") is a LOCAL fault, and a local fault is supposed to FAIL when
-  // the player runs the validator. MOST of them bad
-  // (`ay6r6mmu5w` "Close Enough", 16 of 19) means the rule itself is not ours.
+  // does — because the two mean opposite things. A FEW clues bad is a local fault,
+  // and a local fault is supposed to FAIL when the player runs the validator. MOST
+  // of them bad (`ay6r6mmu5w` "Close Enough", 16 of 19) means the rule itself is
+  // not ours.
   //
-  // ⚠️ `bH8FJtL3F3` IS NOT A DECOY — earlier comments here said it was, and that
-  // was wrong (corrected 2026-08-01). Its odd cage is a TYPO from hand-editing the
-  // puzzle into SudokuPad's format; the published video shows a different total,
-  // and the rules never hint at a false clue. It is still the right example for
-  // the MAGNITUDE question, because why a clue is wrong is not something we can
-  // see or need to: trolling and fat-fingering look identical from here, the
-  // response is the same, and telling them apart is the solver's job (P2).
+  // ⚠️ WE CANNOT SEE WHY A CLUE IS WRONG, AND WE DO NOT NEED TO. A locally wrong
+  // clue may be a deliberate decoy, a transcription typo, or a variant rule we
+  // failed to recognise — all three look identical from in here. This comment used
+  // to name `bH8FJtL3F3` "Killer Sudoku" as a decoy; it is not one (its odd cage is
+  // an off-by-one typo from porting the puzzle), and neither is `blobz/orchard`
+  // (a doubler puzzle). Both were removed 2026-08-01 — see the "decoy among honest
+  // cages" correction in docs/VALIDATORS.md. Nothing here changed but the example:
+  // the response to all three causes is the same, and telling them apart is the
+  // solver's job (P2). For a genuine decoy, `yiaonocy5d` "...What?" is the one.
   // Clue groups come from validatorClueCellGroups — the same reader the
   // missing-candidates warning uses, so this can't drift from what runs.
   //
@@ -9554,11 +9556,11 @@
     var cages = getKillerCages();
     if (unitFilter) cages = cages.filter(function (cage) { return unitFilter(cage.keys); });
     // No solution mute (v3.189): a cage the answer contradicts is read as an
-    // ordinary distinct-digit sum like every other, and it fails. `bH8FJtL3F3`
-    // ("Killer Sudoku", one wrong cage among 29 correct ones — a TRANSCRIPTION
-    // TYPO, not a decoy; see probeInfo) is the case: it now fails instead of
-    // hiding inside "29 cages checked". Failing is right either way, which is
-    // the point — we never needed to know WHY the cage was wrong.
+    // ordinary distinct-digit sum like every other, and it fails instead of
+    // hiding inside "29 cages checked". Failing is right whatever made the cage
+    // disagree — a decoy, a typo in the puzzle file, or a variant rule we did
+    // not recognise — which is the point: we never needed to know which (P2).
+    // See probeInfo for why the examples that used to be named here are gone.
     //
     // A cage that is DRAWN but carries no readable total is a different thing: not
     // a failure, an abstention. There is nothing to check it against, so it is

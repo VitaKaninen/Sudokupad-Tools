@@ -622,19 +622,38 @@ ever be removed from it and every validator would report a clean bill of health.
 
 `probeInfo` returns `{verdict, bad, total}` — how many of the validator's **clues** the answer
 refutes, grouped by `validatorClueCellGroups` (the same reader the missing-candidates warning uses).
-One bad cage among 29 (`bH8FJtL3F3` "Killer Sudoku") is a **local** fault — which is supposed to FAIL
-when the player runs the validator; 16 of 19 (`ay6r6mmu5w` "Close Enough") means the rule itself is
-not ours.
+A few clues wrong is a **local** fault — which is supposed to FAIL when the player runs the
+validator; 16 of 19 (`ay6r6mmu5w` "Close Enough") means the rule itself is not ours.
 
-> **`bH8FJtL3F3` is NOT a decoy, and earlier notes calling it one were wrong** (corrected on the
-> setter's account, 2026-08-01). Its odd cage is a **typo introduced when the puzzle was hand-edited
-> into SudokuPad's format** — the published video shows that cage carrying a different total. The
-> rules give no hint of a false clue, and they shouldn't, because there isn't one by design. It stays
-> here as an example only of the *magnitude* question — one clue wrong versus all of them — which is
-> what `probeInfo` measures and is unaffected by why the clue is wrong. A puzzle can be locally wrong
-> because it is trolling the solver **or** because someone fat-fingered a transcription, and we
-> cannot tell those apart. We do not need to: the response is identical, and diagnosing which it is
-> would be the solver's job either way (P2). `probeSystematic` splits them at half — a blunt line, and
+### The "decoy among honest cages" category was never real (corrected 2026-08-01)
+
+Two puzzles were cited throughout the v3.188–v3.192 policy work as the worked example of *"a cage is
+a decoy among honest cages; nothing in the rules hints at it"*. **Neither is a decoy.** Checked
+against the catalogue on 2026-08-01:
+
+| cited as | what it actually is |
+|---|---|
+| `bH8FJtL3F3` "Killer Sudoku", 1 of 29 | **A transcription typo.** Plain killer rules, no twist. The one refuted cage is cornered **19** over cells solving to 7+9+2 = **18** — an off-by-one introduced when the puzzle was hand-edited into SudokuPad's format, and the published video shows the cage carrying the other total. |
+| `blobz/orchard` "Orchard", 4 of 11 | **A doubler puzzle.** *"Cells containing a doubler fruit count as double their digit value."* All three refuted cages are doubler arithmetic: 16 over 5+6 with the 5 doubled, 11 over 3+4 with the 4 doubled, 17 over 3+7 with the 7 doubled. It belongs in the **value≠digit** bucket, which we do not implement and never will. |
+
+So the category has **zero confirmed members**, and it should not be reasoned from again. What
+remains true is narrower and more useful:
+
+**We cannot see WHY a clue is wrong, and we do not need to.** A locally wrong clue may be a deliberate
+decoy, a transcription typo, or a variant rule we failed to recognise. All three look identical from
+inside a validator, all three must fail rather than be muted into a green all-clear, and deciding
+which one it is is the solver's job (P2). The v3.189 deletion of `muteSolutionRefuted` rests on that
+sentence, not on any puzzle being a decoy — so **the decision is unaffected by this correction**, and
+is better supported without it: muting would have been wrong for a typo and for a doubler puzzle too.
+
+**Where a genuine decoy example is needed, use `yiaonocy5d` "...What?"** — a deliberate 6×6 troll
+whose rules end *"Those are all the rules"* while 5 of its 7 drawings are fake. That one is not in
+doubt.
+
+**One weakness this had been hiding.** `probeSystematic`'s 50% threshold classes `blobz/orchard` at
+4/11 (36%) as a *local* fault when it is in fact a puzzle-wide variant rule. Nothing acts on that
+today — `probeSystematic` is unused (see below) — but if it is ever wired back up, the threshold is
+known to be wrong in this direction and the doubler case is the counter-example to test against. `probeSystematic` splits them at half — a blunt line, and
 nothing hinges on it: the real distribution is bimodal (43 of the 99 refuted-cage puzzles refute
 **every** cage).
 
@@ -726,7 +745,7 @@ geometry), so they stand in for the rest. Of 653 puzzles with readable cages and
 |---|---|---|
 | **grey** | 17 | "Liar Zone Sudoku", "Liar Killer", "Wrogn Fogn" ×2, "Escape the Foggy Liar", "Sigma or Pi", "TomTom Sudoku" — the genre, cleanly |
 | **drop** | 104 | Zone Sudoku ×6, "Semikiller", "Knapp Daneben Killer", "Max Cage Sudoku", "Modular Cages", "Round Off Sudoku", "Count Different Sudoku", "The Devil is in the Details" (product), "Leap Day" (repeats). Nearly all at ratio **1.00** — every cage refuted |
-| **keep** | 16 | the partials: `bH8FJtL3F3` "Killer Sudoku" at 1/29, `blobz/orchard` at 4/11 — a locally wrong clue, not a puzzle-wide variant, so correctly kept (`bH8FJtL3F3`'s odd cage is a **transcription typo**, not a decoy — see the note above) |
+| **keep** | 16 | the partials: `bH8FJtL3F3` at 1/29, `blobz/orchard` at 4/11 — scored as "keep" because only some cages refute. Both were described here as decoys and **neither is one** (typo; doubler puzzle — see the correction above). The scoring is unchanged, the label was wrong |
 
 The thin case is a puzzle with a single refuted cage and cages named in the rules (`67rr7DMJDh`
 "121", 1/1): ratio 1.00 on a sample of one, so it drops. There is no evidence available to tell
