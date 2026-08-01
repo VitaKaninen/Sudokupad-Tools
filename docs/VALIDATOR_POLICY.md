@@ -318,6 +318,14 @@ candidate set, or any player-visible string.** Breaking that turns a validator i
 
 ## 6. Cages: stop muting, start reading
 
+> **✅ BUILT in v3.194.** Four rulesets ship — sum, repeats allowed, product, digit list — one menu
+> row each, elected per puzzle by `cageRulesetElection`. `difference` and `quotient` were measured
+> and deliberately not built (45 cages, never a sole puzzle-wide reading). The standing rule the
+> measurement produced: **a rules cue elects a ruleset and may replace the sum row; the solution may
+> only confirm or veto a cue, never elect; arithmetic may only ADD a row, never remove or grey one.**
+> See `VALIDATORS.md` → "Multi-ruleset cages (v3.194)". Point 5 below (any cage no ruleset explains
+> is UNCHECKED) was already live from v3.190 and is unchanged.
+
 Cages are where this came to a head, and they are the worked example for every clue type.
 
 A killer-style cage's corner number is a distinct-digit **sum** ~82% of the time. It is also, in the

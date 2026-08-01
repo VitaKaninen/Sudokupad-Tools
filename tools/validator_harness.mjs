@@ -108,6 +108,12 @@ const NAMES = [
   'countingCircleSeatable', 'countingCircleSupport',
   // cage maths
   'cageCombinations', 'hasPerfectMatching', 'regularBoxDims',
+  // multi-ruleset cages (v3.194)
+  'cageProductCombinations', 'cageDigitListCombo',
+  'cageRepeatSumReach', 'cageRepeatSumSupports',
+  'cageRuleHolds', 'cageCueFires', 'cageRulesetDef', 'CAGE_RULESETS',
+  'CAGE_PRODUCT_RE', 'CAGE_REPEAT_RE', 'CAGE_DIGITLIST_RE', 'CAGE_CUE_RE',
+  'CAGE_WORD_RE', 'CAGE_RIVAL_NOUN_RE', 'CAGE_SUMWORD_RE', 'CAGE_NOTSUM_WHY',
   // geometry / chains
   'expandLineChain', 'fpuzCellKey', 'regionSumSegments', 'thermoBulbShaftCompatible',
   'thermoLongestChain',
@@ -1616,6 +1622,158 @@ check('cage why: all three reasons list with a serial comma-free join',
 // The v3.184 whole-puzzle gate is gone: one bad cage may not disable the rest.
 checkFalse('cage: no whole-puzzle gate survives (policy §4, Road B is cheap)',
   /wholePuzzleUnreadable/.test(src));
+
+// ── multi-ruleset cages (v3.194) — VALIDATOR_POLICY.md §6 ────────────────────
+// The three-argument cageUncheckedWhy calls above still mean the distinct-sum
+// reading; the opts form names whichever ruleset declined, because "not a sum of
+// different digits" is simply false on the product row.
+check('cage why: the product row names its own reading',
+  F.cageUncheckedWhy(2, 0, 0, { rule: 'product' }),
+  'they have corner numbers that are not products of different digits');
+check('cage why: the repeats-allowed row talks about reachability, not distinctness',
+  F.cageUncheckedWhy(1, 0, 0, { rule: 'sumRep' }),
+  'it has a corner number its cells cannot total');
+check('cage why: the digit-list row counts digits per cell',
+  F.cageUncheckedWhy(1, 0, 0, { rule: 'digits' }),
+  'it has a corner that is not one digit per cell');
+// `unique === false` is the SETTER saying repeats are allowed. Those cages used
+// to be dropped before anything counted them — neither checked nor reported.
+check('cage why: a setter repeat-mark is its own reason, not the pigeonhole',
+  F.cageUncheckedWhy(0, 0, 0, { declared: 1 }),
+  'it has a setter mark saying digits may repeat in it');
+
+// PRODUCT combinations. ta7eqdt02w "10/10/24: Multiplication Cages".
+check('cage product: 2 cells making 12', F.cageProductCombinations(D19, 2, 12),
+  [[2, 6], [3, 4]]);
+check('cage product: 3 cells making 24', F.cageProductCombinations(D19, 3, 24),
+  [[1, 3, 8], [1, 4, 6], [2, 3, 4]]);
+check('cage product: 1 is reachable only by the single digit 1',
+  F.cageProductCombinations(D19, 1, 1), [[1]]);
+check('cage product: a prime above the digit set is unreachable',
+  F.cageProductCombinations(D19, 2, 11), []);
+check('cage product: zero and negatives are not products of 1-9',
+  F.cageProductCombinations(D19, 2, 0).length + F.cageProductCombinations(D19, 2, -6).length, 0);
+// The trap the whole ruleset split exists for: a 3-cell cage cornered 24 is a
+// legal distinct SUM (7+8+9) *and* a legal distinct PRODUCT (1·3·8). Neither row
+// may claim the other's cages — they reach independent verdicts.
+check('cage: 24 over 3 cells is BOTH a legal sum and a legal product',
+  [F.cageCombinations(D19, 3, 24).length > 0,
+   F.cageProductCombinations(D19, 3, 24).length > 0], [true, true]);
+
+// DIGIT LIST. bm1hqfxng6 / j11logmmgj / ryq9vcx3xe / vswzxo85e4 all say "digits
+// in the top left of cages must appear in the cage"; that collapses to an exact
+// list exactly when the corner carries one digit per cell.
+check('cage digit list: "4456" over 4 cells is the multiset it names',
+  F.cageDigitListCombo('4456', D19, 4), [4, 4, 5, 6]);
+check('cage digit list: a shorter corner is the PARTIAL rule, which we decline',
+  F.cageDigitListCombo('9', D19, 3), null);
+check('cage digit list: a longer corner than the cage has cells reads as nothing',
+  F.cageDigitListCombo('4456', D19, 3), null);
+check('cage digit list: a digit outside the puzzle\'s set reads as nothing',
+  F.cageDigitListCombo('1238', [1, 2, 3, 4, 5, 6], 4), null);
+check('cage digit list: a non-numeric corner reads as nothing',
+  F.cageDigitListCombo('AB', D19, 2), null);
+
+// REPEATS-ALLOWED SUMS — exact, not a bound, because dropping distinctness makes
+// the cells independent. 67rr7DMJDh "121": 36 cells over 9 digits.
+{
+  const cell = (...d) => d;
+  // 3 cells, each free, totalling 27 → every cell must be 9.
+  const r1 = F.cageRepeatSumReach([cell(...D19), cell(...D19), cell(...D19)], 27);
+  check('cage repeat sum: a maximal total forces every cell',
+    [F.cageRepeatSumSupports(r1, 0, 9), F.cageRepeatSumSupports(r1, 0, 8)], [true, false]);
+  // 2 cells totalling 4: 1+3, 2+2, 3+1 — so 1,2,3 all survive and 4 does not.
+  const r2 = F.cageRepeatSumReach([cell(...D19), cell(...D19)], 4);
+  check('cage repeat sum: repeats are allowed, so 2+2 supports a doubled digit',
+    [1, 2, 3, 4].map(d => F.cageRepeatSumSupports(r2, 0, d)), [true, true, true, false]);
+  // The repeats-allowed reading is a RELAXATION of the distinct one: everything
+  // the distinct reading supports, this must support too. Never the reverse.
+  const r3 = F.cageRepeatSumReach([cell(...D19), cell(...D19)], 10);
+  check('cage repeat sum: 5+5 is supported where the distinct reading forbids it',
+    F.cageRepeatSumSupports(r3, 0, 5), true);
+  check('cage repeat sum: the distinct reading rules 5+5 out',
+    F.cageCombinations(D19, 2, 10).some(c => c[0] === 5 && c[1] === 5), false);
+  // A cell's own candidates constrain the DP — that is what makes it a check.
+  const r4 = F.cageRepeatSumReach([cell(1, 2), cell(1, 2)], 4);
+  check('cage repeat sum: candidate sets bound reachability',
+    [F.cageRepeatSumSupports(r4, 0, 2), F.cageRepeatSumSupports(r4, 0, 1)], [true, false]);
+}
+
+// cageRuleHolds mirrors tools/cage_rulesets.py's `holds` — the measurement and
+// the shipping code must agree or the quoted figures describe another program.
+check('cage holds: a distinct sum holds for sum and for repeats-allowed',
+  ['sum', 'sumRep', 'product', 'digits'].map(r =>
+    F.cageRuleHolds(r, [4, 5, 6], { sum: 15, text: '15' })),
+  [true, true, false, false]);
+check('cage holds: a repeating total holds ONLY for repeats-allowed',
+  ['sum', 'sumRep'].map(r => F.cageRuleHolds(r, [5, 5, 5], { sum: 15, text: '15' })),
+  [false, true]);
+check('cage holds: a product cage (ta7eqdt02w)',
+  F.cageRuleHolds('product', [2, 3, 4], { sum: 24, text: '24' }), true);
+check('cage holds: a digit list matches as a multiset, in any cell order',
+  F.cageRuleHolds('digits', [6, 4, 5, 4], { sum: 4456, text: '4456' }), true);
+check('cage holds: a digit list with the wrong digits does not hold',
+  F.cageRuleHolds('digits', [6, 4, 5, 5], { sum: 4456, text: '4456' }), false);
+// 67rr7DMJDh "121": 36 cells summing to exactly 121. Completely honest, and the
+// distinct reading cannot even represent it.
+check('cage holds: the 121 cage is a repeats-allowed sum and nothing else',
+  F.cageRuleHolds('sumRep', [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 4], { sum: 121, text: '121' }),
+  true);
+
+// ── the election cues (v3.194) — measured in tools/cage_cues.py ──────────────
+// Sentence-scoped: the cue must find a cage word in ITS OWN sentence and no
+// rival clue noun there. Every string below is real rules text from the id named.
+check('cage cue: ta7eqdt02w elects product',
+  F.cageCueFires('product', 'normal sudoku rules apply. the digits in each cage must '
+    + 'multiply to the value of the clue in the top left corner of the cage.'), true);
+// e7ssrztfgn "Some Balancing Product" — a SUM cage described with product prose.
+// The sum-word veto is the only thing that keeps this row live.
+checkFalse('cage cue: product prose about a sum cage does not elect (e7ssrztfgn)',
+  F.cageCueFires('product', 'within a cage, the sum of the unshaded cells is equal to '
+    + 'the product of the shaded cells.'));
+// 5kx4d90kcm "Sigma or Pi" names both, so this branch stays quiet and
+// rulesHandTypeToSolver greys BOTH rows instead of replacing one.
+checkFalse('cage cue: sum-or-product is a CHOICE, not a product election (5kx4d90kcm)',
+  F.cageCueFires('product', 'digits in a cage may not repeat, and they either sum or '
+    + 'multiply to the indicated number.'));
+check('cage cue: Hgnj2QNJPj elects repeats-allowed',
+  F.cageCueFires('sumRep', 'digits in a cage sum to the number in the top left corner '
+    + '- digits in a cage may repeat.'), true);
+// 6glm0i3lka "Catch These Fists" states a STRONGER rule (digits must repeat); we
+// read it as the weaker repeats-allowed sum, which under-constrains and is safe.
+check('cage cue: "must repeat in the cage" elects repeats-allowed too (6glm0i3lka)',
+  F.cageCueFires('sumRep', 'digits in cages must sum to the given total and must '
+    + 'repeat in the cage.'), true);
+// 20prr0i65d "Golden Palindromes": the repeat phrase belongs to the DIAGONAL in
+// its own sentence. A character window put `repeat` 20 chars from `cage` and
+// fired; the sentence scope is what kills it.
+checkFalse('cage cue: a diagonal\'s repeat rule is not the cage\'s (20prr0i65d)',
+  F.cageCueFires('sumRep', 'digits may repeat along a diagonal if allowed by other '
+    + 'rules. digits in cages must sum to the total.'));
+check('cage cue: ryq9vcx3xe elects the digit list',
+  F.cageCueFires('digits', 'normal sudoku rules apply. digits in the top left of cages '
+    + 'must appear in the cage.'), true);
+check('cage cue: vswzxo85e4 says "enclosed cells" and still elects',
+  F.cageCueFires('digits', 'digits in the top left of cages must appear in the '
+    + 'enclosed cells.'), true);
+// ⚠️ THE ONE THAT MUST NEVER FIRE. "in any order" is renban language; as a
+// digit-list cue it scored 19 false alarms on ordinary sum puzzles against ZERO
+// true positives. If this goes red, someone added it back — do not "fix" it by
+// deleting the case.
+checkFalse('cage cue: "in any order" is renban language and may never elect a digit list',
+  F.cageCueFires('digits', 'renban: digits on a pink line must form a consecutive set '
+    + 'in any order. killer cages: digits in cages must sum to the small clue.'));
+checkFalse('cage cue: ordinary killer wording elects nothing',
+  ['sumRep', 'product', 'digits'].some(k => F.cageCueFires(k,
+    'normal sudoku rules apply. the digits within a cage must sum to the small clue '
+    + 'in the top-left corner of that cage. digits may not repeat within a cage.')));
+// A row per elected ruleset, and the label names the reading (policy §6 point 4).
+check('cage rulesets: four readings, each with its own row label',
+  F.CAGE_RULESETS.map(r => r.key), ['sum', 'sumRep', 'product', 'digits']);
+check('cage rulesets: the sum row keeps the plain label',
+  F.cageRulesetDef('sum').label, 'Cages');
+check('cage rulesets: an unknown key falls back to the sum reading',
+  F.cageRulesetDef('nonsense').key, 'sum');
 
 // ── node-cap bails are abstentions, and say so (v3.192) ──────────────────────
 // The banner's rule 1b: "cap hit → bail is safe but SILENT: nothing removed,

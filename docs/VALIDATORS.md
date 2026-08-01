@@ -314,8 +314,6 @@ the puzzle never stated.
 > Reason strings come from `cageUncheckedWhy(notSum, repeats, noTotal)`, harness-pinned.
 
 A killer-style cage's corner number can be a **product** (`26e1w4r81e` "The Devil is in the
-
-A killer-style cage's corner number can be a **product** (`26e1w4r81e` "The Devil is in the
 Details", 666 over 5–8 cells), a **difference** (`2mcr6exf3p` "Sub-Zero", corners of −1/−4/−7), a
 sum with **repeats allowed** (`36fnN33h7L` "Leap Day", 29 over a 14-cell cage), a **digit list** (a
 4-cell cage cornered "4456" = the digits it holds — and `Number('4456')` is a perfectly finite
@@ -331,13 +329,15 @@ where the corner number is the joke. Zero-combination cages are now **counted wi
 unusable cages and silent**. v3.157's loud path is untouched for every other clue type — for those,
 zero-combination really is the rare detection bug it was written for.
 
-**Residual gap, knowingly left open:** a variant whose corner also happens to be a legal
-distinct-digit sum (a 3-cell PRODUCT cage cornered 24, when 7+8+9 = 24) still validates as a killer
-cage. Only the solution mute catches it, so on a puzzle with no published solution the wrong
-eliminations remain. **A rules-cue detector was measured and rejected** — over the 651
-solution-bearing puzzles with readable cages it caught 43 variants, missed 81, and raised 29 false
-alarms (60% precision, 35% recall); greying out the validator on 29 honest killer puzzles costs
-more than the gap it closes. Revisit only with a much sharper cue.
+**Residual gap, knowingly left open — ♻️ NARROWED v3.194:** a variant whose corner also happens to be
+a legal distinct-digit sum (a 3-cell PRODUCT cage cornered 24, when 7+8+9 = 24) still validates as a
+killer cage *on the sum row*. The v3.183 conclusion — that a rules-cue detector is hopeless (60%
+precision, 35% recall) — was drawn from a cue measured **per cage**, unscoped, over all six readings
+at once. Re-measured **sentence-scoped and per ruleset** (`tools/cage_cues.py`), the product and
+digit-list cues score 100% recall with **zero** false alarms on ordinary sum puzzles, which is what
+made v3.194's election safe. The old figure is not wrong; it answered a different question. What
+remains genuinely open is a variant puzzle whose rules give **no cue at all** and publish no
+solution (`x42g360vvp`, `vi9ub1bnlu`) — there the sum row runs, and it is allowed to fail (P1).
 
 ### Can we just IDENTIFY the cage rule? Measured, and no (v3.184)
 
@@ -421,6 +421,74 @@ these three digits" (`dj4ini56n0`/`lgih5qwoi1` "Liar Zone"), multi-digit *number
 cage (`uvzlpx3x3r` "3-Digit Killer", `hr2psfhzcz` "Welcome, 2025!"), dates (`bofuhbwz6i`), and
 cage-sum-plus-everything-outside-the-cages (`m7fj6dp5si` "Overflow"). These are the **UNCHECKED**
 pile by construction — no ruleset list reaches them.
+
+### Multi-ruleset cages (v3.194) — one menu row per reading the puzzle elects
+
+The build of `VALIDATOR_POLICY.md` §6, gated on the measurement above. Four rulesets, chosen by
+catalogue frequency; `difference` and `quotient` were measured and **not** built (45 cages, never a
+sole puzzle-wide reading, so they could only ever run via selection).
+
+| ruleset | row label | how a cage is read | sole reading on |
+|---|---|---|---|
+| `sum` | **Cages** | `cageCombinations` — distinct digits, the historic behaviour, unchanged | 494 of 682 |
+| `sumRep` | **Cages (repeats allowed)** | `cageRepeatSumReach` prefix/suffix subset-sum DP | 11 |
+| `product` | **Cages (product)** | `cageProductCombinations` — distinct digits, multiplicative | 1 |
+| `digits` | **Cages (digit list)** | `cageDigitListCombo` — the corner IS the multiset, one digit per cell | 4 |
+
+Every row shares `computeCageRemovals(unitFilter, ruleKey)` and the existing support/matching
+machinery; only the combination source differs. Rows reach **independent** verdicts on the same
+cages, which is what lets a two-reading puzzle offer both.
+
+**Repeats-allowed needs no enumeration, and that is the whole trick.** A 36-cell cage over 9 digits
+has astronomically many multisets summing to 121, so the obvious port of `cageCombinations` does not
+terminate. But dropping distinctness makes the cells **independent** — each contributes any digit
+from its own candidate set, with no interaction — so support is a plain subset-sum reachability
+question. Prefix and suffix tables are built once per sweep, each candidate query is O(total), and
+the answer is **exact**, not the min/max bound §6 was willing to settle for. Sudoku's own row/column/
+box constraints are not modelled, making the check a sound relaxation: it can under-remove, never
+over-remove.
+
+#### What may ELECT a ruleset, and what may only ADD one
+
+Straight out of the measurement: arithmetic over all cages **contains** the true ruleset 99.0% of
+the time but **elects** a non-sum one correctly only 8 times in 10.
+
+- **A rules cue elects** (`cageCueFires`), and may REPLACE the sum row — a puzzle that says "digits
+  may repeat" has told us the distinct reading is wrong, so leaving that row live would invite an
+  over-removal the rules already ruled out.
+- **The solution confirms, and may only veto.** A cue the answer refutes keeps the sum row alongside
+  instead of replacing it. It may never elect on its own: a `Cages (product)` row on a puzzle whose
+  rules never said "product" would announce the twist, and the row's presence is information the
+  player never asked for (§2, menu time).
+- **Arithmetic may only ADD.** More cells than digits, or the setter's own `unique === false` mark,
+  adds the repeats-allowed row. It never removes or greys one.
+
+#### Greying is for a choice the PUZZLE poses
+
+`5kx4d90kcm` "Sigma or Pi" states that each cage is a sum cage or a product cage and leaves the
+solver to work out which. Both rows list, **both grey**, and the player picks per cage with "Validate
+selection only" — a real run that may fail, which is exactly how they find out (§4's worked example).
+
+An **arithmetic** election never greys, because the two rows are not rivals: `67rr7DMJDh` "121" gets
+a live sum row (which reports its one cage UNCHECKED) *and* a live repeats-allowed row (which reads
+it). Greying there would be the v3.184 mistake again — a Road A cost paid to tidy something that was
+never a conflict.
+
+#### Two smaller fixes that rode along
+
+- **`unique === false` cages are no longer invisible.** `getKillerCages` used to drop them outright,
+  so they were neither checked nor reported — the false all-clear in its quietest form. They are kept
+  now, reported UNCHECKED by every distinct-digit row with their own reason ("a setter mark saying
+  digits may repeat in it"), and their presence elects the repeats-allowed row.
+- **The raw corner STRING is kept** alongside the number. `Number('4456')` is a perfectly finite
+  "total", so reading only the number is exactly the misread the digit-list ruleset exists to fix.
+
+#### The eyeball previews every drawn cage on every cage row
+
+Outlining only the cages a row can read would turn the 👁 into a classifier — hover the product row,
+see which cages are products. The preview answers *"what will a click look at"*, and a click looks at
+all of them; which ones it could READ comes back in the run's UNCHECKED count, **after** the player
+asked.
 
 ### The gate that DOES work: one unreadable cage indicts the whole puzzle (v3.184) — ⚰️ REMOVED v3.190
 
@@ -1260,7 +1328,10 @@ thing entirely — a real solver contradiction — and still goes down the `noVa
 | **Renban** | no consecutive run of length L exists (L > digit set) | already detected; now reported |
 | **Nabner** | no non-consecutive set of length L (6+ over 1-9) | already detected; now reported |
 | **Ten line** | `tenLinePartitionable` false (a 1-cell ten line) | already detected; now reported |
-| **Cage** | zero `cageCombinations` for (size, total) | already detected; now reported |
+| **Cage (sum)** | zero `cageCombinations` for (size, total) | already detected; now reported. Since v3.190 a zero-combination cage is **UNCHECKED**, not `invalid` — for cages the loud message is factually wrong (a 666 product cage is perfectly satisfiable) and it fires on 888 catalogued cages |
+| **Cage (product)** | zero `cageProductCombinations` for (size, total) | **new** v3.194; same shape as the sum test with a multiplicative accumulator. Reported UNCHECKED for the same reason as the sum row |
+| **Cage (repeats allowed)** | total outside `k×min … k×max` | **new** v3.194; the loose bound, because repeats are the whole point of the rule — there is no distinctness to exploit. Also what bounds the DP table's size |
+| **Cage (digit list)** | the corner is not one digit-set digit per cell | **new** v3.194; a shorter corner is the PARTIAL-list rule, which is declined rather than read under the wrong rule |
 | **Thermo** | `thermoLongestChain(tree) > ` digit-set size | **new**; SLOW thermos exempt — non-decreasing fills any length |
 | **Little killer** | total outside `n×min … n×max` | **new**; cells may repeat, so this is the loose bound |
 | **Arrow / double arrow** | target range `tc×min…tc×max` disjoint from line range | **new**; a 10-cell shaft can't sum under 10, one circle can't exceed 9 |
@@ -1314,7 +1385,12 @@ consistency, which is why same-difference searches only when conflicts or a loop
 Every other validator (kropki, cage, thermo,
 whisper, Dutch, XV, **difference dot**, renban, nabner, parity, zipper, entropic, modular, **palindrome**) is
 pairwise, per-cell, bounded-combination (`cageCombinations` ≤ C(9,k)) or matching-based — polynomial,
-no cap, nothing to audit. Palindrome is the cheapest of them all: **no search at all**, one set
+no cap, nothing to audit. **The three v3.194 cage rulesets keep that property, and the interesting
+one is repeats-allowed:** product and digit-list enumerate combinations bounded by C(9,k) and by 1
+respectively, and repeats-allowed enumerates *nothing at all*. Dropping distinctness makes the cells
+independent, so support becomes a prefix/suffix subset-sum DP — `cageRepeatSumReach`, O(k × total)
+to build and O(total) per candidate, **exact rather than a bound**. That is why the 36-cell cage on
+`67rr7DMJDh` "121" needs no cap: the enumeration that would not terminate was never necessary. Palindrome is the cheapest of them all: **no search at all**, one set
 intersection per fold pair.
 
 ## Layer 0 — native constraint payload (f-puzzles)

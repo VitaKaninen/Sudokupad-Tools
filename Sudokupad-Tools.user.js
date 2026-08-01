@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.193.0
+// @version      3.194.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.193.0';
+  var SCRIPT_VERSION = '3.194.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -9076,7 +9076,7 @@
     var N = detectGridSize();
     var out = [];
     cp.cages.forEach(function (cage) {
-      if (!cage || cage.unique === false) return;
+      if (!cage) return;
       // cp.cages also carries SudokuPad's auto-generated standard-region pseudo-cages
       // (each row/column/box modeled as its own unique-sum-45 "cage") alongside
       // user-authored killer cages. Only style:'killer' is a real killer cage;
@@ -9086,8 +9086,22 @@
       // https://sudokupad.app/d1ibvjjncd, whose cp.cages held 14 real cages + 9 box +
       // 18 row/col pseudo-cages, all of which were being validated as killer cages.
       if (cage.style !== 'killer') return;
+      // The RAW corner string is kept alongside the number (v3.194). A digit-list
+      // cage is cornered "4456" meaning the four digits it holds, and
+      // Number('4456') is a perfectly finite "total" — so reading only the number
+      // is exactly the misread the multi-ruleset work exists to fix. Rulesets that
+      // want the number take `sum`; the digit-list ruleset reads `text`.
+      var raw = cage.sum != null ? cage.sum : cage.value;
+      var text = raw == null ? '' : String(raw).trim();
       var sum = typeof cage.sum === 'number' ? cage.sum : Number(cage.value);
       if (!isFinite(sum)) return;
+      // `unique === false` is the setter SAYING repeats are allowed. Such cages
+      // used to be dropped here entirely — invisible to the validator, to the
+      // sum-less count, and so to the player: neither checked nor reported, which
+      // is the false all-clear in its quietest form (§3). They are kept now; the
+      // distinct-sum ruleset reports them UNCHECKED, and their presence elects the
+      // repeats-allowed row. Only 51 cages catalogue-wide carry the flag, which is
+      // why repeats-allowed cages overwhelmingly still look standard to us.
       var cellStr = cage.cells || '';
       var keys = [], ok = true, m, re = /r(\d+)c(\d+)/gi;
       while ((m = re.exec(cellStr)) !== null) {
@@ -9095,7 +9109,8 @@
         if (col < 0 || row < 0 || col >= N || row >= N) { ok = false; break; }
         keys.push(col + ',' + row);
       }
-      if (ok && keys.length >= 2) out.push({ keys: keys, sum: sum });
+      if (ok && keys.length >= 2)
+        out.push({ keys: keys, sum: sum, text: text, repeatsOk: cage.unique === false });
     });
     return out;
   }
@@ -9124,7 +9139,9 @@
     if (!cp || !Array.isArray(cp.cages)) return 0;
     var N = detectGridSize(), n = 0;
     cp.cages.forEach(function (cage) {
-      if (!cage || cage.unique === false || cage.style !== 'killer') return;
+      // No `unique === false` skip (v3.194): getKillerCages now keeps those, so
+      // skipping them here would lose the ones that ALSO carry no readable total.
+      if (!cage || cage.style !== 'killer') return;
       var sum = typeof cage.sum === 'number' ? cage.sum : Number(cage.value);
       if (isFinite(sum)) return;                     // checkable → getKillerCages has it
       var cells = cage.cells || '', k = 0, m, re = /r(\d+)c(\d+)/gi;
@@ -9180,6 +9197,283 @@
     return true;
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  //  MULTI-RULESET CAGES (v3.194) — VALIDATOR_POLICY.md §6
+  // ══════════════════════════════════════════════════════════════════════════
+  //  A killer-style cage's corner number is a distinct-digit SUM about 72% of the
+  //  time. It is also, in the wild, a PRODUCT, a sum with REPEATS ALLOWED, a full
+  //  DIGIT LIST ("4456" in a 4-cell cage), and a long open-ended tail of one-offs
+  //  no list will ever reach. This block reads a cage under whichever of the four
+  //  rulesets the puzzle is actually using, and the menu carries one row per
+  //  ruleset the puzzle elects.
+  //
+  //  ── WHAT THE MEASUREMENT SAID, because it decides the whole design ────────
+  //  `tools/cage_rulesets.py --puzzlewide`, over the catalogue's 682
+  //  solution-bearing cage puzzles (VALIDATOR_POLICY.md §8 q1, run 2026-07-31):
+  //
+  //    • Judged PUZZLE-WIDE — every cage at once, rather than one cage alone —
+  //      the ruleset is determined for 75.4% of puzzles, two readings fit 1.8%,
+  //      and 22.9% are bespoke inventions no ruleset explains.
+  //    • Arithmetic feasibility over all cages CONTAINS the true ruleset 99.0%
+  //      of the time. It is a superb FILTER.
+  //    • But it ELECTS a non-sum ruleset on only 10 puzzles, and is right on 8.
+  //
+  //  ⚠️ THE STANDING RULE THAT FALLS OUT OF THAT LAST LINE: arithmetic may
+  //  ELIMINATE the distinct-sum reading (per cage — the `67rr7DMJDh` pigeonhole),
+  //  and it may never ELECT a replacement. 80% is far below the bar for switching
+  //  a puzzle onto a different rule. Electing takes a RULES CUE, which is also
+  //  the only evidence §4 accepts for a menu-state change.
+  //
+  //  ⚠️ AND THE SOLUTION MAY NOT ELECT EITHER, even though it is very good at it.
+  //  A `Cages (product)` row appearing on a puzzle whose rules never said
+  //  "product" would announce the twist — the row's presence is information the
+  //  player never asked for (§2, menu time). The solution's permitted job here is
+  //  narrower: it CONFIRMS a cue-elected ruleset, and a cue the answer refutes
+  //  keeps the sum row alongside instead of replacing it. That is §5's "MAY set
+  //  the menu state, but only ever in combination with a rules cue".
+
+  // All distinct-digit combinations of `size` digits from `digits` whose PRODUCT
+  // is `target`. Same recursion as cageCombinations with a multiplicative
+  // accumulator; divisibility prunes it hard, so this stays tiny.
+  function cageProductCombinations(digits, size, target) {
+    var res = [];
+    if (!(target > 0) || target !== Math.round(target)) return res;
+    (function rec(start, chosen, remaining, need) {
+      if (need === 0) { if (remaining === 1) res.push(chosen.slice()); return; }
+      for (var i = start; i < digits.length; i++) {
+        var d = digits[i];
+        if (d > remaining) break;                       // sorted → no larger digit divides
+        if (remaining % d !== 0) continue;
+        chosen.push(d);
+        rec(i + 1, chosen, remaining / d, need - 1);
+        chosen.pop();
+      }
+    })(0, [], target, size);
+    return res;
+  }
+
+  // The one multiset a DIGIT-LIST cage allows: the corner read as digits, e.g.
+  // "4456" over 4 cells. Returns null unless the corner is all digits from this
+  // puzzle's digit set AND carries exactly one per cell — a shorter corner is the
+  // PARTIAL-list rule ("at least one 9 lives here"), which we do not implement,
+  // so it is reported UNCHECKED rather than read under the wrong rule (P4).
+  function cageDigitListCombo(text, digits, size) {
+    if (!text || !/^[0-9]+$/.test(text) || text.length !== size) return null;
+    var out = [];
+    for (var i = 0; i < text.length; i++) {
+      var d = Number(text.charAt(i));
+      if (digits.indexOf(d) === -1) return null;
+      out.push(d);
+    }
+    return out;
+  }
+
+  // ── REPEATS-ALLOWED SUMS ARE NOT ENUMERABLE, AND DO NOT NEED TO BE ──────────
+  // The other three rulesets enumerate their combinations. This one cannot: a
+  // 36-cell cage over 9 digits (`67rr7DMJDh` "121", the puzzle that opened §6)
+  // has astronomically many multisets summing to 121.
+  //
+  // It does not matter, because dropping the distinctness requirement makes the
+  // cells INDEPENDENT — each contributes any digit from its own candidate set,
+  // with no interaction. So reachability is a plain subset-sum DP and the answer
+  // is EXACT, not a bound: candidate d in cell i is supported iff the other cells
+  // can reach target − d. Prefix and suffix reachability are built once per cage,
+  // which is what keeps the per-candidate query O(target) instead of O(k·target).
+  //
+  // Exactness matters: §6 was willing to settle for "even the weak min/max bound
+  // is sound and beats silence", and this is strictly better than that bound at
+  // no extra cost. Sudoku's own row/column/box constraints are NOT modelled here,
+  // which makes the check a sound RELAXATION — it can under-remove, never over-.
+  //
+  // `cellDigits` is an array (one entry per cage cell) of arrays of that cell's
+  // allowed digits. Pure, so the harness can pin it.
+  function cageRepeatSumReach(cellDigits, target) {
+    var k = cellDigits.length, i, j, s;
+    var pre = new Array(k + 1), suf = new Array(k + 1);
+    for (i = 0; i <= k; i++) { pre[i] = new Uint8Array(target + 1); suf[i] = new Uint8Array(target + 1); }
+    pre[0][0] = 1;
+    for (i = 0; i < k; i++)
+      for (s = 0; s <= target; s++) {
+        if (!pre[i][s]) continue;
+        for (j = 0; j < cellDigits[i].length; j++) {
+          var t = s + cellDigits[i][j];
+          if (t <= target) pre[i + 1][t] = 1;
+        }
+      }
+    suf[k][0] = 1;
+    for (i = k - 1; i >= 0; i--)
+      for (s = 0; s <= target; s++) {
+        if (!suf[i + 1][s]) continue;
+        for (j = 0; j < cellDigits[i].length; j++) {
+          var u = s + cellDigits[i][j];
+          if (u <= target) suf[i][u] = 1;
+        }
+      }
+    return { pre: pre, suf: suf, target: target };
+  }
+  // Can the cage still total `target` with digit d placed in cell cIdx?
+  function cageRepeatSumSupports(reach, cIdx, d) {
+    var need = reach.target - d;
+    if (need < 0) return false;
+    var pre = reach.pre[cIdx], suf = reach.suf[cIdx + 1];
+    for (var s = 0; s <= need; s++) if (pre[s] && suf[need - s]) return true;
+    return false;
+  }
+
+  // ── THE FOUR RULESETS ───────────────────────────────────────────────────────
+  // `key` is the menu identity; `noun` names the reading in the row label and in
+  // every UNCHECKED reason, so the two can never drift apart.
+  // (One line because the harness extracts `var`s a line at a time.)
+  var CAGE_RULESETS = [{ key: 'sum', label: 'Cages', noun: 'sum' }, { key: 'sumRep', label: 'Cages (repeats allowed)', noun: 'repeats-allowed sum' }, { key: 'product', label: 'Cages (product)', noun: 'product' }, { key: 'digits', label: 'Cages (digit list)', noun: 'digit list' }];
+  function cageRulesetDef(key) {
+    for (var i = 0; i < CAGE_RULESETS.length; i++)
+      if (CAGE_RULESETS[i].key === key) return CAGE_RULESETS[i];
+    return CAGE_RULESETS[0];
+  }
+
+  // Does `ruleKey` explain these SOLVED digits? Mirrors tools/cage_rulesets.py's
+  // `holds` exactly — the measurement and the shipping code must agree or the
+  // numbers quoted above describe some other program. Used ONLY to confirm or
+  // refute a cue-elected ruleset (§5); no solution digit leaves this function.
+  function cageRuleHolds(ruleKey, digits, cage) {
+    if (!digits || !digits.length) return false;
+    var i, distinct = {}, dup = false, total = 0, prod = 1;
+    for (i = 0; i < digits.length; i++) {
+      if (distinct[digits[i]]) dup = true;
+      distinct[digits[i]] = 1;
+      total += digits[i];
+      prod *= digits[i];
+    }
+    if (ruleKey === 'sum')     return !dup && total === cage.sum;
+    if (ruleKey === 'sumRep')  return total === cage.sum;
+    if (ruleKey === 'product') return !dup && prod === cage.sum;
+    if (ruleKey === 'digits') {
+      var want = cage.text || '';
+      if (!/^[0-9]+$/.test(want) || want.length !== digits.length) return false;
+      var a = want.split('').sort().join('');
+      var b = digits.slice().sort().join('');
+      return a === b;
+    }
+    return false;
+  }
+  // true / false / null ("no trustworthy solution, so no opinion").
+  function cageRulesetExplainsSolution(ruleKey, cages) {
+    var grid = getPuzzleSolution();
+    if (!grid || !cages.length) return null;
+    for (var i = 0; i < cages.length; i++) {
+      var digits = solutionDigitsFor(cages[i].keys, grid);
+      if (!digits) return null;                      // a misread scores nothing
+      if (!cageRuleHolds(ruleKey, digits, cages[i])) return false;
+    }
+    return true;
+  }
+
+  // ── THE ELECTION CUES ───────────────────────────────────────────────────────
+  // SENTENCE-SCOPED, not windowed, and that is the whole trick. A character
+  // window fails on exactly the phrasing rules text likes: "Digits may repeat
+  // along a diagonal. Digits in cages must sum to…" puts `repeat` twenty
+  // characters from `cage` while saying nothing about cages. A cue must find its
+  // cage word IN ITS OWN SENTENCE and find no RIVAL clue noun there.
+  //
+  // MEASURED over the 682 solution-bearing cage puzzles (tools/cage_cues.py,
+  // 2026-07-31), scored against each puzzle's own solution:
+  //   product     recall 100% (1/1), 0 false alarms on ordinary sum puzzles
+  //   digit list  recall 100% (4/4), 0 false alarms
+  //   repeats     recall  69% (9/13), 2 "false alarms" — and BOTH of those
+  //               puzzles say outright that digits may repeat in a cage
+  //               (`blobz/vaulted-lattice`, `i3a78tp386`); their solutions just
+  //               happen not to use the freedom. Electing there is CORRECT, and
+  //               reading them as distinct sums is what would over-remove.
+  //   misses: `67rr7DMJDh` (caught by the pigeonhole instead), `x42g360vvp` and
+  //   `vi9ub1bnlu` (no cue exists to catch — plain sum wording, repeating
+  //   solution), `twavox6vat` (calls its cages "Orange Square").
+  //
+  // ⚠️ "IN ANY ORDER" IS DELIBERATELY NOT A DIGIT-LIST CUE. It is renban language
+  // ("digits on a pink line form a consecutive set in any order") and it scored
+  // 19 false alarms on ordinary sum puzzles against ZERO true positives. Do not
+  // add it back; the four real digit-list puzzles all say "must appear" instead.
+  var CAGE_WORD_RE = /\bcages?\b|\bkiller\b|\bvaults?\b/;
+  var CAGE_RIVAL_NOUN_RE = /\bdiagonals?\b|\blines?\b|\barrows?\b|\brows?\b|\bcolumns?\b|\bregions?\b|\bboxe?s?\b|\bthermo|\bcircles?\b|\bsquares?\b/;
+  var CAGE_SUMWORD_RE = /\bsums?\b|\btotals?\b|\badds?\s+(?:up\s+)?to\b/;
+  var CAGE_PRODUCT_RE = /\bmultiply(?:ing)?\s+to\b|\bmultiplied\s+to(?:gether)?\b|\bproducts?\s+of\s+(?:the\s+|all\s+(?:the\s+)?)?digits?\b/;
+  var CAGE_REPEAT_RE = /(?:may|can|could|must|might)\s+(?:be\s+)?repeat(?:ed)?\b|\brepeated\s+digits?\b|\brepeats?\s+(?:are\s+)?(?:allowed|permitted)\b|(?:need\s+not|not\s+necessarily)\s+be\s+(?:distinct|different)/;
+  var CAGE_DIGITLIST_RE = /digits?\s+in\s+the\s+top[- ]?left[^.]{0,40}must\s+appear|digits?\s+(?:shown|given|listed)[^.]{0,30}must\s+appear/;
+  var CAGE_CUE_RE = { sumRep: CAGE_REPEAT_RE, product: CAGE_PRODUCT_RE, digits: CAGE_DIGITLIST_RE };
+  // Pure (blob + key in, boolean out) so the harness can pin every phrasing.
+  function cageCueFires(ruleKey, blob) {
+    var re = CAGE_CUE_RE[ruleKey];
+    if (!re || !blob) return false;
+    var sentences = blob.replace(/\s+/g, ' ').split(/[.;!?\n•]+/);
+    for (var i = 0; i < sentences.length; i++) {
+      var s = sentences[i];
+      if (!re.test(s)) continue;
+      if (!CAGE_WORD_RE.test(s)) continue;
+      if (CAGE_RIVAL_NOUN_RE.test(s)) continue;
+      // A product sentence that also names a SUM is not electing a product
+      // ruleset: it is either a sum cage with incidental product prose
+      // (`e7ssrztfgn` "Some Balancing Product" — the last false alarm this
+      // clause removed) or the sum-OR-product choice, which is a different
+      // branch below and greys both rows rather than replacing one.
+      if (ruleKey === 'product' && CAGE_SUMWORD_RE.test(s)) continue;
+      return true;
+    }
+    return false;
+  }
+
+  // ── WHICH CAGE ROWS THIS PUZZLE GETS ────────────────────────────────────────
+  // Returns { keys:[ruleKey…], grey:bool }. The sum row is the DEFAULT and it is
+  // only ever REPLACED, never merely outvoted: a puzzle that says "digits may
+  // repeat" has told us the distinct reading is wrong, and leaving that row live
+  // would invite an over-removal the rules already ruled out.
+  //
+  // GREY IS FOR A CHOICE THE PUZZLE POSES, NOT ONE ARITHMETIC NOTICED (§4c). Only
+  // rules evidence can grey: `5kx4d90kcm` "Sigma or Pi" states that each cage is
+  // a sum cage or a product cage and leaves the solver to work out which, so both
+  // rows list and both grey and the player picks per cage with "Validate
+  // selection only" — and that run is real and may fail, which is exactly how
+  // they find out (§4's worked example).
+  //
+  // An ARITHMETIC election never greys, because the two rows are not rivals:
+  // `67rr7DMJDh` "121" gets a live sum row (which reports its one cage UNCHECKED)
+  // AND a live repeats-allowed row (which reads it). Greying there would be the
+  // v3.184 mistake again — paying a Road A cost to tidy something that isn't a
+  // conflict.
+  function cageRulesetElection() {
+    var cages = getKillerCages();
+    var blob = getPuzzleRulesBlob();
+    var elected = {}, byRules = 0, replaceSum = false;
+    ['sumRep', 'product', 'digits'].forEach(function (k) {
+      if (!cageCueFires(k, blob)) return;
+      // The solution CONFIRMS a cue-elected ruleset (§5/§6 point 3). If it
+      // refutes one, we have a rules cue and an answer that disagree — so we
+      // keep BOTH readings rather than betting the whole puzzle on either.
+      var fits = cageRulesetExplainsSolution(k, cages);
+      elected[k] = true;
+      byRules++;
+      if (fits !== false) replaceSum = true;
+    });
+    // The puzzle hands the cage ruleset to the solver in so many words. No probe
+    // and no solution needed — and this is the branch the user asked for: both
+    // validators available, both greyed, solver picks which cage is which.
+    if (rulesHandTypeToSolver(blob, RULES_MENTION['cage'])) {
+      if (!elected.product) { elected.product = true; byRules++; }
+      replaceSum = false;
+    }
+    // Pure arithmetic, per cage, leaking nothing: more cells than digits ⇒ some
+    // digit MUST repeat ⇒ no distinct-digit reading can apply. Also the setter's
+    // own `unique === false` mark, which says the same thing outright. Adds a
+    // row; never removes or greys one (see the banner above).
+    var N = detectGridSize() || 9;
+    var forced = cages.some(function (c) { return c.keys.length > N || c.repeatsOk; });
+    if (forced && !elected.sumRep) elected.sumRep = true;
+
+    var keys = [];
+    if (!replaceSum) keys.push('sum');
+    ['sumRep', 'product', 'digits'].forEach(function (k) { if (elected[k]) keys.push(k); });
+    if (!keys.length) keys = ['sum'];
+    return { keys: keys, grey: byRules > 0 && keys.length > 1 };
+  }
+
   // Why a cage went UNCHECKED, in the player's own arithmetic (§3 + §8 q2). Three
   // reasons can apply at once, and one `uncheckedWhy` has to carry all of them:
   //   notSum   the corner number is not reachable as a sum of different digits
@@ -9193,12 +9487,24 @@
   // One reason alone reads as a plain clause about the cages; two or more get their
   // own counts, because the header states the total and the player is owed the
   // split. Returns null when nothing went unchecked.
-  function cageUncheckedWhy(notSum, repeats, noTotal) {
+  // `opts` (v3.194, optional so every pre-existing 3-argument call is unchanged
+  // and still means the distinct-sum reading):
+  //   rule      which ruleset declined — the unreachable-corner phrasing has to
+  //             name the reading, or "not a sum of different digits" appears on
+  //             the product row and is simply false there.
+  //   declared  cages the SETTER marked repeats-allowed (`unique === false`).
+  //             Distinct from the pigeonhole: that one is arithmetic the player
+  //             can redo, this one is a fact about the puzzle file.
+  // (One line because the harness extracts `var`s a line at a time.)
+  var CAGE_NOTSUM_WHY = { sum: ['a corner number that is not a sum of different digits', 'corner numbers that are not sums of different digits'], sumRep: ['a corner number its cells cannot total', 'corner numbers their cells cannot total'], product: ['a corner number that is not a product of different digits', 'corner numbers that are not products of different digits'], digits: ['a corner that is not one digit per cell', 'corners that are not one digit per cell'] };
+  function cageUncheckedWhy(notSum, repeats, noTotal, opts) {
+    var o = opts || {}, why = CAGE_NOTSUM_WHY[o.rule] || CAGE_NOTSUM_WHY.sum;
     var parts = [];
-    if (notSum)  parts.push([notSum,  'a corner number that is not a sum of different digits',
-                                      'corner numbers that are not sums of different digits']);
+    if (notSum)  parts.push([notSum,  why[0], why[1]]);
     if (repeats) parts.push([repeats, 'more cells than this puzzle has digits, so repeats are forced',
                                       'more cells than this puzzle has digits, so repeats are forced']);
+    if (o.declared) parts.push([o.declared, 'a setter mark saying digits may repeat in it',
+                                            'setter marks saying digits may repeat in them']);
     if (noTotal) parts.push([noTotal, 'no total we could read', 'no total we could read']);
     if (parts.length === 0) return null;
     function phrase(p, withCount) {
@@ -9214,7 +9520,8 @@
   // fixpoint (a removal in one cell can invalidate a neighbour's only supporting
   // combination, so we re-sweep until a full pass changes nothing). Pure w.r.t. the
   // board — works on copies of the candidate sets and returns the removal list.
-  function computeCageRemovals(unitFilter) {
+  function computeCageRemovals(unitFilter, ruleKey) {
+    var rule = ruleKey || 'sum';
     var st = readValidatorBoardState();
     if (!st) return { unsupported: true };
     var cages = getKillerCages();
@@ -9234,7 +9541,8 @@
     // sum-less sweep is skipped there and the run carries no denominator.
     var sumless = unitFilter ? 0 : countSumlessKillerCages();
     if (cages.length === 0)
-      return sumless ? { noCages: true, unchecked: sumless, uncheckedWhy: cageUncheckedWhy(0, 0, sumless) }
+      return sumless ? { noCages: true, unchecked: sumless,
+                         uncheckedWhy: cageUncheckedWhy(0, 0, sumless, { rule: rule }) }
                      : { noCages: true };
 
     var digitList = Object.keys(st.uni).map(Number).sort(function (a, b) { return a - b; });
@@ -9277,16 +9585,49 @@
     // repeats-allowed sum would be checking under a rule the puzzle never stated
     // (P4), and picking the right ruleset is §6's job, gated on a measurement that
     // has not been run yet.
-    var active = [], notSum = 0, repeatsForced = 0;
+    //
+    // WHICH RULESET IS BEING READ IS PASSED IN, NOT GUESSED HERE (v3.194). Each
+    // cage row in the menu binds this compute to its own ruleset, so a cage the
+    // product row cannot read is UNCHECKED *on the product row* — the sum row is
+    // untouched and reaches its own verdict on the same cage. That per-row
+    // independence is what lets a two-reading puzzle offer both.
+    var active = [], notSum = 0, repeatsForced = 0, declared = 0;
     cages.forEach(function (cage) {
-      if (cage.keys.length > digitList.length) { repeatsForced++; return; }
-      var combos = cageCombinations(digitList, cage.keys.length, cage.sum)
-        .map(function (c) { return { arr: c, set: new Set(c) }; });
+      var k = cage.keys.length;
+      // The setter said digits may repeat here. Only the repeats-allowed reading
+      // can honour that; every distinct-digit ruleset must decline rather than
+      // check under a rule the puzzle explicitly disclaimed (P4).
+      if (cage.repeatsOk && rule !== 'sumRep') { declared++; return; }
+      if (rule === 'sumRep') {
+        // No enumeration and no pigeonhole — repeats are the point. The only
+        // unreadable case is a total the cells cannot reach AT ALL, which is the
+        // loosest mark-independent bound this rule has: k cells each holding at
+        // most the largest digit and at least the smallest. Checking it here is
+        // also what keeps the DP's array size bounded by something real — a
+        // digit-list corner like "4456" read as a total would otherwise size the
+        // table at 4,456 per cell.
+        var lo = digitList[0] * k, hi = digitList[digitList.length - 1] * k;
+        if (!isFinite(cage.sum) || cage.sum !== Math.round(cage.sum)
+            || cage.sum < lo || cage.sum > hi) { notSum++; return; }
+        active.push({ keys: cage.keys, rule: 'sumRep', target: cage.sum });
+        return;
+      }
+      // Every other ruleset places DISTINCT digits, so more cells than digits is
+      // the pigeonhole: no distinct reading can apply, and the player can see it.
+      if (k > digitList.length) { repeatsForced++; return; }
+      var combos;
+      if (rule === 'product')     combos = cageProductCombinations(digitList, k, cage.sum);
+      else if (rule === 'digits') {
+        var one = cageDigitListCombo(cage.text, digitList, k);
+        combos = one ? [one] : [];
+      } else                      combos = cageCombinations(digitList, k, cage.sum);
+      combos = combos.map(function (c) { return { arr: c, set: new Set(c) }; });
       if (combos.length > 0) active.push({ keys: cage.keys, combos: combos });
       else notSum++;
     });
-    var unchecked = sumless + repeatsForced + notSum;
-    var uncheckedWhy = cageUncheckedWhy(notSum, repeatsForced, sumless);
+    var unchecked = sumless + repeatsForced + notSum + declared;
+    var uncheckedWhy = cageUncheckedWhy(notSum, repeatsForced, sumless,
+                                        { rule: rule, declared: declared });
 
     // ── THE v3.184 WHOLE-PUZZLE GATE IS GONE (v3.190) ────────────────────────
     // It disabled cage validation across the ENTIRE puzzle as soon as one cage came
@@ -9325,6 +9666,9 @@
     // the cage's remaining cells (each respecting that cell's current candidates).
     function cageSupports(cage, cIdx, d) {
       var keys = cage.keys;
+      // Repeats-allowed cages carry no combination list — their support comes
+      // from the reachability DP rebuilt for this sweep (see the loop below).
+      if (cage.rule === 'sumRep') return cageRepeatSumSupports(cage.reach, cIdx, d);
       for (var ci = 0; ci < cage.combos.length; ci++) {
         var combo = cage.combos[ci];
         if (!combo.set.has(d)) continue;
@@ -9350,6 +9694,14 @@
     while (changed && guard++ < 1000) {
       changed = false;
       active.forEach(function (cage) {
+        // A repeats-allowed cage's reachability depends on the CURRENT candidate
+        // sets, which shrink as the fixpoint runs, so it is rebuilt per sweep.
+        // Cheap: O(cells × total), and it replaces an enumeration that does not
+        // terminate at 36 cells.
+        if (cage.rule === 'sumRep')
+          cage.reach = cageRepeatSumReach(cage.keys.map(function (K) {
+            return Array.from(cellSet(K));
+          }), cage.target);
         cage.keys.forEach(function (C, cIdx) {
           if (st.values[C] != null || !work[C]) return;   // only cells with player marks
           Array.from(work[C]).forEach(function (d) {       // snapshot: set mutates in loop
@@ -10310,6 +10662,11 @@
   var RULES_MENTION = {
     'Kropki':          /kropki|black\s+dots?|white\s+dots?/,
     'cage':            /\bcages?\b|\bkiller\b/,
+    // The per-ruleset cage rows (v3.194) are the same clue type, so they share
+    // the same "does the rules text name it" test.
+    'cage sumRep':     /\bcages?\b|\bkiller\b/,
+    'cage product':    /\bcages?\b|\bkiller\b/,
+    'cage digits':     /\bcages?\b|\bkiller\b/,
     'little killer':   /little\s+killer/,
     'thermo':          /thermo/,
     'XV':              /\bxv\b|roman\s+numeral/,
@@ -15023,16 +15380,49 @@
   //  indistinguishable from a sweep that quietly skipped it, and that is exactly the
   //  gap a later reader cannot tell from a deliberate exemption.
   // ════════════════════════════════════════════════════════════════════════════
+  // The cage rows for THIS puzzle, one per elected ruleset (v3.194). The sum row
+  // keeps the bare name 'cage' so every existing read site — RULES_MENTION, the
+  // probe cache, validatorClueObjects, the harness — keeps working unchanged; the
+  // others take 'cage <ruleKey>'. Memoised per puzzle because constraintValidators
+  // is called several times per menu build and the election reads the rules blob
+  // and the solution.
+  var _cageRowsCache = null;
+  function cageValidatorRows() {
+    if (getKillerCages().length === 0 && countSumlessKillerCages() === 0) return [];
+    var ck = location.pathname + '|' + detectGridSize();
+    if (!_cageRowsCache || _cageRowsCache.key !== ck)
+      _cageRowsCache = { key: ck, election: cageRulesetElection() };
+    var e = _cageRowsCache.election;
+    return e.keys.map(function (key) {
+      var def = cageRulesetDef(key);
+      return {
+        name: key === 'sum' ? 'cage' : 'cage ' + key,
+        cageRule: key,
+        unitNoun: 'cage',
+        menuLabel: def.label,
+        detect: function () { return true; },      // only emitted when cages are drawn
+        // Set only when the PUZZLE poses the choice (§4c). Read by validatorTrust.
+        forceGrey: e.grey ? 'rulesetChoice' : null,
+        compute: function (f) { return computeCageRemovals(f, key); },
+        countKey: 'cageCount', noneKey: 'noCages'
+      };
+    });
+  }
   function constraintValidators() {
     return [
       { name: 'Kropki', unitNoun: 'dot',  menuLabel: 'Kropki dots',
         detect: function () { return collectKropkiDots().length > 0; },
         compute: computeKropkiRemovals, countKey: 'dotCount',  noneKey: 'noDots'  },
-      { name: 'cage',   unitNoun: 'cage', menuLabel: 'Cages',
-        // A drawn-but-unreadable cage still lists the row (see
-        // countSumlessKillerCages) — an absent row is a spoiler, not a courtesy.
-        detect: function () { return getKillerCages().length > 0 || countSumlessKillerCages() > 0; },
-        compute: computeCageRemovals,   countKey: 'cageCount', noneKey: 'noCages' },
+      // ── CAGES: ONE ROW PER RULESET THIS PUZZLE ELECTS (v3.194) ─────────────
+      // Ordinary killer puzzles get exactly the row they always had ("Cages",
+      // live). A puzzle whose rules elect another reading gets that row instead,
+      // or alongside — see cageRulesetElection for what may elect and what may
+      // grey. Every row shares one compute, bound to its own ruleset key, so the
+      // rows reach independent verdicts on the same cages.
+      //
+      // A drawn-but-unreadable cage still lists a row (see
+      // countSumlessKillerCages) — an absent row is a spoiler, not a courtesy.
+      ].concat(cageValidatorRows()).concat([
       { name: 'little killer', unitNoun: 'little killer', menuLabel: 'Little killers',
         detect: function () { return getLittleKillers().length > 0; },
         compute: computeLittleKillerRemovals, countKey: 'lkCount', noneKey: 'noLittleKillers' },
@@ -15136,7 +15526,7 @@
         classify: classifyEntropicLines, compute: computeEntropicRemovals, countKey: 'entropicCount', noneKey: 'noEntropic' },
       { name: 'modular', unitNoun: 'modular line', menuLabel: 'Modular lines',
         classify: classifyModularLines, compute: computeModularRemovals, countKey: 'modularCount', noneKey: 'noModular' },
-    ];
+    ]);
   }
   // Line validators (def.classify) are classified ONCE here per menu build and the
   // result stashed on the def (`def.cls`) — the menu's ambiguity greying and the
@@ -15233,6 +15623,12 @@
     var p = probeInfo(def);
     if (p.verdict === 'refuted' && rulesDeclareUnreliable(getPuzzleRulesBlob()))
       return { state: 'grey', why: 'declaredUnreliable' };
+    // (c′) THE SAME BRANCH, DECIDED UPSTREAM (v3.194). A cage row already knows
+    // whether the puzzle poses a ruleset choice — cageRulesetElection worked it
+    // out while deciding how many rows to emit, and it is the only thing that
+    // can: the choice is between two ROWS, which no single def can see. It is
+    // still branch (c), still rules-only evidence, still rescued by selection.
+    if (def.forceGrey) return { state: 'grey', why: def.forceGrey };
     return { state: validatorDropsForKnownVariant(def) ? 'drop' : 'ok', why: null };
   }
   function detectedValidators() {
@@ -15260,6 +15656,13 @@
     else if (def.greyWhy === 'typeChoice')
       head = 'Disabled — this puzzle\'s rules leave it to you which ' + noun
            + ' follows which rule, so we will not guess.';
+    // The cage rows say which readings are on offer, because BOTH rows are
+    // listed and the player is choosing between them — naming them is what makes
+    // the choice actionable, and the rules already stated both (no leak).
+    else if (def.greyWhy === 'rulesetChoice')
+      head = 'Disabled — this puzzle offers more than one kind of ' + noun
+           + ' and does not say which is which, so every reading is listed and '
+           + 'none is applied for you.';
     else
       head = 'Disabled — this puzzle\'s rules say a clue may not be what it looks like, and '
            + 'checking ' + noun + 's against the standard rule disagrees with this puzzle.';
@@ -15307,7 +15710,17 @@
         var cccls = validatorClassify(def) || { keys: [] };
         (cccls.keys || []).forEach(function (k) { out.push({ type: 'circle', key: k }); });
         break;
-      case 'cage':          getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;
+      // Every cage row previews every DRAWN cage, whatever ruleset the row reads
+      // (v3.194). Outlining only the cages this row can read would turn the
+      // eyeball into a classifier — hover the product row and see which cages
+      // are products. The preview answers "what will a click look at", and a
+      // click looks at all of them; which ones it could READ comes back in the
+      // run's UNCHECKED count, after the player asked.
+      case 'cage':
+      case 'cage sumRep':
+      case 'cage product':
+      case 'cage digits':
+        getKillerCages().forEach(function (c) { out.push({ type: 'cage', keys: c.keys }); }); break;
       case 'little killer': getLittleKillers().forEach(function (lk) { out.push({ type: 'diag', keys: lk.keys }); }); break;
       case 'thermo':        getThermos().forEach(function (t) { out.push({ type: 'thermo', edges: t.edges, root: t.root, keys: t.keys }); }); break;
       // Sum arrows draw as bulb + shaft + arrowhead; double arrows reuse the

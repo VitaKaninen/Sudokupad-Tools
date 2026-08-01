@@ -496,7 +496,8 @@ way so it stays low-maintenance.
   press Ctrl+Z" (the old per-reason "Nothing was damaged" / partial-count text is gone).
 - **Validate Constraints — the validator subsystem (v3.53+; full documentation in
   [VALIDATORS.md](VALIDATORS.md)):** floating button + popup menu of per-constraint validators
-  (Kropki, cages, little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
+  (Kropki, cages — **one row per cage ruleset the puzzle elects since v3.194: sum, repeats allowed,
+  product, digit list** — little killers, thermos, German/Dutch whispers, XV, sum + double arrows,
   between lines, renban, nabner, ten lines, region-sum, parity, same difference, zipper, entropic, modular, difference dots) that remove — never add — centre candidates with no
   complete support. Entry points: `buildValidateButton` / `openValidateMenu` /
   `constraintValidators()` (the registry; the in-code "ADDING A VALIDATOR" banner above it is the
@@ -504,26 +505,36 @@ way so it stays low-maintenance.
   `def.cls`) / `runSingleValidator` / `runAllValidators` / per-type `compute*Removals` /
   `makeValidatorEye` (v3.148: hover = show this validator's clue objects alone, blinking after
   350 ms; click = pin them on, and pins accumulate — `redrawPinnedEyes`) / `makeValidatorIcons` /
-  `makeValidatorRefresh` / `getPuzzleSolution` + `solutionDigitsFor` + `muteSolutionRefuted`
-  (v3.182: silently drop clues the puzzle's own `metadata.solution` contradicts — variant rules and
-  decoys alike; fails open when there is no trustworthy solution) / `countSumlessKillerCages`
+  `makeValidatorRefresh` / `getPuzzleSolution` + `solutionDigitsFor` (`muteSolutionRefuted` was
+  DELETED in v3.189 — the solution may never silence a check; `solutionDigitsFor` survives because
+  the cage ruleset identification below is exactly the permitted use) / `countSumlessKillerCages`
   (v3.182: a drawn-but-unreadable cage still lists its menu row, because an absent row is a
   spoiler) /
+  **multi-ruleset cages (v3.194 — policy §6): `cageValidatorRows` (emits one menu row per elected
+  ruleset) / `cageRulesetElection` (which rows, and whether they grey) / `cageCueFires`
+  (`CAGE_PRODUCT_RE` / `CAGE_REPEAT_RE` / `CAGE_DIGITLIST_RE`, sentence-scoped against
+  `CAGE_WORD_RE` + `CAGE_RIVAL_NOUN_RE`) / `cageRuleHolds` + `cageRulesetExplainsSolution` (the
+  solution CONFIRMS a cue, never elects) / `cageProductCombinations` / `cageDigitListCombo` /
+  `cageRepeatSumReach` + `cageRepeatSumSupports` (subset-sum DP — exact, no enumeration, no cap) /
+  `CAGE_RULESETS` + `cageRulesetDef` / `computeCageRemovals(unitFilter, ruleKey)`** — measured by
+  `tools/cage_rulesets.py --puzzlewide` and `tools/cage_cues.py` /
   **the solution PROBE + trust policy (v3.186): `buildSolutionProbeState` / `probeInfo` /
   `probeSystematic` / `validatorTrust` / `rulesDeclareUnreliable` (`WROGN_DECLARED_RE` +
   `TYPE_CHOICE_RE` + `SELF_DEDUCTION_RE`) / `validatorTypeNamedInRules` (`RULES_MENTION`)** — asks
   whether a validator's RULE is the rule this puzzle uses, by pinning every cell to its solution
   digit and running `def.compute` **verbatim** (a correct reading removes nothing). Three one-line
-  hooks make that work — `readValidatorBoardState` returns the synthetic state, `getFogTester`
-  returns null, `muteSolutionRefuted` goes inert — and the `_solutionProbe` module flag is what they
-  all read. Verdict is a RATIO (`bad`/`total` clues via `validatorClueCellGroups`), not a boolean,
+  hooks make that work — `readValidatorBoardState` returns the synthetic state and `getFogTester`
+  returns null (a third, making `muteSolutionRefuted` inert, stopped being needed once the mute was
+  deleted) — and the `_solutionProbe` module flag is what they all read. Verdict is a RATIO
+  (`bad`/`total` clues via `validatorClueCellGroups`), not a boolean,
   because one bad cage of 29 is a decoy and 16 of 19 is a different rule. Outcome per validator, on
-  `def.trust`: `ok` (unchanged — including "refuted but the rules never name this clue type", the
-  cryptic case where saying anything spoils it), `grey` (rules DECLARE liars/a type choice →
-  disabled, selection-only rescue, excluded from run-all and ↻), `drop` (systematic + the rules name
-  the type → removed from the menu; the one deliberate exception to "an absent row is a spoiler").
-  Cached per puzzle in `_probeCache`; costs nothing on the ~46% of puzzles with no solution. Scored
-  by `python tools/cage_variants.py --policy`; full rationale in [VALIDATORS.md](VALIDATORS.md) /
+  `def.trust`: `ok` (**fully live** — including "refuted but the rules never name this clue type",
+  the cryptic case where saying anything spoils it), `grey` (fog, or the rules DECLARE liars/a type
+  choice, or `def.forceGrey` from the cage election → disabled, selection-only rescue, excluded from
+  run-all and ↻), `drop` (**only** a variant in `KNOWN_UNSUPPORTED_VARIANTS`, which starts empty —
+  the v3.186 probe-driven drop was deleted in v3.191, because a probe refutation is not a positive
+  identification). Cached per puzzle in `_probeCache`; costs nothing on the ~46% of puzzles with no
+  solution. Full rationale in [VALIDATOR_POLICY.md](VALIDATOR_POLICY.md) /
   `countCluesMissingCandidates` (v3.151: clues holding a cell with no
   candidates are checked only weakly — an empty cell reads as the full digit set — so the result
   toast leads with an amber warning naming how many). Single toggle:
