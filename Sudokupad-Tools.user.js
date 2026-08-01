@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.192.0
+// @version      3.193.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.192.0';
+  var SCRIPT_VERSION = '3.193.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -10766,7 +10766,17 @@
   // token is "between" sitting within a short window of a circle/bulb/endpoint
   // noun. Cue-gated exactly like renban: colour alone can't discriminate (blue is
   // ALSO region-sum's; the endpoints are what make it a between line).
-  var BETWEEN_CUE_RE = /\bbetween[- ]lines?\b|\bbetween\b[^.]{0,50}\b(?:circles?|bulbs?|endpoints?|attached)\b|\b(?:circles?|bulbs?|endpoints?)\b[^.]{0,50}\bbetween\b/;
+  // v3.193 — `circle[sd]?` in the FORWARD branch only. Setters write the endpoint as an
+  // ADJECTIVE at least as often as a noun: "values between the two CIRCLED digits at the
+  // ends of that line" (`musrlacrf2`, Aad van de Wetering) never says "circles" and says
+  // "ends", not "endpoints", so the cue missed a textbook between line entirely and the
+  // row vanished. Catalog-swept over all 6,260: +4 tagged between_line puzzles (recall
+  // 91/99 → 95/99), 0 false positives. The BACKWARD branch is deliberately NOT widened —
+  // "circled" before a "between" is the phrasing of two DIFFERENT clues ("lines with
+  // CIRCLED cells and mathematical operators BETWEEN them", `4N6FL6nJBG`/`51xbhnthxp`;
+  // "the CIRCLED number BETWEEN two cells represents the difference", `b4qLdjD8LP`), and
+  // those are the only three puzzles the symmetric widening would have mis-claimed.
+  var BETWEEN_CUE_RE = /\bbetween[- ]lines?\b|\bbetween\b[^.]{0,50}\b(?:circle[sd]?|bulbs?|endpoints?|attached)\b|\b(?:circles?|bulbs?|endpoints?)\b[^.]{0,50}\bbetween\b/;
   // Named-colour clause trigger for the multi-colour legend layer.
   var BETWEEN_CLAUSE_RE = /between|attached\s+circles?|bulbs?|endpoints?/;
   // Chains in `lines` that no chain in `claimed` covers. Either drawn direction is
