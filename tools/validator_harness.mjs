@@ -235,6 +235,16 @@ checkFalse('parity cue: parity DOTS have no line (7fvnto2d90)',
 // Renban cue: description without the name (t1e8qgm0h1, the v3.89 bug)
 checkTrue('renban cue: set of consecutive digits, name never written',
   F.RENBAN_CUE_RE.test('each line is a set of consecutive digits with no repeats (in any order)'));
+// v3.198 — the two grammar gaps that cost 9 puzzles: a MODIFIER between "set of"
+// and "consecutive", and an "any order" half that lives in the NEXT sentence.
+checkTrue('renban cue: "set of NON-REPEATING consecutive digits" (FF8fN88npr)',
+  F.RENBAN_CUE_RE.test('each purple line contains a set of non-repeating consecutive digits, which can appear in any order'));
+checkTrue('renban cue: "any order" in the next SENTENCE (QBq6nnqHr6)',
+  F.RENBAN_CUE_RE.test('each purple line contains a set of consecutive digits.  these digits can appear in any order'));
+checkTrue('renban CLAUSE keeps pace with the cue (the v3.89 general rule)',
+  F.RENBAN_CLAUSE_RE.test('each purple line contains a set of non-repeating consecutive digits'));
+checkFalse('renban cue: nabner is still the OTHER polarity (h2sdbmic8x)',
+  F.RENBAN_CUE_RE.test('nab: no two digits along a nabner line can be consecutive, regardless of position'));
 // Nabner (v3.152). The named cue is easy; the described one has to stay on the
 // right side of renban's near-identical vocabulary and of adjacency rules.
 checkTrue('nabner cue: the name', F.NABNER_CUE_RE.test('nabner: no two digits on a yellow line may be consecutive or the same'));
@@ -289,6 +299,20 @@ checkTrue('region-sum cue: "every region it passes through" (2ifg92eka9)',
   F.REGIONSUM_CUE_RE.test('the digits in every region it passes through have the same sum'));
 checkTrue('region-sum cue: "each 3x3 box" spans the size (bl168ah6g9)',
   F.REGIONSUM_CUE_RE.test('for each 3x3 box a line passes through, the digits on the line sum to the same total'));
+// v3.198 — grammatical-form gaps. The three checkFalse cases are the GATES that
+// keep each widening off a different rule; if one goes red the widening over-fired.
+checkTrue('region-sum cue: PASSIVE voice, "divided BY box borders" (z3vyld3vm7)',
+  F.REGIONSUM_CUE_RE.test('each l-shaped blue line is divided by box borders into segments with the same sum'));
+checkTrue('region-sum cue: "box borders BREAK a line" (NRqTD93pf7)',
+  F.REGIONSUM_CUE_RE.test('box borders break a blue line into segments with the same sum'));
+checkTrue('region-sum cue: "each LINE segment within a box" (2nqGgL8L7h)',
+  F.REGIONSUM_CUE_RE.test('along the blue line, each line segment within a different 3x3 box must sum to the same total'));
+checkFalse('region-sum cue: box-split segments that are THERMOS, not sums (fleyhg6tnu)',
+  F.REGIONSUM_CUE_RE.test('the path is separated by box borders into segments; each segment acts as a "thermometer" and must strictly increase'));
+checkFalse('region-sum cue: segments cut by SHADING, not by boxes (atfgvx1pgc)',
+  F.REGIONSUM_CUE_RE.test('on each line, each such segment (shaded or unshaded) must have the same sum as all other segments'));
+checkFalse('region-sum cue: shaded/unshaded islands, not boxes (f9wcvtflo1)',
+  F.REGIONSUM_CUE_RE.test('switching between shaded and unshaded cells divides each line into segments with the same sum'));
 // Zipper. The word is enough on its own; the FOLD phrasing is shared with
 // palindrome, so it only counts in a sentence that also says the pairs sum
 // (v3.184 — `yiaonocy5d` defines its palindromes with the same words).
@@ -744,6 +768,14 @@ checkTrue('entropic described-set cue (3ns1yd8hps)',
   F.hasEntropicCue('every three digits along a line include one high digit (789), one medium digit (456), and one low digit (123)'));
 checkFalse('entropic described-set WITHOUT a drawn-object noun (5l6mlo349f box numbers)',
   F.hasEntropicCue('the boxes are numbered 123 456 789'));
+// v3.198 — two more notations for the same partition. The checkFalse is the gate:
+// the RANGE form must stay tied to the low/high WORDS or it reads box numbering.
+checkTrue('entropic described-set: word separators "(1, 2 or 3)" (h46kngm99n)',
+  F.hasEntropicCue('any group of 3 adjacent cells along the path must contain one low digit (1, 2 or 3), one medium digit (4, 5 or 6) and one high digit (7, 8 or 9)'));
+checkTrue('entropic described-set: ranges "(1-3)" beside low/high (ayjav37b9r)',
+  F.hasEntropicCue('any set of three sequential cells on an orange line contains a low digit (1-3), a middle digit (4-6) and a high digit (7-9)'));
+checkFalse('entropic described-set: BOX NUMBERING written as ranges (5or0u7cv0o)',
+  F.hasEntropicCue('boxes increase left to right i.e. top - boxes 1-3, middle - boxes 4-6, bottom - boxes 7-9. draw a line'));
 // Modular
 checkTrue('modular cue: named', F.hasModularCue('modular lines: every three consecutive cells contain digits from each of {1,4,7}, {2,5,8} and {3,6,9}'));
 checkTrue('modular described-set cue', F.hasModularCue('every window of three cells on a line has one of 1/4/7, one of 2/5/8, one of 3/6/9'));

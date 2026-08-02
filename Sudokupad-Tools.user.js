@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.197.0
+// @version      3.198.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.197.0';
+  var SCRIPT_VERSION = '3.198.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -10824,7 +10824,21 @@
   // Renban: a rules cue = the word "renban", or "consecutive … any order" / "set of
   // consecutive" phrasing (verified against the catalog: ~94% of renban puzzles
   // carry exactly this). Clause trigger for the named-colour layer: renban/consecutive.
-  var RENBAN_CUE_RE = /renban|consecutive\s+(?:digits?|numbers?)?[^.]*any order|set of consecutive|consecutive\s+(?:digits?|numbers?)\s+in any order/;
+  // v3.198 — TWO GRAMMAR GAPS, one family, 8 puzzles. The single commonest way to
+  // write a renban in the wild is *"each purple line contains a set of NON-REPEATING
+  // consecutive digits. THESE DIGITS CAN APPEAR IN ANY ORDER."* and both halves of the
+  // cue above miss it:
+  //   • `set of consecutive` demands the two words be ADJACENT, so any modifier
+  //     ("non-repeating", "distinct", "consecutive AND non-repeating") breaks it;
+  //   • `consecutive[^.]*any order` is SENTENCE-BOUNDED by `[^.]`, and the "any order"
+  //     half is very often the NEXT sentence.
+  // Measured over all 6,260: the two branches together take renban recall 404/428 →
+  // 412/428, and the only newly-fired untagged puzzle (`62jG8GMhp7` "Defrag") is a
+  // genuine renban the catalog simply left untagged. Nabner cannot be caught by
+  // either: it writes "NON-consecutive" / "no two digits … consecutive", never "set
+  // of <modifier> consecutive" — verified 0 clauses matched by both this and
+  // NABNER_CLAUSE_RE across the corpus (the v3.159 label-layer collision check).
+  var RENBAN_CUE_RE = /renban|consecutive\s+(?:digits?|numbers?)?[^.]*any order|set of consecutive|consecutive\s+(?:digits?|numbers?)\s+in any order|\bset of\s+(?:(?:non[- ]?repeating|distinct|different|unique|consecutive|and|,)\s+){1,4}consecutive|consecutive[^.]{0,60}\.\s*\(?\s*(?:these|those|the)\s+(?:digits?|numbers?|integers?|values?)[^.]{0,40}any order/;
   // Named-colour clause trigger. v3.79 narrowed this to bare /renban/ because a
   // Nabner clause ("no two digits can be consecutive or identical") also carries
   // "consecutive", so the original /renban|consecutive/ grabbed Nabner's colour
@@ -10841,7 +10855,11 @@
   // ── THE GENERAL RULE (see LESSONS_LEARNED): a CLAUSE regex must cover every
   // phrasing its CUE covers, minus only the terms that collide with a rival clue.
   // A cue that fires on a phrasing its clause can't read is a GUARANTEED ambiguous.
-  var RENBAN_CLAUSE_RE = /renban|set of consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
+  // v3.198 mirrors the cue's "set of <modifier> consecutive" branch here, per that
+  // rule — without it the 8 puzzles the cue just gained would fire the cue and then
+  // fail the clause on any multi-colour legend, which is the guaranteed-ambiguous
+  // shape the rule exists to prevent.
+  var RENBAN_CLAUSE_RE = /renban|set of consecutive|\bset of\s+(?:(?:non[- ]?repeating|distinct|different|unique|consecutive|and|,)\s+){1,4}consecutive|consecutive[^.]{0,40}any order|consecutive[^.]{0,40}no repeat/;
   function classifyRenbanLines() { return classifyCueLines(RENBAN_CUE_RE, RENBAN_CLAUSE_RE, 'renban', 'renban'); }
 
   // Nabner (a.k.a. antirenban): renban's opposite — the line's digits are all
@@ -10956,7 +10974,32 @@
   //   non-box borders  — only "box borders divide" ("zone borders … divide blue lines
   //                      into segments", `a6zbf6jui2`; "square region borders",
   //                      `7FngrT9ftq`), plus "equal sums lines" as a named variant
-  var REGIONSUM_CUE_RE = /region[- ]?sum|equal[- ]?sums?\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:box|region|zone|grid)\s+borders?\s+(?:divide|split|cut|separate)|(?:same|equal)\s+(?:sum|total|number|value)[^.]{0,40}(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone|segment)|(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+segments?[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|segments?[^.]{0,40}(?:each|every)\s+of\s+which[^.]{0,30}(?:same|equal)\s+(?:sum|total)|(?:sum|total)[^.]{0,60}same\s+(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)|(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)/;
+  //
+  // v3.198 — THE SAME PHRASING IN THE PASSIVE VOICE (`z3vyld3vm7` "Bends", Kaktuslav):
+  // *"each L-shaped blue line is DIVIDED BY box borders into segments with the same
+  // sum"*. Every branch above puts the border NOUN before the splitting VERB, so the
+  // passive inversion — the most natural way to write the rule with the LINE as the
+  // subject — matched nothing and the row vanished. Three widenings, each scored on
+  // its own over all 6,260 catalogued puzzles:
+  //   passive + sum   +0 catalogued, 0 FP   — no catalogued puzzle writes it this way;
+  //                                           `z3vyld3vm7` is the first we have met
+  //   break/segment/  +1 catalogued, 0 FP   — "box borders BREAK a blue line into
+  //     partition verbs                       segments with the same sum" (`NRqTD93pf7`)
+  //   each <N> seg    +3 catalogued, 0 FP   — "each LINE segment WITHIN a different
+  //     within a box                          3x3 box must sum to the same total"
+  //                                           (`2nqGgL8L7h`, `2Q9hBtb8Dg`, `9JLLbT9Jj7`)
+  //
+  // BOTH SURVIVING GATES ARE LOAD-BEARING — the unguarded forms were tried first and
+  // over-fired onto a DIFFERENT rule, which is the one direction that costs a solve:
+  //   • passive WITHOUT the trailing equal-sum requirement claims `fleyhg6tnu` "Decoy
+  //     Snail" — *"path is separated by box borders into segments; each segment acts
+  //     as a THERMOMETER"*. Same segmentation, opposite constraint.
+  //   • "each <N words> segment … same sum" WITHOUT the box/region requirement claims
+  //     `atfgvx1pgc` "Balancing act" and `f9wcvtflo1` "Island Sum Lines", where the
+  //     segments are cut by SHADING, not by box borders. We would segment by box and
+  //     validate a partition the puzzle never drew.
+  // So the border noun must still appear, and the equal-sum half must still be stated.
+  var REGIONSUM_CUE_RE = /region[- ]?sum|equal[- ]?sums?\s+(?:lines?|snakes?|paths?|loops?|rings?|snowflakes?)|(?:box|region|zone|grid)\s+borders?\s+(?:divide|split|cut|separate|break|segment|partition)|(?:divided|split|cut|separated|broken|partitioned|segmented)\s+(?:up\s+)?(?:by|at)\s+(?:the\s+)?(?:box|region|zone|grid)\s+borders?[^.]{0,90}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+(?:\w+\s+){1,2}segments?\s+(?:with)?in[^.]{0,30}(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:same|equal)\s+(?:sum|total|number|value)[^.]{0,40}(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone|segment)|(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|(?:each|every)\s+segments?[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)|segments?[^.]{0,40}(?:each|every)\s+of\s+which[^.]{0,30}(?:same|equal)\s+(?:sum|total)|(?:sum|total)[^.]{0,60}same\s+(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)|(?:in|within)\s+(?:each|every)\s+(?:\d+x\d+\s+)?(?:box|region|zone)[^.]{0,60}(?:same|equal)\s+(?:sum|total|number|value)/;
   var REGIONSUM_CLAUSE_RE = /region|box|segment|(?:same|equal)\s+sum/;
   function classifyRegionSumLines() { return classifyCueLines(REGIONSUM_CUE_RE, REGIONSUM_CLAUSE_RE, 'regionsum', 'regionsum'); }
 
@@ -11975,7 +12018,23 @@
   // Each band tolerates the notations seen in the catalog: 123, (123), {1,2,3},
   // [1 2 3], 1/2/3. Kept as one literal (not composed from parts) so that
   // tools/cue_recall.py can parse it straight out of this file and score it.
-  var ENTROPIC_SET_RE = /(?:low|high)[^.]{0,40}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,40}(?:high|low)|(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*2\s*[,\/ ]?\s*3\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*7\s*[,\/ ]?\s*8\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?|(?:\{|\(|\[)?\s*7\s*[,\/ ]?\s*8\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*2\s*[,\/ ]?\s*3\s*(?:\}|\)|\])?/;
+  //
+  // v3.198 — TWO MORE NOTATIONS, same partition. `[,\/ ]?` is a SINGLE optional
+  // character, so it reads "1,2,3" but not the two ways setters most often space it
+  // out in prose:
+  //   word separator  "one low digit (1, 2 OR 3), one medium digit (4, 5 or 6)…"
+  //                   → +3 real puzzles (`h46kngm99n`, `pc6ejr0nze`, `pTPD72D9qP`), 0 FP
+  //   range           "a low digit (1-3), a middle digit (4-6), a high digit (7-9)"
+  //                   → +1 (`ayjav37b9r`), and it MUST be gated on the low/high WORDS
+  //
+  // THE RANGE BRANCH IS THE DANGEROUS ONE and that gate is why it ships at all: the
+  // ungated triple `1-3 … 4-6 … 7-9` claims `5or0u7cv0o` "The Mystery Of The Three
+  // Chameleons", whose rules number its BOXES that way ("top - boxes 1-3, middle -
+  // boxes 4-6, bottom - boxes 7-9") and which draws no entropic line at all. That is
+  // the exact `5l6mlo349f` box-numbers trap one notation further on, and ENTROPIC_
+  // LINEISH_RE does not stop it (the blob says "line" elsewhere). Requiring "low"/
+  // "high" beside the digits does — reusing the shape of the first alternative below.
+  var ENTROPIC_SET_RE = /(?:low|high)[^.]{0,40}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,40}(?:high|low)|(?:low|high)[^.]{0,40}(?:\{|\(|\[)?\s*4\s*(?:-|–|to|through)\s*6\s*(?:\}|\)|\])?[^.]{0,40}(?:high|low)|(?:\{|\(|\[)?\s*1(?:\s*(?:,|\/|-|–|or|and)\s*)+2(?:\s*(?:,|\/|-|–|or|and)\s*)+3\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4(?:\s*(?:,|\/|-|–|or|and)\s*)+5(?:\s*(?:,|\/|-|–|or|and)\s*)+6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*7(?:\s*(?:,|\/|-|–|or|and)\s*)+8(?:\s*(?:,|\/|-|–|or|and)\s*)+9\s*(?:\}|\)|\])?|(?:\{|\(|\[)?\s*7(?:\s*(?:,|\/|-|–|or|and)\s*)+8(?:\s*(?:,|\/|-|–|or|and)\s*)+9\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4(?:\s*(?:,|\/|-|–|or|and)\s*)+5(?:\s*(?:,|\/|-|–|or|and)\s*)+6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*1(?:\s*(?:,|\/|-|–|or|and)\s*)+2(?:\s*(?:,|\/|-|–|or|and)\s*)+3\s*(?:\}|\)|\])?|(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*2\s*[,\/ ]?\s*3\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*7\s*[,\/ ]?\s*8\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?|(?:\{|\(|\[)?\s*7\s*[,\/ ]?\s*8\s*[,\/ ]?\s*9\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*4\s*[,\/ ]?\s*5\s*[,\/ ]?\s*6\s*(?:\}|\)|\])?[^.]{0,60}(?:\{|\(|\[)?\s*1\s*[,\/ ]?\s*2\s*[,\/ ]?\s*3\s*(?:\}|\)|\])?/;
   var ENTROPIC_LINEISH_RE = /lines?|snakes?|paths?|loops?|rings?|snowflakes?/;
   function hasEntropicCue(blob) {
     if (ENTROPIC_CUE_RE.test(blob)) return true;

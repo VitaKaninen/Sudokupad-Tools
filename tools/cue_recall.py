@@ -58,6 +58,12 @@ VALIDATORS = [
     # "Double Arrows, Product Squares").
     ('double arrow', 'DOUBLEARROW_CUE_RE', 'DOUBLEARROW_ANTI_RE', 'double_arrow', None),
     ('lockout', 'LOCKOUT_CUE_RE', None, 'lockout_line', None),
+    # ADDED v3.198. Between was missing from this table for its whole life, which is
+    # exactly why the v3.193 gap ("circled digits" -- the adjective form -- never
+    # matched `circles?`) survived undetected: an unscored cue cannot show a miss.
+    # Scored WITHOUT its lockout/double-arrow subtraction, so this is an UPPER bound
+    # on what the shipped classifier claims -- the same caveat the zipper row carries.
+    ('between', 'BETWEEN_CUE_RE', None, 'between_line', None),
     # NOT HERE: counting circles. This table's model is "one cue regex, optionally
     # minus one anti regex", and that cue's precision comes from an ANCHORED
     # self-reference test (the counted noun must be the trigger's immediate object,
