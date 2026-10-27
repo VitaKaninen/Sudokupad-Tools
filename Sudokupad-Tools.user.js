@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sudokupad Tools
 // @namespace    https://github.com/VitaKaninen
-// @version      3.198.0
+// @version      3.199.0
 // @description  Quality-of-life toolbox for SudokuPad: constraint validators (Kropki dots, killer cages, little killers), auto-fill/clear pencilmark actions, single-candidate auto-complete, region border colouring and shading, and appearance controls. Compatible with SudokuPad's dark mode and with DarkReader, and fixes several rendering bugs with both.
 // @author       VitaKaninen
 // @match        https://sudokupad.app/*
@@ -21,7 +21,7 @@
   // puzzle is loaded (identified by the presence of an "id" query parameter).
   if (location.hostname === 'crackingthecryptic.com' && !location.search.includes('id=')) return;
 
-  var SCRIPT_VERSION = '3.198.0';
+  var SCRIPT_VERSION = '3.199.0';
   // Expose on window so we (or a test harness) can verify the loaded version
   // with one query — no DOM walk, no screenshot. Just: window.spdrVersion.
   // (Set here rather than beside the settings block because the master switch
@@ -18826,6 +18826,10 @@
       if (dsInput) dsInput.value = settings.digitSet;
     });
     footer.appendChild(resetBtn);
+    var verLine = document.createElement('div');
+    verLine.textContent = 'v' + SCRIPT_VERSION;
+    Object.assign(verLine.style, { textAlign: 'right', marginTop: '6px', fontSize: '11px', color: '#6c7086' });
+    footer.appendChild(verLine);
     content.appendChild(footer);
 
     var triggerBtn = document.createElement('button');
